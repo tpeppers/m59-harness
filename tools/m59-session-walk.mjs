@@ -84,7 +84,7 @@ import * as exitgap from './m59-exitgap.mjs';
 import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
 import { planDoorChain, doorBringsCloser, ceilingPassableKod } from './m59-ceiling-doors.mjs';
-import { guildPassage, guildSection } from './m59-guild-passage.mjs';
+import { guildPassage, guildSection, SURVEYED_HALLS } from './m59-guild-passage.mjs';
 import { noteDoorPressRefused, doorPressPose } from './m59-door-refusal.mjs';
 import { gatedEntrance, gateState, gatePassable, waitForGateOpen } from './m59-gated-entrances.mjs';
 
@@ -5875,9 +5875,12 @@ export function sessionWalkPrototype(deps) {
    * Returns `{ opened, sector, reason }` and never throws — the caller records it.
    */
   async exitGuildHall({ movementGeneration = this.movementGeneration, controlToken } = {}) {
-    if (Number(this.world?.room?.num) !== 714) return { attempted: false };
+    // EVERY SURVEYED HALL, not only 714: 713's chest room is sealed by a spoken wall, and the
+    // ordinary router cannot plan through a wall that a password moves you across.
+    const hallRoom = Number(this.world?.room?.num);
+    if (!SURVEYED_HALLS.includes(hallRoom)) return { attempted: false };
     const c = this.need();
-    if (guildSection(c.self.row, c.self.col) === 0) return { attempted: false };
+    if (guildSection(c.self.row, c.self.col, hallRoom) === 0) return { attempted: false };
     const cancelled = () => this.movementWasCancelled(movementGeneration, controlToken);
     const keeper = autopilotIfAny(this.name);
     try {
@@ -5885,7 +5888,7 @@ export function sessionWalkPrototype(deps) {
         note: (what, facts) => keeper?.note(what, facts),
         sayHallPassword: () => keeper?.sayHallPassword() ?? { ok: false },
       }, 0, cancelled);
-      return { attempted: true, crossed: !cancelled() && guildSection(c.self.row, c.self.col) === 0 };
+      return { attempted: true, crossed: !cancelled() && guildSection(c.self.row, c.self.col, hallRoom) === 0 };
     } catch (e) {
       return { attempted: true, crossed: false, reason: e.message, cancelled: cancelled() };
     }

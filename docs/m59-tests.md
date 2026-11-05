@@ -620,14 +620,25 @@ through a nested shelter order.
   still section 4; from r11c4 the doors are worked 3, 53, 55, 59; and a crossing that stops in
   the doorway throws `guild door 3 could not be crossed` rather than reporting success and
   failing at door 53's trigger (Camilla, prod 2026-10-01).
-- `m59-ceiling-doors-test.mjs` (11): the hall's ceiling doors and `guildPassage`. Live ceiling packets
+- `m59-ceiling-doors-test.mjs` (15): the halls' ceiling doors and `guildPassage`. Live ceiling packets
   open and shut the mover's geometry; a seated body on a trigger stands and leaves; a press the server
   refuses throws `... refused 3 of 3 presses as "unable to go anywhere" (body at r18c10, trigger r18c10,
   seated:false, 1 bodies within 2 sq; ledger dp-...)` and leaves one `door_press_refused` row per press
   with the expected and actual squares, KOD fine points, posture, movement generation and the bodies
   round the trigger (a player counted, an item listed and not), sealing the replay ring once; a body
   dragged off the trigger before the `go` is recorded where it was (the 2026-11-01 shape); a press that
-  opens writes nothing.
+  opens writes nothing. **713, the second hall (4 more):** from the Rescue landing r9c3 to the
+  chests and back on the real bake -- MAIN_DOOR (sector 4) pressed once each way from r3c7 / r3c8,
+  the password said exactly twice, on r8c26 (landing r10c26) and r9c26 (landing r7c26), with no
+  walk ever crossing the secret wall; every trigger and chest square in the section the kod
+  implies; a missing password refuses at the wall; an unsurveyed hall (701) and a section 713
+  does not have are refused by number.
+- `m59-hall-record-test.mjs` (26): `hallWithdraw` reads back and records EVERY chest in the hall
+  it is standing in, once, after the stash/deposit and the draws -- so `wants: []` with nothing to
+  put is a pure read-and-record errand. 713's four chests land in `chests/713/<square>.json` under
+  room 713 (an empty chest as an empty list), nothing leaks into the flat 714 layout, 714 still
+  writes the flat layout, a chest that will not answer is left out of `recorded` and keeps its last
+  good reading, and a run that never reached the chests asks none of them.
 - `m59-door-refusal-test.mjs` (4): the refusal record itself. Spoken refusal `server_refused`, silent
   press `not_verified`; webbed reads `held`; the job steering the body is named; ten objects and six
   rows per door per ten minutes however crowded or looped, the next window saying how many were held

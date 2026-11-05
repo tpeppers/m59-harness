@@ -144,7 +144,8 @@ import { leverPuzzleFor, puzzleBlocksJourney, trustedDoorHeights, doorState, fin
          inFinalZone, decideLeverStep, nextApproachLeg, readClaims, updateClaims, claimLeverOnDisk,
          claimLever, releaseLevers, markReady, partnerReady, agreeBeat, heldLever, claimsFile,
          chebyshev, PULL_BEAT_MS, PULL_LEAD_MS, STATUS as LEVER_STATUS } from './m59-leverpuzzle.mjs';
-// The chest side of the hall. The coop runtime asks guildPassage for the same section.
+// The chest side of the BOOKMAKER'S hall (714). Every other hall has its own: ask
+// `chestSectionOf(room)` (m59-guild-passage.mjs), which is what the keeper's runs now do.
 export const GUILD_CHEST_SECTION = 4;
 import { listLoadouts } from './m59-loadout.mjs';
 import * as uptime from './m59-uptime.mjs';

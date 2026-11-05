@@ -12,7 +12,7 @@
 //   refreshVaultCache, vaultRunIfPassing, withdrawFromStockpile, takeFromChest, hallWithdraw,
 //   hallMove
 import { isVaultmanName, vaultsSaid } from '../m59-vaults.mjs';
-import { guildPassage, hallPost, SURVEYED_HALLS } from '../m59-guild-passage.mjs';
+import { guildPassage, hallPost, SURVEYED_HALLS, chestSectionOf } from '../m59-guild-passage.mjs';
 import { SAID_NOTE, hallPassword, inFoyer, foyerFor } from '../m59-hallsecret.mjs';
 import { GuildRegistry } from '../m59-guild-registry.mjs';
 import { guildPlan } from '../m59-guildwants.mjs';
@@ -69,8 +69,8 @@ export class HallPart {
   }
 
   // CAN THIS BODY WORK THE CHESTS OF THE HALL IT IS STANDING IN? Three different refusals, each with
-  // its own fix: not a hall at all; a hall whose passage nobody has surveyed (only 714's is, in
-  // m59-guild-passage.mjs, and walking 714's doors in another room would be walking into walls); and
+  // its own fix: not a hall at all; a hall whose passage nobody has surveyed (714's and 713's are, in
+  // m59-guild-passage.mjs, and walking one hall's doors in another room would be walking into walls); and
   // a hall whose owner is neither our guild nor an ally (CanEnter, ghall.kod:1039, refuses silently).
   hallHere() {
     const roomNum = Number(this.s?.world?.room?.num ?? NaN);
@@ -78,7 +78,7 @@ export class HallPart {
       return { ok: false, room: Number.isFinite(roomNum) ? roomNum : null, why: `not in a guild hall (room ${roomNum})` };
     if (!SURVEYED_HALLS.includes(roomNum))
       return { ok: false, room: roomNum, why: `hall ${roomNum} (${hallName(roomNum)}) has no surveyed passage to its chests — ` +
-        `only ${SURVEYED_HALLS.join(', ')} is mapped in m59-guild-passage.mjs` };
+        `only ${SURVEYED_HALLS.join(', ')} ${SURVEYED_HALLS.length === 1 ? 'is' : 'are'} mapped in m59-guild-passage.mjs` };
     const ctx = this.guildHall();
     if (ctx.may_use_here === false)
       return { ok: false, room: roomNum, owner: ctx.here_owner,
@@ -123,9 +123,11 @@ export class HallPart {
     const where0 = this.hallHere();
     if (!where0.ok) return { ok: false, why: where0.why, steps: [{ step: 'which_hall', ok: false, why: where0.why }],
                              at: { row: c.self?.row ?? null, col: c.self?.col ?? null } };
+    // THE CHEST SECTION OF THE HALL WE ARE STANDING IN: 714's is 4 (GUILD_CHEST_SECTION), 713's is 2.
+    const chestSection = where0.room === 714 ? GUILD_CHEST_SECTION : chestSectionOf(where0.room);
     try {
-      await guildPassage(this, GUILD_CHEST_SECTION, () => false);
-      steps.push({ step: 'guild_passage', ok: true, to_section: GUILD_CHEST_SECTION });
+      await guildPassage(this, chestSection, () => false);
+      steps.push({ step: 'guild_passage', ok: true, to_section: chestSection });
     } catch (e) {
       const why = e?.message ?? String(e);
       steps.push({ step: 'guild_passage', ok: false, why });
@@ -731,11 +733,28 @@ export class HallPart {
       const still = want - (pass === 1 ? took[item] : have - start);
       if (still > 0) short[item] = still; else delete short[item];
     }
-    this.note('hall withdrawal for an errand', { took, short, stashed, diag });
+    // AND WRITE EVERY CHEST DOWN, ONCE, AFTER EVERYTHING ELSE HAS MOVED. The draws above read the
+    // chests they took from and kept nothing; a hall visit is the only moment a chest can be read at
+    // all (nothing is pushed), so every chest visible here is read back and filed under THIS hall's
+    // room number -- `chests/713/<square>.json` for an ally's hall, the flat layout for 714. So a call
+    // with `wants: []` and no stash or deposit is a pure "read and record this hall's chests" errand.
+    // Never allowed to fail the run: refreshChestCache notes and returns null on any refusal.
+    const recorded = [];
+    if (chests.length) {
+      const store = new StorageCache();
+      for (const chest of chests) {
+        const slot = chestKey(chest);
+        if (!slot) continue;
+        await nearChest(chest);
+        const items = await this.refreshChestCache(chest, slot, { store, why: 'hall run' });
+        if (items) recorded.push(slot);
+      }
+    }
+    this.note('hall withdrawal for an errand', { took, short, stashed, diag, recorded });
     // WHAT CAME OUT OF THE CHESTS, into an open town trip's book like any other trade.
     const drawn = Object.entries(took).filter(([, n]) => n > 0).map(([name, amount]) => ({ name, amount }));
     if (drawn.length) this.tradeFact({ withdrawn: drawn });
-    return { ok: true, took, short, stashed, chests: chests.length, diag };
+    return { ok: true, took, short, stashed, chests: chests.length, recorded, diag };
   }
 
   /**
