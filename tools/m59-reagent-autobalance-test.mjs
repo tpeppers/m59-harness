@@ -467,6 +467,15 @@ try {
     assert.match(AB.cacheVerdict({ cache: loop.cache, row, purse: 100 }).why, /top it up/, 'a thin purse banks in the hall, where the chests fund it');
     assert.equal(AB.cacheVerdict({ cache: loop.cache, row: null, purse: 5000 }).use, false);
   });
+  await test('cacheHandover: the cache gets everything on the list LESS what the next lap carries (edible mushrooms for haste)', async () => {
+    const inv = [{ name: 'edible mushrooms', amount: 120 }, { name: 'edible mushroom', amount: 30 }, { name: 'purple mushroom', amount: 40 },
+                 { name: 'sapphire', amount: 5 }, { name: 'long sword', amount: 1 }, { name: 'mushroom', amount: 10 }];
+    const keys = new Set(['edible mushroom', 'purple mushroom', 'sapphire', 'mushroom']);
+    const out = AB.cacheHandover(inv, keys, { 'edible mushroom': 100, mushroom: 44 });
+    assert.deepEqual(out, { 'edible mushrooms': 50, 'purple mushroom': 40, sapphire: 5 }, JSON.stringify(out));
+    assert.deepEqual(AB.cacheHandover(inv, keys, null)['edible mushrooms'], 150, 'no plan: everything on the list goes');
+    assert.equal(AB.cacheHandover(inv, keys, {})['long sword'], undefined, 'off the list: never handed over');
+  });
 console.log(`\n${passed} passed`);
 } finally {
   rmSync(dir, { recursive: true, force: true });

@@ -415,6 +415,23 @@ export function cacheVerdict({ cache, row, purse = null }) {
   return { use: true, why: `${cache.agent} in ${cache.room} at ${pct}% (< ${cache.full_percent}%)` };
 }
 
+/**
+ * WHAT A CACHE DROP-OFF HANDS OVER (operator 2026-11-05: the cave farmers' edible mushrooms go to Raphael "so Waldorf can import
+ * it", but a farmer practising haste needs its own snacks, and nobody in Tos sells them). Every deposit-list item, LESS what the
+ * plan says this farmer carries out for the next lap. Pure.
+ * @param inv     [{ name, amount }] the depositor's pack
+ * @param keys    Set of reagent keys to hand over (plan wants + deposit list)
+ * @param totals  plan.totals { key: amount } (what the next lap carries) or null
+ * @returns { [name]: amount } -- only positive amounts
+ */
+export function cacheHandover(inv = [], keys = new Set(), totals = null) {
+  const held = {}, nameOf = {};
+  for (const i of inv) { const k = reagentKey(i.name); if (!keys.has(k)) continue; held[k] = (held[k] ?? 0) + (Number(i.amount) > 0 ? Number(i.amount) : 1); nameOf[k] ??= i.name; }
+  const out = {};
+  for (const [k, n] of Object.entries(held)) { const give = n - Math.max(0, Number(totals?.[k]) || 0); if (give > 0) out[nameOf[k]] = give; }
+  return out;
+}
+
 export function planLap({ loop, known = [], abilities = {}, mana = {}, mysticism = 25, reserve = null, capacity = null,
                           startLoad = { weight: 0, bulk: 0 }, held = {}, learned = null, sellAtLoad = null,
                           spawns = null, buffs = null, catalogue = loadCatalogue() } = {}) {

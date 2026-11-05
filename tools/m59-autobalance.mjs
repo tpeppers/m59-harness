@@ -193,8 +193,8 @@ async function supervise({ character, agent, fleet, broker }) {
     const ids = inv.filter(i => keys.has(reagentKey(i.name))).map(i => `id:${i.id}`);
     if (viaCache) {
       // HANDED OVER, NOT CHESTED: one supply per item name, both standing still in the cache room.
-      const byName = {};
-      for (const i of inv.filter(i => keys.has(reagentKey(i.name)))) byName[i.name] = (byName[i.name] ?? 0) + (i.amount > 0 ? i.amount : 1);
+      // The farmer KEEPS what its next lap carries (haste's edible mushrooms are sold nowhere near); only the rest is handed over.
+      const byName = ab.cacheHandover(inv, keys, planNow.ok ? planNow.totals : null);
       const moved = {};
       for (const [what, amount] of Object.entries(byName)) {
         const g = await rpc(broker, 'supply', { from: agent, to: loop.cache.agent, what, amount, stationary: true, who_travels: 'neither' }, 300_000).catch(e => ({ error: e.message }));
