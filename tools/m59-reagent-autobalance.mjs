@@ -526,6 +526,7 @@ const ema = (prev, obs) => (Number.isFinite(prev) ? prev + LEARN_ALPHA * (obs - 
  * @param sellAtLoad  the pack trigger fraction, to extrapolate a lap the reagents ended early
  * @returns { discrepancy, learned, per_item }
  */
+export const MIN_EXTRAPOLATE_MIN = 10;
 export function recordLap({ lap, end = {}, endedAt = Date.now(), endedBy = 'pack', fullnessEnd = null, learned = null,
                             sellAtLoad = 0.9, catalogue = loadCatalogue() } = {}) {
   const prev = learned ?? { laps_seen: 0, use_per_minute: {}, pack_minutes: null, laps: [] };
@@ -537,10 +538,12 @@ export function recordLap({ lap, end = {}, endedAt = Date.now(), endedBy = 'pack
   // How long the PACK took (or would have taken) to fill.
   let packMin = null, packWhy;
   if (endedBy === 'pack') { packMin = minutes; packWhy = 'the pack ended this lap'; }
-  else if (fullnessEnd != null && lap.fullness_start != null && fullnessEnd > lap.fullness_start) {
+  // A SHORT LAP IS NOISE FOR THE PACK (Scooter's first lap, 2026-11-05: 53% -> 54% in 2 min extrapolated to a pack time and
+  // halved the next plan). Only a lap of MIN_EXTRAPOLATE_MIN or more is extrapolated.
+  else if (minutes >= MIN_EXTRAPOLATE_MIN && fullnessEnd != null && lap.fullness_start != null && fullnessEnd > lap.fullness_start) {
     packMin = minutes * Math.max(0, sellAtLoad - lap.fullness_start) / (fullnessEnd - lap.fullness_start);
     packWhy = `extrapolated: ${Math.round(lap.fullness_start * 100)}% -> ${Math.round(fullnessEnd * 100)}% in ${minutes.toFixed(1)} min`;
-  } else packWhy = 'no fullness reading: pack time not learned this lap';
+  } else packWhy = minutes < MIN_EXTRAPOLATE_MIN && endedBy !== 'pack' ? `a ${minutes.toFixed(1)} min lap is too short to extrapolate the pack` : 'no fullness reading: pack time not learned this lap';
 
   // Per item: used, leftover above the floor, when it ran out.
   const per = {};
@@ -577,9 +580,19 @@ export function recordLap({ lap, end = {}, endedAt = Date.now(), endedBy = 'pack
                     verdict: castsLeft ? `the pack filled with ${castsLeft} casts left over above the PvP floor (~${left.toFixed(1)} min)` : 'zero: reagents and pack ran out together' };
   }
 
+  // A LAP THAT STARTED EMPTY MEASURES NOTHING (Scooter's first lap, 2026-11-05: start_usable 0 for every reagent, so "used 0"
+  // read as a rate of 0 and the next plan was cut in half). An item with nothing usable at the start teaches no rate; a lap
+  // where EVERY item started empty teaches nothing at all -- it is scored and recorded, and the learned state is unchanged.
+  const measured = Object.entries(per).filter(([, r]) => r.start_usable > 0);
+  if (!measured.length) {
+    const row = { started_at: lap.started_at, ended_at: endedAt, ended_by: endedBy, minutes: +minutes.toFixed(2), pack_minutes: null,
+                  pack_why: packWhy, discrepancy, per_item: per, learned: false, why: 'started with no usable practice reagents: nothing to learn' };
+    return { discrepancy, learned: { ...prev, laps: [...(prev.laps ?? []), row].slice(-LAPS_KEPT), last: row }, per_item: per, pack_minutes: null,
+             pack_why: packWhy, why: row.why };
+  }
   // Learn: use per minute over the time it was being used, damped and bounded.
   const next = { ...prev, use_per_minute: { ...(prev.use_per_minute ?? {}) } };
-  for (const [item, r] of Object.entries(per)) {
+  for (const [item, r] of measured) {
     const active = r.ran_out_at_min ?? minutes;
     let obs = r.used / active;
     // Ran dry with no moment recorded: the true rate is AT LEAST used/minutes; raise by the bounded step.

@@ -1,7 +1,7 @@
 # The reagent autobalancer
 
 `tools/m59-reagent-autobalance.mjs` (pure planner and learner), `tools/m59-autobalance.mjs` (the CLI and supervisor),
-wired into the keeper's town trip and farm-delivery courier. Guard: `node tools/m59-reagent-autobalance-test.mjs` (27).
+wired into the keeper's town trip and farm-delivery courier. Guard: `node tools/m59-reagent-autobalance-test.mjs` (28).
 
 Operator, 2026-11-04: decide **how many** spellcasting reagents a character takes out of town or the guild chest each
 lap, for **practice** (as many casts as the lap's mana allows) or **maintenance** (the fewest casts that keep a list of

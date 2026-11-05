@@ -420,6 +420,19 @@ try {
     assert.deepEqual(heads, ['haste', 'super strength', 'resist poison', 'haste']);
     assert.deepEqual(rotated([], 5), []);
   });
+  await test('a lap that started with no usable reagents teaches nothing, and a 2-minute lap does not extrapolate the pack (Scooter 2026-11-05)', async () => {
+    const plan = { ok: true, wants: { 'edible mushroom': 100, mushroom: 40 }, pvp: { mushroom: 10 }, casts: { haste: 20, 'super strength': 20 }, lapMinutes: 300 };
+    const t0 = Date.parse('2026-11-05T03:36:00Z');
+    const lap = { plan, started_at: t0, start: { 'edible mushroom': 0, mushroom: 5 }, fullness_start: 0.53, short_at: { 'edible mushroom': t0 + 60_000 } };
+    const prev = { laps_seen: 3, use_per_minute: { 'edible mushroom': 0.3, mushroom: 0.12 }, pack_minutes: 200, laps: [] };
+    const r = AB.recordLap({ lap, end: { 'edible mushroom': 0, mushroom: 5 }, endedAt: t0 + 2 * 60_000, endedBy: 'reagents', fullnessEnd: 0.54, learned: prev });
+    assert.deepEqual(r.learned.use_per_minute, prev.use_per_minute, 'no rate changed');
+    assert.equal(r.learned.pack_minutes, 200, 'pack time unchanged');
+    assert.equal(r.learned.laps_seen, 3, 'not counted as a learning lap');
+    assert.equal(r.learned.last.learned, false);
+    assert.match(r.pack_why, /too short/);
+  });
+
 console.log(`\n${passed} passed`);
 } finally {
   rmSync(dir, { recursive: true, force: true });
