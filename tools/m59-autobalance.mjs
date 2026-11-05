@@ -168,12 +168,16 @@ async function supervise({ character, agent, fleet, broker }) {
   let lap = null, turn = 0, rotatedAt = Date.now();
 
   async function bankTrip(verdict) {
-    log(`lap over (${verdict.by}): ${verdict.why} -> bank trip to ${loop.hall}`);
     const r = await row();
+    // THE CACHE CHARACTER FIRST, WHILE IT HAS ROOM (loop.cache; operator 2026-11-05, Scooter -> Raphael in Tos 53).
+    const cacheRow = loop.cache ? (await rpc(broker, 'fleet', {}, 60_000).catch(() => null))?.fleet?.find(x => x.agent === loop.cache.agent) ?? null : null;
+    const cv = ab.cacheVerdict({ cache: loop.cache, row: cacheRow, purse: r?.purse ?? null });
+    const viaCache = cv.use, dest = viaCache ? loop.cache.room : loop.hall;
+    log(`lap over (${verdict.by}): ${verdict.why} -> ${viaCache ? `drop-off with ${loop.cache.agent} in ${dest}` : `bank trip to ${loop.hall}`}${loop.cache ? ` (${cv.why})` : ''}`);
     const fullness = r?.pack?.percent != null ? r.pack.percent / 100 : null;
     const items0 = ((await call('inventory', {}, 60_000).catch(() => null))?.items ?? []).map(i => ({ name: i.name, amount: i.amount > 0 ? i.amount : 1 }));
-    await ap({ mode: 'survive', farm_strategy: null, confine_rooms: null, assigned_room: loop.hall, town_trips: false, practice_spells: null, why: 'autobalance: bank trip' });
-    if (!await walk(loop.hall)) { log(`could not reach ${loop.hall}; back to the farm, lap NOT recorded`); await walk(loop.room); await ap(farmArgs(loop, 'autobalance: back to farming')); return; }
+    await ap({ mode: 'survive', farm_strategy: null, confine_rooms: null, assigned_room: dest, town_trips: false, practice_spells: null, why: viaCache ? 'autobalance: cache drop-off' : 'autobalance: bank trip' });
+    if (!await walk(dest)) { log(`could not reach ${dest}; back to the farm, lap NOT recorded`); await walk(loop.room); await ap(farmArgs(loop, 'autobalance: back to farming')); return; }
     const { state } = ab.readLearned(lfile);
     state.loops ??= {};
     if (lap?.plan) {
@@ -187,9 +191,34 @@ async function supervise({ character, agent, fleet, broker }) {
     const keys = new Set([...Object.keys(planNow.wants ?? {}), ...loop.deposit.map(reagentKey)]);
     const inv = (await call('inventory', {}, 60_000).catch(() => null))?.items ?? [];
     const ids = inv.filter(i => keys.has(reagentKey(i.name))).map(i => `id:${i.id}`);
-    const dep = ids.length ? await call('hall_withdraw', { wants: [], deposit: ids }, 600_000).catch(e => ({ error: e.message })) : { deposited: 'nothing' };
-    log(`deposited: ${JSON.stringify(dep?.deposited ?? dep?.error ?? dep).slice(0, 220)}`);
-    if (planNow.ok) {
+    if (viaCache) {
+      // HANDED OVER, NOT CHESTED: one supply per item name, both standing still in the cache room.
+      const byName = {};
+      for (const i of inv.filter(i => keys.has(reagentKey(i.name)))) byName[i.name] = (byName[i.name] ?? 0) + (i.amount > 0 ? i.amount : 1);
+      const moved = {};
+      for (const [what, amount] of Object.entries(byName)) {
+        const g = await rpc(broker, 'supply', { from: agent, to: loop.cache.agent, what, amount, stationary: true, who_travels: 'neither' }, 300_000).catch(e => ({ error: e.message }));
+        moved[what] = g?.error ? `error ${g.error.slice(0, 60)}` : (g?.amounts ?? []).reduce((a, x) => a + (Number(x.received) || 0), 0) + '/' + amount;
+      }
+      log(`handed to ${loop.cache.agent}: ${JSON.stringify(moved).slice(0, 300)}`);
+    } else {
+      const dep = ids.length ? await call('hall_withdraw', { wants: [], deposit: ids }, 600_000).catch(e => ({ error: e.message })) : { deposited: 'nothing' };
+      log(`deposited: ${JSON.stringify(dep?.deposited ?? dep?.error ?? dep).slice(0, 220)}`);
+    }
+    if (planNow.ok && viaCache) {
+      // RESTOCK IN THE CACHE ROOM: no chests here, so what the plan lacks is bought from loop.cache.shops with the purse carried.
+      const shortNow = await shortfall(planNow.totals);
+      for (const [item, need] of Object.entries(shortNow)) {
+        const shop = loop.cache.shops?.[item];
+        if (!shop || need <= 0) continue;
+        const out = repl(`buy agents=${agent} seller=${encodeURIComponent(shop.seller)} item=${encodeURIComponent(item)} amount=${need} room=${dest} back=${dest}`);
+        const done = /buy \(\w+\): 1\/1 completed/.test(out);
+        log(`cache-room restock: ${item} short ${need} -> ${shop.seller}: ${done ? 'ok' : 'NOT completed ' + (out.split('\n').filter(l => /REFUS|failed|cannot|afford/i.test(l)).pop() ?? '').slice(0, 160)}`);
+      }
+      const still = await shortfall(planNow.totals);
+      if (Object.keys(still).length) log(`still short after the cache-room restock: ${JSON.stringify(still)}`);
+      log(`plan (${planNow.lap_source} lap ${planNow.lapMinutes} min): ${planNow.lines.join(' | ')}`);
+    } else if (planNow.ok) {
       const take = await call('hall_withdraw', { wants: Object.entries(planNow.totals).map(([item, amount]) => ({ item, amount })) }, 600_000).catch(e => ({ error: e.message }));
       log(`withdrew: ${JSON.stringify(take?.took ?? take?.error ?? take).slice(0, 220)}${take?.short && Object.keys(take.short).length ? ' short ' + JSON.stringify(take.short) : ''}`);
       // THE TOWN LAP: what the chest could not supply is BOUGHT at the loop's shop for that item (operator 2026-11-05: "buy

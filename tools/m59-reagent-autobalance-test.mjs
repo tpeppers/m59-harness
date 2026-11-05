@@ -447,6 +447,26 @@ try {
     assert.deepEqual(gem.fund_gem, { item: 'ruby', amount: 25, seller: 'Herbutte', room: 109 }, 'capped at 25: Herbutte refuses a larger stack');
     assert.equal(AB.normalizeLoop({ mode: 'practice', practice: ['haste'] }, []).fund_gem, null, 'no gem sale unless asked');
   });
+  await test('cache: drop off with a character until it is full, then the hall (operator 2026-11-05, Scooter -> Raphael)', async () => {
+    const problems = [];
+    const loop = AB.normalizeLoop({ mode: 'practice', practice: ['haste'], cache: { agent: 'hk3', room: 53, shops: { mushrooms: 'Frisconar', herb: {} } } }, problems);
+    assert.deepEqual(loop.cache, { agent: 'hk3', room: 53, full_percent: 95, min_purse: 2000, shops: { mushroom: { seller: 'Frisconar' } } });
+    assert.ok(problems.some(p => /cache\.shops\.herb: needs a seller/.test(p)));
+    assert.equal(AB.normalizeLoop({ mode: 'practice', practice: ['haste'] }, []).cache, null, 'no cache: the hall, as before');
+    const bad = [];
+    assert.equal(AB.normalizeLoop({ mode: 'practice', practice: ['haste'], cache: { agent: 'hk3' } }, bad).cache, null);
+    assert.ok(bad.some(p => /cache needs \{ agent, room \}/.test(p)));
+    const row = { room_num: 53, pack: { percent: 40 }, activity: 'idle' };
+    assert.equal(AB.cacheVerdict({ cache: loop.cache, row, purse: 5000 }).use, true);
+    assert.equal(AB.cacheVerdict({ cache: null, row, purse: 5000 }).use, false, 'no cache configured');
+    assert.match(AB.cacheVerdict({ cache: loop.cache, row: { ...row, pack: { percent: 95 } }, purse: 5000 }).why, /full/, 'full: back to the hall');
+    assert.match(AB.cacheVerdict({ cache: loop.cache, row: { ...row, room_num: 54 }, purse: 5000 }).why, /not 53/, 'not standing in the cache room');
+    assert.match(AB.cacheVerdict({ cache: loop.cache, row: { ...row, piloted: true }, purse: 5000 }).why, /piloted/);
+    assert.match(AB.cacheVerdict({ cache: loop.cache, row: { ...row, activity: 'NOT IN GAME' }, purse: 5000 }).why, /not in the game/);
+    assert.match(AB.cacheVerdict({ cache: loop.cache, row: { ...row, pack: {} }, purse: 5000 }).why, /unread/, 'an unread pack is not room to spare');
+    assert.match(AB.cacheVerdict({ cache: loop.cache, row, purse: 100 }).why, /top it up/, 'a thin purse banks in the hall, where the chests fund it');
+    assert.equal(AB.cacheVerdict({ cache: loop.cache, row: null, purse: 5000 }).use, false);
+  });
 console.log(`\n${passed} passed`);
 } finally {
   rmSync(dir, { recursive: true, force: true });

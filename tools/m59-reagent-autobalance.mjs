@@ -114,6 +114,12 @@ export const LOOP_DEFAULTS = Object.freeze({
   // doesn't require leaving Barloque"): { item: 'ruby', amount: 25, seller: 'Herbutte', room: 109 }. Herbutte refuses a stack
   // of more than 25 (bqmerch.kod ObjectDesired), so amount is capped there. null: no gem sale.
   fund_gem: null,
+  // A CHARACTER CACHE BEFORE THE HALL (operator 2026-11-05: "Scooter returns to cave farming after dropping off, and continues
+  // to only drop off locally at Raphael until Raphael's carry capacity is full, then Scooter goes back to resupplying the
+  // Second Swines Bookmaker's guild hall"): { agent: 'hk3', room: 53, full_percent: 95, min_purse: 2000, shops: { item: seller } }.
+  // A bank trip hands its deposit to `agent` standing in `room` instead of the hall while cacheVerdict says so; restocking
+  // on such a trip buys at `shops` in that room with the purse it carries (no hall chests there). null: the hall, always.
+  cache: null,
   kills_per_minute: 1,
   vigor: 100,
   sell_at_load: null,                  // null: the keeper's policy.sellAtLoad, else SELL_AT_LOAD 0.9
@@ -214,6 +220,20 @@ export function normalizeLoop(raw, problems = []) {
       if (!item || !seller || !(amount > 0) || !(room > 0)) { problems.push('fund_gem needs { item, amount (1..25), seller, room }, not applied'); continue; }
       out.fund_gem = { item, amount, seller, room };
       if (Number(v?.amount) > 25) problems.push('fund_gem.amount capped at 25: Herbutte refuses a larger stack');
+      continue;
+    }
+    if (k === 'cache') {
+      if (v == null) { out.cache = null; continue; }
+      const agent = typeof v?.agent === 'string' ? v.agent.trim() : '', room = Number(v?.room);
+      if (!agent || !(room > 0)) { problems.push('cache needs { agent, room }, not applied'); continue; }
+      const full = Number(v?.full_percent ?? 95), minPurse = Number(v?.min_purse ?? 2000);
+      const shops = {};
+      for (const [item, spec] of Object.entries(v?.shops ?? {})) {
+        const seller = typeof spec === 'string' ? spec : spec?.seller;
+        if (seller && typeof seller === 'string') shops[reagentKey(item)] = { seller: seller.trim() };
+        else problems.push(`cache.shops.${item}: needs a seller, not applied`);
+      }
+      out.cache = { agent, room, full_percent: full > 0 && full <= 100 ? full : 95, min_purse: minPurse >= 0 ? minPurse : 2000, shops };
       continue;
     }
     if (k === 'shops') {
@@ -375,6 +395,26 @@ const usableOf = (have, floor) => Math.max(0, (Number(have) || 0) - (Number(floo
  * @param learned   the learned state for this loop (or null)
  * @returns { ok, mode, trigger, lapMinutes, lap_source, casts, wants, pvp, totals, take, surplus, lines, unplannable, why }
  */
+/**
+ * DROP OFF WITH THE CACHE CHARACTER, OR BANK IN THE HALL? Pure: every input passed in.
+ * @param cache   the loop's normalized cache ({ agent, room, full_percent, min_purse }) or null
+ * @param row     the cache character's fleet row (room_num, piloted, human_held, activity, pack.percent), or null
+ * @param purse   the depositor's purse now (restocking on a cache trip is paid from it)
+ * @returns { use, why }
+ */
+export function cacheVerdict({ cache, row, purse = null }) {
+  if (!cache) return { use: false, why: 'no cache: the hall' };
+  if (!row) return { use: false, why: `${cache.agent} has no fleet row: the hall` };
+  if (row.piloted || row.human_held) return { use: false, why: `${cache.agent} is piloted: the hall` };
+  if (row.activity === 'NOT IN GAME') return { use: false, why: `${cache.agent} is not in the game: the hall` };
+  if (Number(row.room_num) !== Number(cache.room)) return { use: false, why: `${cache.agent} is in ${row.room_num}, not ${cache.room}: the hall` };
+  const pct = Number(row.pack?.percent);
+  if (!Number.isFinite(pct)) return { use: false, why: `${cache.agent}'s pack is unread: the hall` };
+  if (pct >= cache.full_percent) return { use: false, why: `${cache.agent} is full (${pct}% >= ${cache.full_percent}%): the hall` };
+  if (purse != null && Number(purse) < cache.min_purse) return { use: false, why: `purse ${purse} under ${cache.min_purse}: the hall, to top it up` };
+  return { use: true, why: `${cache.agent} in ${cache.room} at ${pct}% (< ${cache.full_percent}%)` };
+}
+
 export function planLap({ loop, known = [], abilities = {}, mana = {}, mysticism = 25, reserve = null, capacity = null,
                           startLoad = { weight: 0, bulk: 0 }, held = {}, learned = null, sellAtLoad = null,
                           spawns = null, buffs = null, catalogue = loadCatalogue() } = {}) {
