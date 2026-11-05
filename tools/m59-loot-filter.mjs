@@ -55,6 +55,42 @@ const identity = v => String(v ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 // applies on top of it (an item must pass both).
 export const ANY = '*';
 
+// THE LOOT LIST GOVERNS THE WHOLE FLOOR BY DEFAULT (operator 2026-11-05: "almost always, we only want people applying their
+// loot list + 'grab myself an armor if I'm missing one' as the rules for looting ... sometimes we literally only want
+// characters picking up their loot list, but the default should be 'loot list + 1 armor for wearing'").
+//   policy.lootOnlyFloor = null                         the default: { scope: 'floor', armor: true }
+//   { scope: 'floor' }   a character with a loot list takes ONLY listed items from ANY floor: the "*" list if it has one,
+//                        else every item any of its creature rules names. Creature rules still apply on top after a kill.
+//   { scope: 'kill' }    the old behaviour: a creature rule filters only the kill's own drop ("*" still applies if set).
+//   { armor: true }      the one exception: a character wearing NO body armour and carrying none picks up ONE piece.
+//   { armor: false }     "literally only the loot list".
+// A character with no loot list (lootOnly null) is unaffected: nothing here invents a list.
+export const LOOT_ONLY_FLOOR_DEFAULTS = Object.freeze({ scope: 'floor', armor: true });
+export const ARMOR_RX = /\b(armor|armour|mail|plate)\b/i;
+export const isBodyArmor = name => ARMOR_RX.test(String(name ?? '')) && !/shield|helm|gauntlet|boots?|gloves?/i.test(String(name ?? ''));
+export function lootFloorSpec(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value))
+    throw new Error(`loot_only_floor is { scope: "floor" | "kill", armor: true | false } or null; got ${JSON.stringify(value)}`);
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (k === 'scope') { if (v !== 'floor' && v !== 'kill') throw new Error('loot_only_floor.scope must be "floor" or "kill"'); out.scope = v; }
+    else if (k === 'armor') { if (typeof v !== 'boolean') throw new Error('loot_only_floor.armor must be true or false'); out.armor = v; }
+    else throw new Error(`loot_only_floor: unrecognised key ${k}`);
+  }
+  return Object.keys(out).length ? out : null;
+}
+export const lootFloorRule = value => ({ ...LOOT_ONLY_FLOOR_DEFAULTS, ...(value ?? {}) });
+/** The list that governs the whole floor: "*" if set, else (scope floor) the union of the creature lists; null = none. */
+export function floorAllowList(spec, rule = LOOT_ONLY_FLOOR_DEFAULTS) {
+  if (!spec) return null;
+  if (spec[ANY]) return spec[ANY];
+  if (rule.scope !== 'floor') return null;
+  const out = [];
+  for (const items of Object.values(spec)) for (const it of items) if (!out.includes(it)) out.push(it);
+  return out.length ? out : null;
+}
+
 /**
  * Validate and normalise a `lootOnly` policy.
  * null / undefined / {} -> null (inert). Otherwise { creature: [item, ...] } with string keys
@@ -153,9 +189,11 @@ function prune(memory, room, now) {
  * Returns { leave: [{ id, name, why }], rule, attribution }.
  */
 export function planLootOnly({ spec, kill = null, floor = [], memory = null, room = null,
-                               now = Date.now(), matcherFor = null } = {}) {
+                               now = Date.now(), matcherFor = null, floorRule = null, bareOfArmor = false } = {}) {
   const leave = [];
   if (!spec) return { leave, rule: null, attribution: null };
+  const fr = lootFloorRule(floorRule), whole = floorAllowList(spec, fr);
+  let armorTaken = false;
   prune(memory, room, now);
   const rule = kill?.name ? lootOnlyRule(spec, kill.name, { matcherFor }) : null;
   const before = kill?.before == null ? null
@@ -170,8 +208,10 @@ export function planLootOnly({ spec, kill = null, floor = [], memory = null, roo
              `loot_only takes only ${remembered.items.join(', ')} from it` });
       continue;
     }
-    if (spec[ANY] && !itemAllowed(row.name, spec[ANY], row.translation ?? null)) {
-      leave.push({ id: row.id, name: row.name, why: `LOOT_ONLY * — this character loots only ${spec[ANY].join(', ')}, from any floor` });
+    if (whole && !itemAllowed(row.name, whole, row.translation ?? null)) {
+      if (fr.armor && bareOfArmor && !armorTaken && isBodyArmor(row.name)) { armorTaken = true; continue; }   // the one armour, to wear
+      leave.push({ id: row.id, name: row.name, why: `LOOT_ONLY ${spec[ANY] ? '*' : 'floor'} — this character loots only ${whole.join(', ')}, from any floor` +
+        (fr.armor && isBodyArmor(row.name) ? (bareOfArmor ? ' (one armour already taken this sweep)' : ' (it already wears or carries body armour)') : '') });
       if (memory) memory.filtered++;
       continue;
     }

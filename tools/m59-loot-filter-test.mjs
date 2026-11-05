@@ -47,6 +47,8 @@ try {
 const SPAWNS = spawns.loadSpawns(join(HERE, '..', 'substrate', 'm59-spawns.json'));
 const matcherFor = k => spawns.huntMatcher(SPAWNS, k);
 const KERMIT = { spider: ['purple mushroom'] };
+// The old reach (a creature rule filters only its kill's drop), named explicitly since the default became the whole floor.
+const KILL_SCOPE = { scope: 'kill' };
 
 // ------------------------------------------------------------------ the shape
 console.log('the shape');
@@ -139,7 +141,7 @@ console.log('through Session.lootFloor');
 {
   // Spider kill on a clean floor.
   const w = world([]);
-  w.s.setLootOnly(KERMIT, { matcherFor });
+  w.s.setLootOnly(KERMIT, { matcherFor, floor: KILL_SCOPE });
   const before = w.snapshot();
   w.drop(21, 'purple mushroom'); w.drop(22, 'spider eye'); w.drop(23, 'emerald'); w.drop(24, 'mushroom');
   const r = await w.s.lootFloor({ kill: { name: 'spider', before } });
@@ -170,7 +172,7 @@ console.log('through Session.lootFloor');
 {
   // Attribution: a tree drop already on the floor when the spider fight began.
   const w = world([{ id: 11, name: 'entroot berry' }]);
-  w.s.setLootOnly(KERMIT, { matcherFor });
+  w.s.setLootOnly(KERMIT, { matcherFor, floor: KILL_SCOPE });
   const before = w.snapshot();
   w.drop(21, 'purple mushroom'); w.drop(22, 'spider eye');
   await w.s.lootFloor({ kill: { name: 'spider', before } });
@@ -181,7 +183,7 @@ console.log('through Session.lootFloor');
 {
   // No snapshot: falls back to "the last kill was a spider" over the whole floor.
   const w = world([{ id: 11, name: 'entroot berry' }]);
-  w.s.setLootOnly(KERMIT, { matcherFor });
+  w.s.setLootOnly(KERMIT, { matcherFor, floor: KILL_SCOPE });
   w.drop(21, 'purple mushroom');
   await w.s.lootFloor({ kill: { name: 'spider' } });
   ok('with no floor snapshot the whole floor is filtered (the documented fallback)',
@@ -215,19 +217,19 @@ console.log('through Session.lootFloor');
   // Memory expiry and room scoping.
   const mem = lf.newLootOnlyMemory();
   const spec = lf.lootOnlySpec(KERMIT);
-  lf.planLootOnly({ spec, kill: { name: 'spider', before: [] }, floor: [{ id: 5, name: 'emerald' }],
+  lf.planLootOnly({ spec, floorRule: KILL_SCOPE, kill: { name: 'spider', before: [] }, floor: [{ id: 5, name: 'emerald' }],
                     memory: mem, room: 537, now: 0, matcherFor });
-  const later = lf.planLootOnly({ spec, floor: [{ id: 5, name: 'emerald' }], memory: mem, room: 537,
+  const later = lf.planLootOnly({ spec, floorRule: KILL_SCOPE, floor: [{ id: 5, name: 'emerald' }], memory: mem, room: 537,
                                   now: lf.LOOT_ONLY_MEMORY_MS + 1, matcherFor });
   ok('what was left is forgotten after the memory window (two hours)', later.leave.length === 0);
-  lf.planLootOnly({ spec, kill: { name: 'spider', before: [] }, floor: [{ id: 6, name: 'emerald' }], memory: mem, room: 537, now: 0, matcherFor });
+  lf.planLootOnly({ spec, floorRule: KILL_SCOPE, kill: { name: 'spider', before: [] }, floor: [{ id: 6, name: 'emerald' }], memory: mem, room: 537, now: 0, matcherFor });
   ok('...but still left thirty minutes on (a confined farm keeps lying beside it)',
-     lf.planLootOnly({ spec, floor: [{ id: 6, name: 'emerald' }], memory: mem, room: 537, now: 30 * 60_000, matcherFor }).leave.length === 1);
-  lf.planLootOnly({ spec, kill: { name: 'spider', before: [] }, floor: [{ id: 5, name: 'emerald' }],
+     lf.planLootOnly({ spec, floorRule: KILL_SCOPE, floor: [{ id: 6, name: 'emerald' }], memory: mem, room: 537, now: 30 * 60_000, matcherFor }).leave.length === 1);
+  lf.planLootOnly({ spec, floorRule: KILL_SCOPE, kill: { name: 'spider', before: [] }, floor: [{ id: 5, name: 'emerald' }],
                     memory: mem, room: 537, now: 0, matcherFor });
-  const recycled = lf.planLootOnly({ spec, floor: [{ id: 5, name: 'wand' }], memory: mem, room: 537, now: 1, matcherFor });
+  const recycled = lf.planLootOnly({ spec, floorRule: KILL_SCOPE, floor: [{ id: 5, name: 'wand' }], memory: mem, room: 537, now: 1, matcherFor });
   ok('a recycled id naming a different item is not on the list', recycled.leave.length === 0);
-  const moved = lf.planLootOnly({ spec, floor: [{ id: 5, name: 'emerald' }], memory: mem, room: 536, now: 2, matcherFor });
+  const moved = lf.planLootOnly({ spec, floorRule: KILL_SCOPE, floor: [{ id: 5, name: 'emerald' }], memory: mem, room: 536, now: 2, matcherFor });
   ok('a different room clears the memory', moved.leave.length === 0);
   ok('status reports the rules and the counts',
      lf.lootOnlyStatus(spec, mem)?.rules?.spider?.[0] === 'purple mushroom' && lf.lootOnlyStatus(null) === null);
@@ -251,7 +253,29 @@ console.log('"*": the whole floor (operator 2026-11-05, Scooter)');
   const both = lf.planLootOnly({ spec, kill: { name: 'orc', before: [] }, floor, memory: lf.newLootOnlyMemory(), room: 27, matcherFor });
   ok('a creature rule still applies on top (an orc\'s fresh sapphire and edible mushroom are left: the orc rule names neither)',
      both.leave.some(l => l.id === 4) && both.leave.some(l => l.id === 2));
-  ok('without "*" older floor items loot as before', lf.planLootOnly({ spec: lf.lootOnlySpec({ orc: ['orc tooth'] }), kill: { name: 'orc', before: [1] }, floor: [floor[0]], memory: lf.newLootOnlyMemory(), room: 27, matcherFor }).leave.length === 0);
+  ok('scope "kill" without "*": older floor items loot as before', lf.planLootOnly({ spec: lf.lootOnlySpec({ orc: ['orc tooth'] }), floorRule: KILL_SCOPE, kill: { name: 'orc', before: [1] }, floor: [floor[0]], memory: lf.newLootOnlyMemory(), room: 27, matcherFor }).leave.length === 0);
+}
+
+// ------------------------------------------------------------------ the default reach: loot list + one armour
+console.log('the default: the loot list on every floor, plus one body armour for a bare body (operator 2026-11-05)');
+{
+  const spec = lf.lootOnlySpec({ orc: ['orc tooth'], spider: ['purple mushroom'] });
+  const floor = [{ id: 1, name: 'small round shield' }, { id: 2, name: 'orc tooth' }, { id: 3, name: 'leather armor' },
+                 { id: 4, name: 'purple mushroom' }, { id: 5, name: 'chain armor' }, { id: 6, name: 'long sword' }];
+  const ids = r => JSON.stringify(r.leave.map(l => l.id).sort((a, b) => a - b));
+  ok('null is the default { scope: floor, armor: true }', JSON.stringify(lf.lootFloorRule(null)) === '{"scope":"floor","armor":true}');
+  const dressed = lf.planLootOnly({ spec, kill: null, floor, memory: lf.newLootOnlyMemory(), room: 27, bareOfArmor: false });
+  ok('no "*" needed: the union of the creature lists governs every floor; a dressed body takes no armour', ids(dressed) === '[1,3,5,6]', ids(dressed));
+  const bare = lf.planLootOnly({ spec, kill: null, floor, memory: lf.newLootOnlyMemory(), room: 27, bareOfArmor: true });
+  ok('a bare body takes ONE body armour (the first), never a second, never a shield', ids(bare) === '[1,5,6]', ids(bare));
+  const strict = lf.planLootOnly({ spec, kill: null, floor, memory: lf.newLootOnlyMemory(), room: 27, bareOfArmor: true, floorRule: { armor: false } });
+  ok('armor false: literally only the loot list', ids(strict) === '[1,3,5,6]', ids(strict));
+  const old = lf.planLootOnly({ spec, kill: null, floor, memory: lf.newLootOnlyMemory(), room: 27, floorRule: KILL_SCOPE });
+  ok('scope kill: no kill, nothing filtered (the old reach)', old.leave.length === 0);
+  ok('lootOnly null: nothing is filtered, whatever the reach', lf.planLootOnly({ spec: null, floor, bareOfArmor: true }).leave.length === 0);
+  ok('isBodyArmor: armour yes, shield/helm no', lf.isBodyArmor('leather armor') && lf.isBodyArmor('chain mail') && !lf.isBodyArmor('small round shield') && !lf.isBodyArmor('helm'));
+  const refuses = v => { try { lf.lootFloorSpec(v); return false; } catch (e) { return e.message; } };
+  ok('loot_only_floor validates', lf.lootFloorSpec(null) === null && /scope/.test(refuses({ scope: 'room' })) && /armor/.test(refuses({ armor: 'yes' })) && /unrecognised/.test(refuses({ armour: true })));
 }
 
 // ------------------------------------------------------------------ the hooks
@@ -264,7 +288,7 @@ console.log('the hooks');
      /s\.lootFloor\(\{ stayPut: holdPosition, kill: \{ name: foeName, before: floorBefore \} \}\)/.test(skillsSrc));
   const apSrc = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   ok('the autopilot installs the policy on the session every pass',
-     /s\.setLootOnly\?\.\(this\.policy\.lootOnly \?\? null, \{ matcherFor: k => this\.huntMatch\(k\) \}\)/.test(apSrc));
+     /s\.setLootOnly\?\.\(this\.policy\.lootOnly \?\? null, \{ matcherFor: k => this\.huntMatch\(k\), floor: this\.policy\.lootOnlyFloor \?\? null \}\)/.test(apSrc));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -31,7 +31,7 @@
 // PURE apart from the item datastore the item-name validators read. No client, no keeper.
 
 import { huntPrioritySpec } from './m59-hunt-priority.mjs';
-import { lootOnlySpec } from './m59-loot-filter.mjs';
+import { lootOnlySpec, lootFloorSpec } from './m59-loot-filter.mjs';
 import { touchSpellName, touchCastTiming } from './m59-touchspell.mjs';
 import { normalizeOverfarm } from './m59-overfarm.mjs';
 import { normalizePractice } from './m59-deskpractice.mjs';
@@ -129,6 +129,8 @@ export const STRATEGY_FIELDS = Object.freeze([
     normalize: v => huntPrioritySpec(v) },
   { path: 'lootOnly', keys: ['lootOnly'], faculty: 'economy', arg: 'loot_only',
     normalize: (v, o = {}) => lootOnlySpec(v, { resolveItem: o.resolveItem ?? null }) },
+  { path: 'lootOnlyFloor', keys: ['lootOnlyFloor'], faculty: 'economy', arg: 'loot_only_floor',
+    normalize: v => lootFloorSpec(v) },
   // ADDITIVE: the file's items are added to whatever the character already protects. A strategy
   // that REPLACED the list would quietly unprotect the reagents the roster put there, and the next
   // sell would take them (memory: reagents-need-protected-items).

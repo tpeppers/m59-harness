@@ -2401,6 +2401,8 @@ export class Autopilot {
       // (m59-loot-filter.mjs). Operator, 2026-10-02, for Kermit in Faronath.
       huntPriority: null,
       lootOnly: null,
+      // How far the loot list reaches (m59-loot-filter.mjs lootFloorSpec). null = the default { scope: 'floor', armor: true }.
+      lootOnlyFloor: null,
       // CREATURES NEVER SWUNG AT, even when they attack (m59-spare.mjs): ['spider'] keeps the Icky
       // Cave's spiders alive so they fill its spawn cap and no orc can spawn (operator, 2026-10-02).
       // A filter on targets and on the attack packet; survival (rest, flee, recover) is unchanged.
@@ -3486,7 +3488,7 @@ export class Autopilot {
     s.setCursedPickup?.(this.policy.pickupCursed ?? []);
     await this.applyCurseCycle();
     this.applyUnrevealedWeaponLoot();
-    s.setLootOnly?.(this.policy.lootOnly ?? null, { matcherFor: k => this.huntMatch(k) });
+    s.setLootOnly?.(this.policy.lootOnly ?? null, { matcherFor: k => this.huntMatch(k), floor: this.policy.lootOnlyFloor ?? null });
     if (!s.live) { this.note('not in game'); return; }
     // THE NO-COMBAT LOCK ADOPTS THE ROOM IT STANDS IN before anything below can move the body (policy lockNoCombat).
     this.noCombatLockAdopt();

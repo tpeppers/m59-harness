@@ -213,7 +213,7 @@ import { isObjectId, sessionObjectId, ourSessionsById,
 import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
          knownDrops, whoDrops, huntMatcher } from './m59-spawns.mjs';
 import { huntPrioritySpec, huntPriorityProblems } from './m59-hunt-priority.mjs';
-import { lootOnlySpec } from './m59-loot-filter.mjs';
+import { lootOnlySpec, lootFloorSpec } from './m59-loot-filter.mjs';
 // FARMING STRATEGY FILES: the assignment is validated here; the file is applied in the keeper.
 import { loadFarmStrategy, ordersFromStatus, strategyResidue } from './m59-strategy-engine.mjs';
 import { ARG_KEYS as FARM_STRATEGY_ARG_KEYS, fieldFor as farmStrategyField, normGuardZone } from './m59-strategy-schema.mjs';
@@ -13072,7 +13072,13 @@ const TOOLS = [
           'not, and what was left is remembered for ten minutes so a later sweep does not take ' +
           'it anyway. Creature keys match like hunt. Item names must resolve in m59-items.json ' +
           'or the order is refused with a suggestion. null switches it off. autopilot status ' +
-          'reports it as loot_only. See tools/m59-loot-filter.mjs' },
+          'reports it as loot_only. A "*" key applies to every floor item. See tools/m59-loot-filter.mjs' },
+      loot_only_floor: { type: ['object', 'null'],
+        description: 'HOW FAR THE LOOT LIST REACHES (operator 2026-11-05). null = the default { scope: "floor", armor: true }: a ' +
+          'character with a loot_only list picks up ONLY listed items from ANY floor (the "*" list, else every item its ' +
+          'creature rules name), plus ONE body armour when it wears and carries none. scope "kill" is the old behaviour ' +
+          '(a creature rule filters only the drop of that kill); armor false is "literally only the loot list". No effect on ' +
+          'a character without a loot_only list. autopilot status reports it as policy.lootOnlyFloor' },
       blind_walk_watchdog: { type: 'boolean',
         description: 'OFF by default and deliberately so. The watchdog rung that cancels a ' +
           'walk when health is under the flee line and the pass has been inside one await for ' +
@@ -14205,6 +14211,10 @@ const TOOLS = [
       }
       if (a.loot_only !== undefined) {
         try { p.policy.lootOnly = lootOnlySpec(a.loot_only, { resolveItem: n => resolveItemName(n) }); }
+        catch (e) { return { started: false, reason: e.message }; }
+      }
+      if (a.loot_only_floor !== undefined) {
+        try { p.policy.lootOnlyFloor = lootFloorSpec(a.loot_only_floor); }
         catch (e) { return { started: false, reason: e.message }; }
       }
       // THE SPARE LIST HAD NO WAY IN FROM HERE, so a value a strategy left behind could not be

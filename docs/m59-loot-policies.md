@@ -120,3 +120,26 @@ node tools/m59-dibs.mjs clear --fleet prod --room 2144 --item "purple mushroom"
 - **The book** is `substrate/dibs-<fleet>.json` (`M59_DIBS_FILE` overrides), gitignored, shape in
   `substrate/dibs.example.json`. Re-read on mtime by every keeper, no restart. A file that will not parse keeps the last
   good book and says so; a claim for nobody is refused (it would strand the item); a claim past its `until` is spent.
+
+## A loot list reaches the whole floor, plus one armour for a bare body
+
+Operator, 2026-11-05: *"almost always, we only want people applying their loot list + 'grab myself an armor if
+I'm missing one' as the rules for looting ... sometimes we literally only want characters picking up their loot
+list, but the default should be 'loot list + 1 armor for wearing'"*.
+
+A character with a `loot_only` list (`tools/m59-loot-filter.mjs`) now picks up **only listed items from any floor**:
+the `"*"` list if it has one, else every item any of its creature rules names. Creature rules still apply on top
+after a kill of that creature. The one exception: a character wearing **and** carrying no body armour picks up ONE
+piece (shields, helms and gloves are not body armour). Before this, a creature rule filtered only the drop of the
+kill just made and anything older on the floor looted as before, which is how Scooter kept bringing small round
+shields home from the Icky Cave.
+
+`autopilot loot_only_floor` (strategy key `lootOnlyFloor`) switches it per character:
+
+| value | reach |
+|---|---|
+| `null` (default) | `{ scope: "floor", armor: true }` |
+| `{ armor: false }` | literally only the loot list |
+| `{ scope: "kill" }` | the old reach: a creature rule filters only its own kill's drop |
+
+A character with no `loot_only` list is unaffected: nothing invents a list. `m59-loot-filter-test.mjs` (58).

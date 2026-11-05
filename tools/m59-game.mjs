@@ -100,7 +100,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // temporal dead zone and throw only on the branch that calls it.
 import { autopilotIfAny } from './m59-autopilot.mjs';
 import { lapsedWeapon, dedicatedWeapon, alreadyDedicated } from './m59-weapon-magic.mjs';
-import { planLootOnly, newLootOnlyMemory } from './m59-loot-filter.mjs';
+import { planLootOnly, newLootOnlyMemory, isBodyArmor } from './m59-loot-filter.mjs';
 import { readDibs, dibsFile, dibsFilter } from './m59-dibs.mjs';
 import { killDropItems } from './m59-killdrop.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
@@ -5065,8 +5065,10 @@ class Session {
   // by the autopilot like the two above; `matcherFor` is the keeper's hunt matcher, so a key
   // means the same creature it would mean in `hunt`. The memory of what was left survives a
   // policy re-assert and is dropped only when the policy is switched off.
-  setLootOnly(spec = null, { matcherFor = null } = {}) {
+  // `floor` is policy.lootOnlyFloor (null = the default: the list governs the whole floor, plus one body armour for a bare body).
+  setLootOnly(spec = null, { matcherFor = null, floor = null } = {}) {
     this._lootOnly = spec ?? null;
+    this._lootOnlyFloor = floor ?? null;
     this._lootOnlyMatcher = matcherFor;
     if (spec) this._lootOnlyMemory ??= newLootOnlyMemory();
     else this._lootOnlyMemory = null;
@@ -5394,8 +5396,12 @@ class Session {
     // Same placement rule as the ignore list: never against an explicit id request.
     const lootOnlyLeft = [];
     if (this._lootOnly && (!ids?.length || !explicitIdsOverride) && cands.length) {
+      // BARE OF ARMOUR: nothing worn and nothing carried that is body armour (the one exception to the loot list).
+      const wornNames = (c.equipment?.()?.equipped ?? []).map(e => e.name ?? '');
+      const packNames = (c.inventory ?? []).map(o => c.rsc.get(o.nameRsc) || '');
+      const bareOfArmor = ![...wornNames, ...packNames].some(isBodyArmor);
       const plan = planLootOnly({ spec: this._lootOnly, kill, memory: this._lootOnlyMemory,
-        room: this.world?.room?.num ?? null, matcherFor: this._lootOnlyMatcher,
+        room: this.world?.room?.num ?? null, matcherFor: this._lootOnlyMatcher, floorRule: this._lootOnlyFloor, bareOfArmor,
         floor: cands.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || '', translation: o.translation ?? null })) });
       const leave = new Set(plan.leave.map(l => l.id));
       const overridden = new Set(cands.filter(o => this.lootDisposition?.(o)?.pickup).map(o => o.id));
