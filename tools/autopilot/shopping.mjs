@@ -20,6 +20,7 @@ import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
 import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
+import { countsOf, overlayRequests } from '../m59-reagent-autobalance.mjs';
 import * as skills from '../m59-skills.mjs';
 import { BANKS, FOOD_SHOP, ITEM_VALUE, MARKET_STOPS, REST_VIGOR_CAP, TITHE_FLEET, VIGOR_CAP, hungerNeedsTown, purchaseEnabled, reagentTargetFor, splitBySourcing, townDestinations , townTable } from '../m59-autopilot.mjs';
 
@@ -91,7 +92,12 @@ export class ShoppingPart {
       const target = upto(Math.max(entry.min, Number(entry.max) || 0));
       requests.set(purchaseKey(entry.item), held < upto(entry.min) ? target - held : 0);
     }
-    return [...requests].filter(([, amount]) => amount > 0).map(([item, amount]) => ({ item, amount }));
+    const list = [...requests].filter(([, amount]) => amount > 0).map(([item, amount]) => ({ item, amount }));
+    // THE REAGENT AUTOBALANCER, ON A TRIP THAT PLANNED (m59-reagent-autobalance.mjs): each reagent the lap's plan names is
+    // asked for up to its total -- planned usable PLUS the PvP floor -- instead of the loadout's fixed number. Only during
+    // the trip, so nothing outside town changes; no plan, and this is the list above, untouched.
+    const ab = this.townTrip?.autobalance;
+    return ab?.ok ? overlayRequests(list, ab, countsOf(pack)) : list;
   }
 
   purchaseFoodGap() {

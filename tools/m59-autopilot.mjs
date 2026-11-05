@@ -1767,6 +1767,8 @@ export const TRIP_PURPOSE = Object.freeze({
   supply: 'restock', food: 'food', standing_order: 'order', policy: 'policy', bank: 'bank',
   // Opened on demand (m59-town-favors.mjs): by the operator, or by a private `townTrip` strategy.
   operator: 'operator', strategy: 'strategy',
+  // The reagent autobalancer's 'first' / 'reagents' trigger (m59-reagent-autobalance.mjs): the lap's reagents ran out.
+  autobalance: 'autobalance',
 });
 // Operator, 2026-09-27: "town trips should aim to be $10k+ if their purpose is for selling".
 // Overridable per character as policy.minSellTripValue.

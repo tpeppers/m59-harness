@@ -14,6 +14,7 @@
 import { CHALICE } from '../m59-chalice.mjs';
 import { restrictPlan } from '../m59-curse-cycle.mjs';
 import { spellCost } from '../m59-deskpractice.mjs';
+import { overlayCarry } from '../m59-reagent-autobalance.mjs';
 import { guildKeepTest, guildPlan, reagentSource } from '../m59-guildwants.mjs';
 import { islandCastReserve, islandSaleLoadout, releaseIslandHolds } from '../m59-island-sale.mjs';
 import { listLoadouts, norm } from '../m59-loadout.mjs';
@@ -211,7 +212,9 @@ export class InventoryPart {
   // A spell in the PvP reserve or this character's training stock keeps that many casts instead, when it is more
   // (keptCastsFor: PvP first, training second, selling last -- operator 2026-10-30).
   saleLoadout() {
-    const own = this.loadout?.() ?? null;
+    // A SALE ON AN AUTOBALANCED TRIP KEEPS WHAT THE NEXT LAP WILL CARRY (overlayCarry raises a carry max, never lowers one).
+    const ab = this.townTrip?.autobalance;
+    const own = ab?.ok ? overlayCarry(this.loadout?.() ?? null, ab) : (this.loadout?.() ?? null);
     if (!onIsland(this.s?.world?.room?.num)) return own;
     const c = this.s?.client;
     const spells = (c?.spells ?? []).map(sp => c?.rsc?.get?.(sp.nameRsc) ?? sp?.name).filter(Boolean);

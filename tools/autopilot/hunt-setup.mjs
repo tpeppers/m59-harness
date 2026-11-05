@@ -224,7 +224,13 @@ export class HuntSetupPart {
       }
     }
     this._needsNow = needs;
-    skills.interest.declare(this.name ?? this.s.name, { wants, needs, spare,
+    this.autobalanceObserve?.();
+    // HOW FULL THIS PACK IS, so a courier can tell "short and has room" from "short and full" (courierGate).
+    // Declared only on a fleet whose autobalance orders name a courier: silence leaves the board exactly as it was.
+    const capNow = this.autobalanceCouriers?.() ? skills.carryCapacity(c) : null;
+    const pack = capNow?.known && capNow.load && capNow.load.exact !== false
+      ? Number(Math.max(capNow.load.weight / capNow.weight_max, capNow.load.bulk / capNow.bulk_max).toFixed(2)) : null;
+    skills.interest.declare(this.name ?? this.s.name, { wants, needs, spare, pack,
       room: this.s.world?.room?.num ?? null, character: c.me?.name ?? null,
       farming: this.mode === 'farm' && this.running && !this.inert,
       // A SERVICE CHARACTER IS WORTH A WALK (m59-sharing.mjs): a chalice holder, a posted room

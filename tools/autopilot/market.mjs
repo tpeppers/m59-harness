@@ -269,7 +269,11 @@ export class MarketPart {
     // town. Only the load and stack triggers wait, exactly as overfarming's do: unweighable and supply
     // still leave, because those are the character saying it cannot work.
     const courierHold = this.policy.holdForCourier ? { courier: true } : null;
-    const hold = this.overfarmHoldsTrip() ?? courierHold;
+    // THE REAGENT AUTOBALANCER'S TRIGGER (autobalanceTrigger): null unless a keeper loop chose 'first' or 'reagents'.
+    const balance = this.autobalanceTrigger?.() ?? null;
+    if (balance?.due && !saleCooling)
+      return { sell: true, trigger: 'autobalance', why: `reagent autobalance: ${balance.why}` };
+    const hold = (balance?.hold ? balance : null) ?? this.overfarmHoldsTrip() ?? courierHold;
     const at = this.policy.sellAtLoad ?? SELL_AT_LOAD;
     if (hold?.courier && (fullness >= at || stacks >= (this.policy.maxCarry ?? 14)) &&
         Date.now() - (this._courierHoldNotedAt ?? 0) > 300_000) {
@@ -277,7 +281,7 @@ export class MarketPart {
       this.note('pack full — waiting for the courier rather than walking to town', { fullness, stacks,
         why: 'holdForCourier: the crew unloads at the stage room, and a walk to town is 31% of its day' });
     }
-    if (hold && !hold.courier && (fullness >= at || stacks >= (this.policy.maxCarry ?? 14)))
+    if (hold && !hold.courier && !hold.autobalance && (fullness >= at || stacks >= (this.policy.maxCarry ?? 14)))
       this.note('overfarming - holding the town trip', { ...hold,
         why: 'the pack is full, which is when overfarming starts: keep killing and trade up ' +
              'until ' + hold.target_percent + '% of capacity has been sifted' });

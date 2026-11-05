@@ -8,10 +8,11 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 21 methods: openTownTrip, townTripHeld, townTripCommand, townTripStillWanted, reassessTownTrip,
+// 27 methods: openTownTrip, townTripHeld, townTripCommand, townTripStillWanted, reassessTownTrip,
 //   abandonTownTrip, dropTownTrip, townTripControlStatus, askTownStrategy, openRequestedTownTrip,
 //   countNamed, gatherTownFavors, buyFavorCargo, deliverTownFavors, packSaleValue,
-//   minSellTripValue, continueTownTrip, detailEvent, hitDamageTotal, purseNow, tradeFact
+//   minSellTripValue, continueTownTrip, detailEvent, hitDamageTotal, purseNow, tradeFact,
+//   autobalanceLoop, autobalancePlan, autobalanceObserve, autobalanceTrigger, autobalanceLapEnd, autobalanceStatus
 import { balancesFor } from '../m59-bank.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { siftValue } from '../m59-overfarm.mjs';
@@ -25,6 +26,10 @@ import { completeTownIncome, recordTownTrade } from '../m59-town-income.mjs';
 import { addTradeFact, newTripTrade, packCounts, tripLedgerFields } from '../m59-towntrip-ledger.mjs';
 import { BARLOQUE_VAULT, BANKS, FOOD_SHOPS, MARKETS, MARKET_STOPS, MIN_SELL_TRIP_VALUE, REAGENT_SHOP, TITHE_FLEET, TRIP_PURPOSE, VIGOR_CAP, hungerNeedsTown, townDestinations , townTable } from '../m59-autopilot.mjs';
 import { dropTownDispositions } from '../m59-loot-policy-runtime.mjs';
+import * as autobalance from '../m59-reagent-autobalance.mjs';
+import { readReserve, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
+import { loadSpawns } from '../m59-spawns.mjs';
+import { SELL_AT_LOAD, SPAWN_FILE } from '../m59-autopilot.mjs';
 
 export class TownTripPart {
   // @part 1
@@ -52,6 +57,9 @@ export class TownTripPart {
       client: this.s.client ?? null,
       packIn, trade: newTripTrade(),
       estimatedValue: value.value,
+      // THE REAGENT AUTOBALANCER (m59-reagent-autobalance.mjs): this lap's reagent plan, made once as the trip opens.
+      // Absent unless a 'keeper' loop names this character -- silence is the old restock, exactly.
+      ...(this.autobalanceLoop() ? { autobalance: this.autobalancePlan() } : {}),
       marketStops: wantsMarket ? townTable(this.s.world?.room?.num).MARKET_STOPS.filter(m => !this.bansDestination(m.room)) : null };
     try {
       this.ledgerEvent('town_trip_opened', { trip_started_at: startedAt, trigger, purpose,
@@ -582,6 +590,7 @@ export class TownTripPart {
         });
       }
     }
+    if (trip.autobalance) this.autobalanceLapEnd(trip);
     this.townTrip = null;
     this.lastTownServiceAt = Date.now();
     if (trip.marketStops?.length) this.lastMarketServiceAt = this.lastTownServiceAt;
@@ -635,6 +644,115 @@ export class TownTripPart {
       this.passTrade[key] += Number(fact[key]) || 0;
     for (const key of ['sold', 'bought', 'deposited'])
       if (fact[key]) this.passTrade[key].push(...[].concat(fact[key]));
+  }
+
+  // ================================================================== THE REAGENT AUTOBALANCER
+  //
+  // How many casting reagents this character carries out of town (m59-reagent-autobalance.mjs, which is pure and says
+  // why). Configured per character in substrate/reagent-autobalance-<fleet>.json with `driver: "keeper"`, re-read on its
+  // mtime: no loop, and every one of these returns null and the trip runs exactly as before. Never throws.
+
+  autobalanceLoop() {
+    try {
+      const who = this.s?.reserveWho;
+      if (!who?.character && !who?.agent) return null;
+      const { loop } = autobalance.loopFor(autobalance.readOrders(autobalance.ordersFile(who.fleet)), who);
+      return loop?.driver === 'keeper' ? loop : null;
+    } catch { return null; }
+  }
+
+  autobalancePlan() {
+    try {
+      const loop = this.autobalanceLoop();
+      if (!loop) return null;
+      const c = this.s.client, who = this.s.reserveWho;
+      const nameOf = o => String(c?.rsc?.get?.(o?.nameRsc) ?? o?.name ?? '').trim().toLowerCase();
+      const known = (c?.spells ?? []).map(nameOf).filter(Boolean);
+      const abilities = Object.fromEntries((c?.spells ?? []).map(sp => [nameOf(sp), c.abilities?.get?.(sp.id)?.ability ?? null]));
+      const cap = skills.carryCapacity(c);
+      const learned = autobalance.readLearned(autobalance.learnedFile(who.fleet, who.character ?? who.agent)).state?.loops?.[loop.mode] ?? null;
+      // THE PACK AT DEPARTURE: what the last completed trip left it at, else what this trip's sale would leave.
+      const relief = this.saleRelief?.(cap);
+      const startLoad = learned?.start_load
+        ?? (cap?.known && relief ? { weight: relief.after * cap.weight_max, bulk: relief.after * cap.bulk_max } : cap?.load ?? null);
+      const plan = autobalance.planLap({ loop, known, abilities, mana: { max: c?.vitals?.()?.mana?.max ?? null },
+        mysticism: c?.stat?.('mysticism') ?? 25, reserve: resolveReserve(readReserve(reserveFile(who.fleet)), who),
+        capacity: cap?.known ? { weight_max: cap.weight_max, bulk_max: cap.bulk_max } : null, startLoad,
+        held: autobalance.countsOf(this.packAsItems()), learned, sellAtLoad: this.policy.sellAtLoad ?? SELL_AT_LOAD,
+        spawns: loop.room != null && !loop.loot_per_kill ? loadSpawns(SPAWN_FILE) : null });
+      this.note('reagent autobalance plan', { ok: plan.ok, lines: plan.lines ?? null, why: plan.why, unplannable: plan.unplannable ?? null });
+      try {
+        this.ledgerEvent('autobalance_plan', { ok: plan.ok, mode: loop.mode, trigger: loop.trigger, lap_minutes: plan.lapMinutes ?? null,
+          lap_source: plan.lap_source ?? null, totals: plan.totals ?? null, pvp: plan.pvp ?? null, lines: plan.lines ?? null,
+          unplannable: plan.unplannable ?? null, why: plan.why });
+      } catch { /* bookkeeping only */ }
+      return plan;
+    } catch (e) { return { ok: false, why: `autobalance plan failed: ${e.message}` }; }
+  }
+
+  /** Each pass: note when a planned reagent first runs short this lap. Cheap; no lap open, no work. */
+  autobalanceObserve() {
+    const lap = this._abLap;
+    if (!lap) return;
+    try {
+      const cap = skills.carryCapacity(this.s.client);
+      const fullness = cap?.known && cap.load ? Math.max(cap.load.weight / cap.weight_max, cap.load.bulk / cap.bulk_max) : null;
+      autobalance.observeLap(lap, { pack: this.packAsItems(), fullness });
+    } catch { /* bookkeeping only */ }
+  }
+
+  /**
+   * THE LOOP'S TRIP TRIGGER (checkIfShouldSell). null under 'pack' or with no loop -- the old triggers alone decide.
+   * 'first': { due } when the reagents (or a required buff) are gone. 'reagents': { due } likewise, and { hold } on a full
+   * pack while they last -- only when the existing overfarm policy is on to sift it (its `avoid` list is the drop order).
+   */
+  autobalanceTrigger() {
+    const loop = this.autobalanceLoop();
+    if (!loop || loop.trigger === 'pack' || !this._abLap?.plan) return null;
+    const v = autobalance.lapVerdict({ loop: { ...loop, cancel_on_empty: false }, lap: this._abLap });
+    const cooling = Date.now() - (this.lastTownServiceAt ?? 0) < 600_000;
+    if (v.end && v.by !== 'pack') return cooling ? null : { due: true, why: v.why };
+    if (loop.trigger === 'reagents') {
+      if (this.policy.overfarm?.enabled) return { hold: true, autobalance: true };
+      if (Date.now() - (this._abHoldNotedAt ?? 0) > 600_000 && (this._abHoldNotedAt = Date.now()))
+        this.note('autobalance trigger "reagents" is not holding the pack',
+          { why: 'overfarm is off, so a full pack has nothing to sift with: it goes to town as before' });
+    }
+    return null;
+  }
+
+  /** THE LAP BOUNDARY: score the lap that just ended, learn, and open the next with this trip's plan. */
+  autobalanceLapEnd(trip) {
+    try {
+      const who = this.s.reserveWho, loop = this.autobalanceLoop();
+      const cap = skills.carryCapacity(this.s.client);
+      const fullnessNow = cap?.known && cap.load ? Math.max(cap.load.weight / cap.weight_max, cap.load.bulk / cap.bulk_max) : null;
+      const file = who && loop ? autobalance.learnedFile(who.fleet, who.character ?? who.agent) : null;
+      if (file) {
+        const { state } = autobalance.readLearned(file);
+        state.loops ??= {};
+        let learned = state.loops[loop.mode] ?? null;
+        if (this._abLap?.plan) {
+          const r = autobalance.recordLap({ lap: this._abLap, end: trip.packIn ?? {}, endedAt: trip.startedAt,
+            endedBy: trip.trigger === 'autobalance' ? 'reagents' : ['load', 'stacks', 'unweighable'].includes(trip.trigger) ? 'pack' : 'other',
+            fullnessEnd: this._abLap.fullness_last ?? null, learned, sellAtLoad: this.policy.sellAtLoad ?? SELL_AT_LOAD });
+          learned = r.learned;
+          this.note('reagent autobalance lap', { discrepancy: r.discrepancy, per_item: r.per_item, pack_minutes: r.pack_minutes });
+          try {
+            this.ledgerEvent('autobalance_lap', { mode: loop.mode, trigger: loop.trigger, discrepancy: r.discrepancy,
+              per_item: r.per_item, pack_minutes: r.pack_minutes, pack_why: r.pack_why });
+          } catch { /* bookkeeping only */ }
+        }
+        if (cap?.known && cap.load) learned = { ...(learned ?? {}), start_load: { weight: cap.load.weight, bulk: cap.load.bulk } };
+        if (learned) { state.loops[loop.mode] = learned; autobalance.writeLearned(file, state); }
+      }
+      this._abLap = autobalance.startLap({ plan: trip.autobalance, pack: this.packAsItems(), fullness: fullnessNow });
+    } catch (e) { this.note('reagent autobalance lap bookkeeping failed', { why: e.message }); }
+  }
+
+  autobalanceStatus() {
+    const lap = this._abLap;
+    return lap ? { started_at: lap.started_at, plan: lap.plan, short_at: lap.short_at, fullness: lap.fullness_last } : null;
   }
   // @end 1
 }
