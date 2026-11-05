@@ -443,6 +443,9 @@ try {
     assert.deepEqual(funded.shops.mushroom, { seller: 'Joguer', withdraw: 3000 }, 'the purse is topped up from the hall chests');
     assert.deepEqual(funded.shops.herb, { seller: 'Joguer', withdraw: 3000 }, 'a bank is ignored');
     assert.ok(problems.some(p => /shops.herb: bank is not used/.test(p)));
+    const gem = AB.normalizeLoop({ mode: 'practice', practice: ['haste'], fund_gem: { item: 'ruby', amount: 40, seller: 'Herbutte', room: 109 } }, problems);
+    assert.deepEqual(gem.fund_gem, { item: 'ruby', amount: 25, seller: 'Herbutte', room: 109 }, 'capped at 25: Herbutte refuses a larger stack');
+    assert.equal(AB.normalizeLoop({ mode: 'practice', practice: ['haste'] }, []).fund_gem, null, 'no gem sale unless asked');
   });
 console.log(`\n${passed} passed`);
 } finally {

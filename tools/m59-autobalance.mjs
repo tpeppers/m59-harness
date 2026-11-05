@@ -206,6 +206,15 @@ async function supervise({ character, agent, fleet, broker }) {
           const cash = await call('hall_withdraw', { wants: [{ item: 'shilling', amount: shop.withdraw - purse }] }, 600_000).catch(e => ({ error: e.message }));
           log(`town lap: purse ${purse} under ${shop.withdraw}: from the hall chests ${JSON.stringify(cash?.took ?? cash?.error ?? cash).slice(0, 120)}${cash?.short && Object.keys(cash.short).length ? ' SHORT ' + JSON.stringify(cash.short) : ''}`);
         }
+        // STILL SHORT: SELL GEMS FROM THE CHEST (loop.fund_gem), in Barloque, then buy.
+        if (shop.withdraw && loop.fund_gem && (Number((await row())?.purse) || 0) < shop.withdraw) {
+          const g = loop.fund_gem, before = Number((await row())?.purse) || 0;
+          const got = await call('hall_withdraw', { wants: [{ item: g.item, amount: g.amount }] }, 600_000).catch(e => ({ error: e.message }));
+          const walked = await walk(g.room);
+          const gem = ((await call('inventory', {}, 60_000).catch(() => null))?.items ?? []).find(i => reagentKey(i.name) === reagentKey(g.item));
+          const sold = walked && gem ? await call('sell', { to: g.seller, items: [{ id: gem.id, amount: Math.min(g.amount, gem.amount > 0 ? gem.amount : 1) }] }, 120_000).catch(e => ({ error: e.message })) : { error: walked ? `no ${g.item} in the pack` : `could not reach ${g.room}` };
+          log(`town lap: purse ${before} still under ${shop.withdraw}: ${g.amount} ${g.item} from the chest (${JSON.stringify(got?.took ?? got?.error).slice(0, 60)}), sold to ${g.seller} -> ${sold?.error ?? 'ok'}; purse now ${Number((await row())?.purse) || 0}`);
+        }
         const out = repl(`buy agents=${agent} seller=${encodeURIComponent(shop.seller)} item=${encodeURIComponent(item)} amount=${need}${shop.room ? ` room=${shop.room}` : ''} back=${loop.hall}`);
         const done = /buy \(\w+\): 1\/1 completed/.test(out);
         log(`town lap: ${item} short ${need} -> bought at ${shop.seller}: ${done ? 'ok' : 'NOT completed ' + (out.split('\n').filter(l => /REFUS|failed|cannot|afford/i.test(l)).pop() ?? '').slice(0, 160)}`);

@@ -67,6 +67,11 @@ item, at the loop's shop: `shops: { mushroom: { seller: "Joguer", room: 104 }, h
 find the seller, buy, verify by count, walk back to the hall). A refusal or a thin purse is logged and the lap goes out
 with what it has; the learner sees the shortfall either way. No `shops`: nothing is bought, as before.
 
+When the chests hold too few shillings, `fund_gem: { item: "ruby", amount: 25, seller: "Herbutte", room: 109 }` takes that
+many gems out of the chest and sells exactly that stack to the seller before buying (operator, 2026-11-05: "take out 25
+rubies (sells for ~4K to Herbutte), which doesn't require leaving Barloque"). Herbutte refuses a stack of more than 25
+(`bqmerch.kod` ObjectDesired), so `amount` is capped at 25.
+
 ## Trip triggers (`trigger`)
 
 | | ends the lap when | keeper | supervisor |
