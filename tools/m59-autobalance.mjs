@@ -154,6 +154,11 @@ async function supervise({ character, agent, fleet, broker }) {
   };
   const row = async () => (await rpc(broker, 'fleet', {}, 60_000).catch(() => null))?.fleet?.find(x => x.agent === agent) ?? null;
   const ap = a => rpc(broker, 'autopilot', { agent, action: 'start', ...a }, 60_000).catch(e => ({ error: e.message }));
+  /** Planned totals not in the pack now: { item: missing } (exact names, as reagentKey folds them). */
+  const shortfall = async totals => {
+    const have = ab.countsOf(((await call('inventory', {}, 60_000).catch(() => null))?.items ?? []).map(i => ({ name: i.name, amount: i.amount > 0 ? i.amount : 1 })));
+    return Object.fromEntries(Object.entries(totals ?? {}).map(([i, t]) => [i, t - (Number(have[i]) || 0)]).filter(([, n]) => n > 0));
+  };
 
   let { loop, problems } = orders();
   if (!loop) throw new Error(`no autobalance loop for ${character} in ${ab.ordersFile(fleet)}`);
@@ -187,6 +192,19 @@ async function supervise({ character, agent, fleet, broker }) {
     if (planNow.ok) {
       const take = await call('hall_withdraw', { wants: Object.entries(planNow.totals).map(([item, amount]) => ({ item, amount })) }, 600_000).catch(e => ({ error: e.message }));
       log(`withdrew: ${JSON.stringify(take?.took ?? take?.error ?? take).slice(0, 220)}${take?.short && Object.keys(take.short).length ? ' short ' + JSON.stringify(take.short) : ''}`);
+      // THE TOWN LAP: what the chest could not supply is BOUGHT at the loop's shop for that item (operator 2026-11-05: "buy
+      // mushrooms at Joguer's herb shop"), then the body walks back to the hall so the trip resumes from one place. A
+      // purchase is the buy fleetscript (find the seller, buy, verify by count); a refusal or a thin purse is logged and
+      // the lap goes out with what it has -- the learner sees the shortfall either way.
+      const shortNow = await shortfall(planNow.totals);
+      for (const [item, need] of Object.entries(shortNow)) {
+        const shop = loop.shops?.[item];
+        if (!shop || need <= 0) continue;
+        const out = repl(`buy agents=${agent} seller=${encodeURIComponent(shop.seller)} item=${encodeURIComponent(item)} amount=${need}${shop.room ? ` room=${shop.room}` : ''} back=${loop.hall}`);
+        const done = /buy \(\w+\): 1\/1 completed/.test(out);
+        log(`town lap: ${item} short ${need} -> bought at ${shop.seller}: ${done ? 'ok' : 'NOT completed ' + (out.split('\n').filter(l => /REFUS|failed|cannot|afford/i.test(l)).pop() ?? '').slice(0, 160)}`);
+      }
+      if (Object.keys(shortNow).some(i => loop.shops?.[i])) { const still = await shortfall(planNow.totals); if (Object.keys(still).length) log(`still short after the town lap: ${JSON.stringify(still)}`); }
       log(`plan (${planNow.lap_source} lap ${planNow.lapMinutes} min): ${planNow.lines.join(' | ')}`);
       for (const u of planNow.unplannable ?? []) log(`unplannable ${u.spell}: ${u.why}`);
     } else log(`no plan: ${planNow.why}`);

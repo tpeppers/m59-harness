@@ -34,7 +34,7 @@ for known spells only; exact pack names; a farming cast refused at the floor and
 a vetoed `client.cast` never reaches the wire; the book's `training` stock adds to the floor for a sale
 (`keptCastsFor`) and never for the cast veto.
 
-`m59-reagent-autobalance-test.mjs` (28) pins the reagent autobalancer (docs/m59-reagent-autobalance.md). FIRST and
+`m59-reagent-autobalance-test.mjs` (29) pins the reagent autobalancer (docs/m59-reagent-autobalance.md). FIRST and
 last: NO ORDERS, the keeper is unchanged -- a trip carries no plan key, purchase requests, the sale loadout and the trip
 trigger are byte-identical, no lap opens and no pack fullness reaches the board. Then the kod's mana regeneration
 (CalculateManaTime) and catalogue costs; lap length by the binding ceiling; loot per kill from the room's drop tables;

@@ -433,6 +433,13 @@ try {
     assert.match(r.pack_why, /too short/);
   });
 
+  await test('shops: the town lap buys what the chest could not supply; a shop needs a seller (operator 2026-11-05)', async () => {
+    const problems = [];
+    const loop = AB.normalizeLoop({ mode: 'practice', practice: ['super strength'], shops: { mushrooms: { seller: 'Joguer', room: 104 }, herb: 'Joguer', 'red mushroom': {} } }, problems);
+    assert.deepEqual(loop.shops, { mushroom: { seller: 'Joguer', room: 104 }, herb: { seller: 'Joguer' } });
+    assert.ok(problems.some(p => /shops\.red mushroom: needs a seller/.test(p)));
+    assert.deepEqual(AB.normalizeLoop({ mode: 'practice', practice: ['haste'] }, []).shops, {}, 'no shops: nothing is bought, as before');
+  });
 console.log(`\n${passed} passed`);
 } finally {
   rmSync(dir, { recursive: true, force: true });

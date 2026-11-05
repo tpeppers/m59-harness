@@ -107,6 +107,9 @@ export const LOOP_DEFAULTS = Object.freeze({
   mode: 'practice',
   practice: Object.freeze([]),         // spell names, practised round-robin
   maintain: Object.freeze([]),         // buff names kept live
+  // THE TOWN LAP (operator 2026-11-05: "do a full town lap at Barloque ... buy mushrooms at Joguer's herb shop"): what the
+  // chest could not supply is BOUGHT, per item: { mushroom: { seller: 'Joguer' } }. Supervisor bank trips only.
+  shops: Object.freeze({}),
   kills_per_minute: 1,
   vigor: 100,
   sell_at_load: null,                  // null: the keeper's policy.sellAtLoad, else SELL_AT_LOAD 0.9
@@ -189,7 +192,7 @@ export function normalizeLoop(raw, problems = []) {
   if (typeof raw !== 'object' || Array.isArray(raw)) { problems.push('a loop must be an object'); return null; }
   if (raw.enabled === false) return null;
   const out = { ...LOOP_DEFAULTS, practice: [], maintain: [], hunt: [], loot_only: [], drop_priority: [], deposit: [],
-                durations: {}, pinned: {}, multipliers: {}, edits: [] };
+                durations: {}, pinned: {}, multipliers: {}, edits: [], shops: {} };
   for (const [k, v] of Object.entries(raw)) {
     if (k === 'enabled' || k.startsWith('_') || k === 'why') continue;
     if (!Object.hasOwn(LOOP_DEFAULTS, k)) { problems.push(`unrecognised key ${k}, not applied`); continue; }
@@ -200,6 +203,15 @@ export function normalizeLoop(raw, problems = []) {
     if (k === 'cancel_on_empty') { if (typeof v === 'boolean') out.cancel_on_empty = v; else problems.push('cancel_on_empty must be true or false'); continue; }
     if (k === 'farm') { out.farm = v && typeof v === 'object' && !Array.isArray(v) ? v : null; if (v != null && !out.farm) problems.push('farm must be an object of autopilot args'); continue; }
     if (k === 'edits') { out.edits = Array.isArray(v) ? v.slice(-200) : []; continue; }
+    if (k === 'shops') {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) { problems.push('shops must be an object: { item: { seller } }'); continue; }
+      for (const [item, spec] of Object.entries(v)) {
+        const seller = typeof spec === 'string' ? spec : spec?.seller;
+        if (!seller || typeof seller !== 'string') { problems.push(`shops.${item}: needs a seller, not applied`); continue; }
+        out.shops[reagentKey(item)] = { seller: seller.trim(), ...(Number(spec?.room) > 0 ? { room: Number(spec.room) } : {}) };
+      }
+      continue;
+    }
     if (k === 'loot_per_kill') {
       if (v == null) { out.loot_per_kill = null; continue; }
       const w = Number(v?.weight), b = Number(v?.bulk ?? v?.weight);

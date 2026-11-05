@@ -60,6 +60,13 @@ lap; the next lap carries `use_per_minute x pack_minutes`. So amount and lap len
 **Hand edits win**: `pinned.<item>` (a usable amount) and `multipliers.<item>` (on the estimate) replace the learner for
 that item until cleared. Every edit made with the CLI is logged in the loop's `edits` with who, when and why.
 
+## The town lap (`shops`)
+Operator, 2026-11-05: "do a full town lap at Barloque ... buy mushrooms at Joguer's herb shop". A supervisor bank trip
+deposits, withdraws the plan's totals from the hall chests, and then BUYS whatever the chests could not supply, per
+item, at the loop's shop: `shops: { mushroom: { seller: "Joguer", room: 104 }, herb: "Joguer" }` (the `buy` fleetscript:
+find the seller, buy, verify by count, walk back to the hall). A refusal or a thin purse is logged and the lap goes out
+with what it has; the learner sees the shortfall either way. No `shops`: nothing is bought, as before.
+
 ## Trip triggers (`trigger`)
 
 | | ends the lap when | keeper | supervisor |
