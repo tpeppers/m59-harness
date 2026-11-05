@@ -208,7 +208,11 @@ export function normalizeLoop(raw, problems = []) {
       for (const [item, spec] of Object.entries(v)) {
         const seller = typeof spec === 'string' ? spec : spec?.seller;
         if (!seller || typeof seller !== 'string') { problems.push(`shops.${item}: needs a seller, not applied`); continue; }
-        out.shops[reagentKey(item)] = { seller: seller.trim(), ...(Number(spec?.room) > 0 ? { room: Number(spec.room) } : {}) };
+        // FUNDS: a purse under `withdraw` is topped up to it at `bank` (a counter room) before buying -- the buy fleetscript's own
+        // withdrawal. Scooter went out with 604 shillings and the Swines hall chest holds none (2026-11-05).
+        const fund = Number(spec?.withdraw) > 0 && Number(spec?.bank) > 0 ? { withdraw: Number(spec.withdraw), bank: Number(spec.bank) } : {};
+        if ((spec?.withdraw != null || spec?.bank != null) && !fund.withdraw) problems.push(`shops.${item}: withdraw needs both an amount and a bank room, not applied`);
+        out.shops[reagentKey(item)] = { seller: seller.trim(), ...(Number(spec?.room) > 0 ? { room: Number(spec.room) } : {}), ...fund };
       }
       continue;
     }
