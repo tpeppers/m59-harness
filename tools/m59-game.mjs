@@ -6119,10 +6119,14 @@ class Session {
                  reason: `room ${here.num} is handed to the keeper on the way to ${toRoomNum}` };
       }
 
-      // Leave the Bookmakers hall through its known sequence of doors before an
-      // ordinary exit walk tries to cross the shut entrance or blinks into a lift.
-      if (here.num === 714 && !guildExitTried && this.exitGuildHall) {
-        guildExitTried = true;
+      // Leave a surveyed guild hall (714, 713) through its known sequence of doors before an
+      // ordinary exit walk tries to cross the shut entrance or blinks into a lift. 713's chest room
+      // is sealed by a SPOKEN wall the router cannot plan through: gated on 714 alone, a journey out
+      // of 713's chest room sat 7 minutes with 0 legs (Gonzo, prod 2026-11-05 06:02Z). So it is asked
+      // once per ROOM and exitGuildHall itself decides: it answers {attempted:false} at once for any
+      // room that is not a surveyed hall (and for a hall's foyer).
+      if (guildExitTried !== Number(here.num) && this.exitGuildHall) {
+        guildExitTried = Number(here.num);
         const passage = await this.exitGuildHall({ movementGeneration, controlToken });
         if (this.movementWasCancelled(movementGeneration, controlToken))
           return this.cancelledMovement({ log });

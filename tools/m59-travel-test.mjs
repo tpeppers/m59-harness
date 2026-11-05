@@ -537,6 +537,21 @@ console.log('a doorway this side of the room cannot reach is replanned around');
   const refused = await travel.call(blocked, 101);
   ok('a refused hall passage ends with its reason instead of wandering to a lift',
     refused.outcome === 'guild_exit_failed' && refused.reason === 'door refused');
+  // EVERY SURVEYED HALL, not only 714. 713's chest room is sealed by a spoken wall; gated on 714
+  // the passage never ran and a journey out of it sat 7 minutes with 0 legs (Gonzo, 2026-11-05).
+  const rowlfs = fakeSession({ rooms: [713, 101] });
+  let ran713 = 0;
+  rowlfs.exitGuildHall = async () => { ran713++; return { attempted: true, crossed: true }; };
+  rowlfs.leaveViaAny = async () => { assert.ok(ran713, 'the 713 passage runs before a blind exit walk');
+    rowlfs.at++; return { left: true }; };
+  ok('hall 713 departures run the hall passage too, once', (await travel.call(rowlfs, 101)).arrived && ran713 === 1);
+  // An ordinary room is asked too, and its answer (not a hall) changes nothing.
+  const plain = fakeSession({ rooms: [1, 2, 101] });
+  const asked = [];
+  plain.exitGuildHall = async () => { asked.push(plain.at); return { attempted: false }; };
+  plain.leaveViaAny = async () => { plain.at++; return { left: true }; };
+  ok('an ordinary room\'s "not a hall" answer does not stop the journey, and each room is asked once',
+    (await travel.call(plain, 101)).arrived && asked.length === new Set(asked).size);
 }
 for (const strict of [false, true]) {
   const s = fakeSession({ rooms: [714, 101] });
