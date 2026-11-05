@@ -200,10 +200,13 @@ async function supervise({ character, agent, fleet, broker }) {
       for (const [item, need] of Object.entries(shortNow)) {
         const shop = loop.shops?.[item];
         if (!shop || need <= 0) continue;
+        // TOP THE PURSE UP FROM THE HALL CHESTS FIRST (still standing in the hall), never from a bank.
         const purse = Number((await row())?.purse) || 0;
-        const fund = shop.withdraw && purse < shop.withdraw ? ` withdraw=${shop.withdraw - purse} bank=${shop.bank}` : '';
-        const out = repl(`buy agents=${agent} seller=${encodeURIComponent(shop.seller)} item=${encodeURIComponent(item)} amount=${need}${shop.room ? ` room=${shop.room}` : ''}${fund} back=${loop.hall}`);
-        if (fund) log(`town lap: purse ${purse} under ${shop.withdraw}: withdrawing ${shop.withdraw - purse} at ${shop.bank} first`);
+        if (shop.withdraw && purse < shop.withdraw) {
+          const cash = await call('hall_withdraw', { wants: [{ item: 'shilling', amount: shop.withdraw - purse }] }, 600_000).catch(e => ({ error: e.message }));
+          log(`town lap: purse ${purse} under ${shop.withdraw}: from the hall chests ${JSON.stringify(cash?.took ?? cash?.error ?? cash).slice(0, 120)}${cash?.short && Object.keys(cash.short).length ? ' SHORT ' + JSON.stringify(cash.short) : ''}`);
+        }
+        const out = repl(`buy agents=${agent} seller=${encodeURIComponent(shop.seller)} item=${encodeURIComponent(item)} amount=${need}${shop.room ? ` room=${shop.room}` : ''} back=${loop.hall}`);
         const done = /buy \(\w+\): 1\/1 completed/.test(out);
         log(`town lap: ${item} short ${need} -> bought at ${shop.seller}: ${done ? 'ok' : 'NOT completed ' + (out.split('\n').filter(l => /REFUS|failed|cannot|afford/i.test(l)).pop() ?? '').slice(0, 160)}`);
       }

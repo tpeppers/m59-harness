@@ -439,10 +439,10 @@ try {
     assert.deepEqual(loop.shops, { mushroom: { seller: 'Joguer', room: 104 }, herb: { seller: 'Joguer' } });
     assert.ok(problems.some(p => /shops\.red mushroom: needs a seller/.test(p)));
     assert.deepEqual(AB.normalizeLoop({ mode: 'practice', practice: ['haste'] }, []).shops, {}, 'no shops: nothing is bought, as before');
-    const funded = AB.normalizeLoop({ mode: 'practice', practice: ['haste'], shops: { mushroom: { seller: 'Joguer', withdraw: 3000, bank: 54 }, herb: { seller: 'Joguer', withdraw: 3000 } } }, problems);
-    assert.deepEqual(funded.shops.mushroom, { seller: 'Joguer', withdraw: 3000, bank: 54 });
-    assert.deepEqual(funded.shops.herb, { seller: 'Joguer' }, 'a withdrawal without a bank is not applied');
-    assert.ok(problems.some(p => /shops.herb: withdraw needs both/.test(p)));
+    const funded = AB.normalizeLoop({ mode: 'practice', practice: ['haste'], shops: { mushroom: { seller: 'Joguer', withdraw: 3000 }, herb: { seller: 'Joguer', withdraw: 3000, bank: 54 } } }, problems);
+    assert.deepEqual(funded.shops.mushroom, { seller: 'Joguer', withdraw: 3000 }, 'the purse is topped up from the hall chests');
+    assert.deepEqual(funded.shops.herb, { seller: 'Joguer', withdraw: 3000 }, 'a bank is ignored');
+    assert.ok(problems.some(p => /shops.herb: bank is not used/.test(p)));
   });
 console.log(`\n${passed} passed`);
 } finally {
