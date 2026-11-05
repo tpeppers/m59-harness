@@ -200,7 +200,10 @@ async function supervise({ character, agent, fleet, broker }) {
       for (const [item, need] of Object.entries(shortNow)) {
         const shop = loop.shops?.[item];
         if (!shop || need <= 0) continue;
-        const out = repl(`buy agents=${agent} seller=${encodeURIComponent(shop.seller)} item=${encodeURIComponent(item)} amount=${need}${shop.room ? ` room=${shop.room}` : ''} back=${loop.hall}`);
+        const purse = Number((await row())?.purse) || 0;
+        const fund = shop.withdraw && purse < shop.withdraw ? ` withdraw=${shop.withdraw - purse} bank=${shop.bank}` : '';
+        const out = repl(`buy agents=${agent} seller=${encodeURIComponent(shop.seller)} item=${encodeURIComponent(item)} amount=${need}${shop.room ? ` room=${shop.room}` : ''}${fund} back=${loop.hall}`);
+        if (fund) log(`town lap: purse ${purse} under ${shop.withdraw}: withdrawing ${shop.withdraw - purse} at ${shop.bank} first`);
         const done = /buy \(\w+\): 1\/1 completed/.test(out);
         log(`town lap: ${item} short ${need} -> bought at ${shop.seller}: ${done ? 'ok' : 'NOT completed ' + (out.split('\n').filter(l => /REFUS|failed|cannot|afford/i.test(l)).pop() ?? '').slice(0, 160)}`);
       }
