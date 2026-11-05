@@ -8,10 +8,10 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 17 methods: deliveryCapFor, matchesKind, countOfKind, ownFloorFor, deliverableSpare,
+// 20 methods: deliveryCapFor, matchesKind, countOfKind, ownFloorFor, deliverableSpare,
 //   deliveryRadius, deliveryNeighbourhood, deliveryRequestOf, prepareFarmDelivery,
 //   deliveryCashReserve, cancelFarmDelivery, makeRoomToBuy, buyFarmDeliveryCargo, giveFarmReagents,
-//   deliverFarmSupplies, ejectLoot, giveItems
+//   deliverFarmSupplies, ejectLoot, giveItems, autobalanceCouriers, courierBalance, courierBalanceSave
 import { norm } from '../m59-loadout.mjs';
 import { roomsWithin } from '../m59-map.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
@@ -20,6 +20,7 @@ import * as skills from '../m59-skills.mjs';
 import { MARKET_KEEP } from '../m59-items.mjs';
 import * as party from '../m59-party.mjs';
 import { BACKOFF_MS, ejectBatch, ejectTarget, normalizeLootEject, noteGone, overflowDrops, readReceived } from '../m59-loot-eject.mjs';
+import * as autobalance from '../m59-reagent-autobalance.mjs';
 import { REAGENT_SHOP, claimFarmDelivery, purchaseEnabled, reagentTargetFor, releaseFarmDelivery } from '../m59-autopilot.mjs';
 
 export class DeliveryPart {
@@ -123,6 +124,17 @@ export class DeliveryPart {
         .map(([kind, amount]) => [kind, Math.min(amount, this.deliveryCapFor(kind, cfg))])
         .filter(([, amount]) => amount > 0)) }))
       .filter(rec => Object.keys(rec.needs).length);
+    // THE COURIER BALANCE (m59-reagent-autobalance.mjs courierGate): an item a recipient could not take, delivery after
+    // delivery, is not bought for them again until they are short of it AND show room. No courier orders: no change.
+    const balance = this.courierBalance();
+    const gated = [];
+    if (balance) for (const rec of demands) for (const kind of Object.keys(rec.needs)) {
+      const g = autobalance.courierGate(balance.state, { recipient: rec.character ?? rec.agent, item: kind, cfg: balance.cfg,
+        evidence: { need: rec.needs[kind], pack: rec.pack } });
+      if (!g.buy) { delete rec.needs[kind]; gated.push({ to: rec.character ?? rec.agent, item: kind, why: g.why }); }
+    }
+    if (gated.length) this.note('courier balance: not buying for a recipient who could not take it', { gated });
+    if (balance) { const kept = demands.filter(rec => Object.keys(rec.needs).length); demands.length = 0; demands.push(...kept); }
     if (!demands.length || !claimFarmDelivery(room, this.name ?? this.s.name)) return null;
     const requested = this.deliveryRequestOf(demands, cfg);
     this.pendingFarmDelivery = { room: Number(room), room_name: this.s.world?.room?.name ?? null,
@@ -385,6 +397,7 @@ export class DeliveryPart {
     // So the board is re-read on arrival and the cargo goes to whoever is present and short,
     // polled first, unpolled, or polled-for-somewhere-else alike.
     const remaining = { ...p.cargo };
+    const courier = this.courierBalance();
     const left = () => Object.values(remaining).some(n => n > 0);
     const deliveries = [], visited = [];
     const served = new Set();
@@ -410,6 +423,9 @@ export class DeliveryPart {
           this.coordination.delivery.delivered[kind] = (this.coordination.delivery.delivered[kind] || 0) + n;
         }
         if (Object.keys(result.gave || {}).length) served.add(recipient.agent);
+        if (courier) for (const kind of Object.keys(wanted))
+          autobalance.recordDelivery(courier.state, { recipient: recipient.character ?? recipient.agent, item: kind,
+            delivered: result.gave?.[kind] || 0, why: result.why ?? null, cfg: courier.cfg });
         if (result.why) this.coordination.delivery.failed++;
         deliveries.push({ agent: recipient.agent, character: recipient.character, room: here,
           was_polled: p.polled.some(rec => rec.agent === recipient.agent),
@@ -451,6 +467,7 @@ export class DeliveryPart {
       polled: p.polled.map(rec => rec.agent), delivered: deliveries, retained: remaining };
     this.detailEvent('farm_delivery', 'trip', event);
     this.note('farm delivery finished', event);
+    if (courier) this.courierBalanceSave(courier);
     releaseFarmDelivery(p.room, this.name ?? this.s.name);
     this.pendingFarmDelivery = null;
     this.progress('resupplied the farmers');
@@ -558,6 +575,31 @@ export class DeliveryPart {
     const moved = rows.map(r => ({ name: r.name, amount: Math.min(r.amount, Math.max(0, before.get(r.id) - held(r.id))) }))
       .filter(m => m.amount > 0);
     return { moved, ...(moved.length ? {} : { why: 'the trade ended but nothing left the pack' }) };
+  }
+
+  // ------------------------------------------------------------------ the courier balance
+  /** Does this fleet's autobalance orders file name any courier? (Then keepers declare their pack fullness.) */
+  autobalanceCouriers() {
+    try {
+      const book = autobalance.readOrders(autobalance.ordersFile(this.s?.reserveWho?.fleet));
+      return !!(book?.couriers && typeof book.couriers === 'object' && Object.keys(book.couriers).length);
+    } catch { return false; }
+  }
+
+  /** This courier's balance config and learned state, or null when the orders do not name it. */
+  courierBalance() {
+    try {
+      const who = this.s?.reserveWho, me = who?.character ?? this.s?.client?.me?.name;
+      if (!who || !me) return null;
+      const cfg = autobalance.courierFor(autobalance.readOrders(autobalance.ordersFile(who.fleet)), me);
+      if (!cfg) return null;
+      const file = autobalance.courierFile(who.fleet, me);
+      return { cfg, file, state: autobalance.readCourierState(file) };
+    } catch { return null; }
+  }
+
+  courierBalanceSave(b) {
+    try { autobalance.writeCourierState(b.file, b.state); } catch (e) { this.note('courier balance not saved', { why: e.message }); }
   }
   // @end 1
 }

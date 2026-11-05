@@ -1932,7 +1932,7 @@ export const interest = {
   // `service`: this character serves others from a post (a desk, a room caster), so a gift to it
   // is worth a short walk. See m59-sharing.mjs.
   declare(agent, { wants = [], needs = new Map(), spare = new Map(), room = null,
-                   character = null, farming = false, service = false } = {}) {
+                   character = null, farming = false, service = false, pack = null } = {}) {
     const rec = {
       wants: new Set(wants.map(w => String(w).toLowerCase())),
       needs: needs instanceof Map ? needs : new Map(Object.entries(needs)),
@@ -1941,6 +1941,8 @@ export const interest = {
       character: character == null ? null : String(character),
       farming: !!farming,
       service: !!service,
+      // Pack fullness 0..1 when the declarer knows it (reagent autobalance courierGate). Absent, not 0, when unknown.
+      ...(Number.isFinite(pack) ? { pack } : {}),
       at: Date.now(),
     };
     this.byAgent.set(agent, rec);
@@ -1971,6 +1973,7 @@ export const interest = {
         room: r.room == null ? null : Number(r.room),
         character: r.character == null ? null : String(r.character),
         farming: !!r.farming, service: !!r.service, at: Number(r.at),
+        ...(Number.isFinite(r.pack) ? { pack: r.pack } : {}),
       });
     }
     for (const [agent, rec] of this.byAgent) out.set(agent, rec);
@@ -2026,7 +2029,7 @@ export const interest = {
       .filter(([agent, rec]) => agent !== except && (rec.farming || !farmingOnly) && rec.room != null &&
         within.has(rec.room) && now - rec.at <= maxAgeMs)
       .map(([agent, rec]) => ({ agent, character: rec.character, room: rec.room,
-        hops: within.get(rec.room) ?? 0, service: !!rec.service,
+        hops: within.get(rec.room) ?? 0, service: !!rec.service, ...(Number.isFinite(rec.pack) ? { pack: rec.pack } : {}),
         needs: Object.fromEntries([...rec.needs].map(([kind, amount]) =>
           [String(kind).toLowerCase(), Math.max(0, Math.floor(Number(amount) || 0))])), at: rec.at }))
       .filter(rec => Object.values(rec.needs).some(amount => amount > 0))
