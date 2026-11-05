@@ -18,7 +18,8 @@
 // combat prose, whose `kill` is player.kod's "You killed the orc." The C client itself is unchanged.
 //
 // THE SAME ROW AS A KEEPER'S. `recordEvent(<character>, 'killed', { agent, creature, room, room_num, ... })`
-// into the fleet's own ledger, with `human: true` and `source: 'proxy'` added. So every existing reader counts it
+// into the fleet's own ledger -- the one BESIDE THE ROSTER the proxy serves (`--fleet-state`; ledgerDirForRoster),
+// because the proxy runs from whatever checkout its code is in and the broker reads the deploy's ledger -- with `human: true` and `source: 'proxy'` added. So every existing reader counts it
 // with no change, and this file's reader can split by hand / by keeper.
 //
 // NEVER TWICE. (1) Nothing is written while a keeper is attached to the person's connection (a spectate keeper /
@@ -26,14 +27,16 @@
 // character, same creature, within HUMAN_DEDUPE_MS -- is dropped by every reader that goes through
 // `dedupeKills`, which `countKills` in m59-ledger.mjs now does. With no human rows that is the identity.
 //
-// NOT SEEN: a client that connects straight to the server (no proxy), and a kill whose message is not
-// "You killed ..." (a touch spell's own kill line, m59-touchspell.mjs). Killing a PLAYER says the same sentence;
+// NOT SEEN: a client that connects straight to the server (no proxy), and a kill the server announces with no line
+// to the killer at all (SayDyingWords returning TRUE -- nothing in the stock kod does). Stroke and touch-spell kill
+// lines are seen (KILL_LINES, below). The assassin game's "You have slain ..." is a PLAYER kill and is left out.
+// Killing a PLAYER says "You killed" too;
 // a name on the online-players list is not recorded, because the fleet's kill rate is a monster rate.
 
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyCombatLine } from './m59-combatlog.mjs';
+import { classifyCombatLine, stripCodes } from './m59-combatlog.mjs';
 import { parsePlayer, parseStringMessage } from './m59-parse.mjs';
 import { dedupeKills, HUMAN_DEDUPE_MS } from './m59-ledger.mjs';
 export { dedupeKills, HUMAN_DEDUPE_MS };
@@ -41,10 +44,32 @@ export { dedupeKills, HUMAN_DEDUPE_MS };
 export const WINDOW_MS = 30 * 60 * 1000;
 const BP_SYS_MESSAGE = 31, BP_MESSAGE = 32, BP_PLAYER = 130;
 
-/** "You killed the orc." -> "orc"; anything else -> null. */
+// THE OTHER WAYS THE SERVER SAYS "YOU KILLED IT". player.kod KilledSomething (:4795) sends player_killed_something
+// ("You killed %s%s.", :190) unless the STROKE or TOUCH SPELL that landed the blow supplies its own line through
+// PlayerKilledSomethingMsg -- and then "You killed" is never sent at all. A person punching, kicking, thrusting with
+// a fencing weapon or casting a touch spell would otherwise read zero kills. Every one of
+// these is sent with MsgSendUser to `who`, the killer alone (stroke.kod:302, punch.kod:79, touchatk.kod:358), so
+// like "You killed" it can only arrive on the killer's own connection: another player's kill in the same room is
+// never on this stream. Each is anchored on the whole sentence, so a monster's other prose cannot match.
+// The victim is "%s%s" = GetCapDef + GetName, so "The orc", "An ant", or a bare proper name.
+export const KILL_LINES = [
+  [/^(?:The |An? )?(.+?) crumples to the ground, never to rise again\.$/i, 'stroke/unarmed/punch.kod:25'],
+  [/^(?:The |An? )?(.+?) is knocked to the ground by your kick - and doesn't get up\.$/i, 'stroke/unarmed/kick.kod:25'],
+  [/^With a quick thrust, you finish off (?:the |an? )?(.+?)\.$/i, 'stroke/thrust.kod:22'],
+  [/^(?:The |An? )?(.+?) screams and melts into an unobtrusive puddle\.$/i, 'touchatk/acidtch.kod:33'],
+  [/^(?:The |An? )?(.+?), engulfed in flames, lets out a final scream\.$/i, 'touchatk/flametch.kod:34'],
+  [/^(?:The |An? )?(.+?) finally succumbs, finding peace through Shal'ille's purifying energy\.$/i, 'touchatk/holytch.kod:35'],
+  [/^(?:The |An? )?(.+?) finds a cold unsurpassed by any other death\.$/i, 'touchatk/icyfing.kod:33'],
+  [/^(?:The |An? )?(.+?) lets out a final scream in protest to your electric touch\.$/i, 'touchatk/zap.kod:32'],
+];
+
+/** "You killed the orc." (or a stroke's / touch spell's own kill line) -> "orc"; anything else -> null. */
 export function killedCreature(text) {
   const c = classifyCombatLine(text);
-  return c?.kind === 'kill' && c.other ? String(c.other).trim() : null;
+  if (c?.kind === 'kill' && c.other) return String(c.other).trim();
+  const s = stripCodes(String(text ?? '')).trim();
+  for (const [re] of KILL_LINES) { const m = re.exec(s); if (m) return m[1].trim(); }
+  return null;
 }
 
 const lc = s => String(s ?? '').trim().toLowerCase();
@@ -125,11 +150,16 @@ export class HumanKillObserver {
   }
 }
 
-/** Attach to a ProxySession that already carries `communications`. Returns the observer, or null. */
-export async function attachHumanKills(session, { log } = {}) {
+/**
+ * Attach to a ProxySession that already carries `communications`. Returns the observer, or null.
+ * `ledgerDir` is the ledger beside the roster the proxy serves (ledgerDirForRoster), so the row lands where the
+ * broker holding that roster counts kills_30m -- not in whichever checkout the proxy's code happens to live in.
+ */
+export async function attachHumanKills(session, { log, ledgerDir = null } = {}) {
   if (!session?.communications) return null;
-  const { recordEvent } = await import('./m59-ledger.mjs');   // lazily: the observer itself is testable without it
-  const obs = new HumanKillObserver({ comms: session.communications, record: recordEvent,
+  const { recordEventIn } = await import('./m59-ledger.mjs');   // lazily: the observer itself is testable without it
+  const obs = new HumanKillObserver({ comms: session.communications,
+    record: (character, kind, detail) => recordEventIn(ledgerDir, character, kind, detail),
     attached: () => !!session.attached, log });
   const on = p => obs.serverPacket(p);
   session.on('received-server-packet', on);

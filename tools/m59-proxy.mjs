@@ -37,7 +37,7 @@
 import net from 'node:net';
 import { attachProxyCommunications, proxyCommunicationsConfig } from './m59-proxy-communications.mjs';
 import { attachHumanKills } from './m59-human-kills.mjs';
-import { resolveFleet, evidenceDirFor } from './m59-fleetpath.mjs';
+import { resolveFleet, evidenceDirFor, ledgerDirForRoster } from './m59-fleetpath.mjs';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { proxyContext, serveProxyContext } from './m59-proxy-context.mjs';
@@ -1057,6 +1057,10 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
   if(contextPort!==null && (!observe || control))throw Error('native context requires observe-only with no injection control');
   const communications=communicationStateFile?proxyCommunicationsConfig({stateFile:communicationStateFile,host,port}):null;
   const context=contextPort!==null?proxyContext({host,port,listen}):null;
+  // A person's kills go to the ledger BESIDE THE ROSTER this proxy serves, which is the one the broker holding that
+  // roster counts kills_30m from -- not this checkout's (ledgerDirForRoster, m59-fleetpath.mjs).
+  const killLedgerDir=communicationStateFile?ledgerDirForRoster(communicationStateFile):null;
+  if(communications)console.error(`counting a person's kills into ${killLedgerDir??"this checkout's own ledger"}`);
   let current = null;
   const sessions = new Set();
   // 'list' is a peek for /status; a number selects by the player object id the
@@ -1093,7 +1097,7 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
     if(communications)s.communications=attachProxyCommunications(s,communications);
     // A PERSON'S KILLS, INTO THE FLEET LEDGER (m59-human-kills.mjs): passive, rides on the communications decoder for
     // who the character is, and writes nothing while a keeper is attached to this connection.
-    if(s.communications)attachHumanKills(s,{log}).then(o=>{s.humanKills=o;}).catch(e=>log(`human kill counting off: ${e.message}`));
+    if(s.communications)attachHumanKills(s,{log,ledgerDir:killLedgerDir}).then(o=>{s.humanKills=o;}).catch(e=>log(`human kill counting off: ${e.message}`));
     if(context)try{context.attach(s);}catch{s.destroy();return;}
     current = s;
     sessions.add(s);

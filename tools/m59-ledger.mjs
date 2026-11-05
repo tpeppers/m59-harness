@@ -30,8 +30,8 @@ import { deathImpact, emptyDeathCounts, withDeathCosts } from './m59-death-impac
 // so an existing checkout's history stays exactly where it was.
 const DIR = ledgerDirFor(fleetName());
 
-const dayFile = (t = Date.now()) =>
-  join(DIR, 'fleet-' + new Date(t).toISOString().slice(0, 10) + '.jsonl');
+const dayFile = (t = Date.now(), dir = DIR) =>
+  join(dir, 'fleet-' + new Date(t).toISOString().slice(0, 10) + '.jsonl');
 
 // A TEST MUST NEVER WRITE INTO A REAL FLEET'S HISTORY.
 //
@@ -51,7 +51,7 @@ const dayFile = (t = Date.now()) =>
 const IS_TEST = /[\\/]m59-[a-z-]+-test\.mjs$/.test(process.argv[1] || '');
 let warnedTestWrite = false;
 
-function append(obj) {
+function append(obj, dir = DIR) {
   if (IS_TEST && !process.env.M59_LEDGER_DIR) {
     if (!warnedTestWrite) {
       warnedTestWrite = true;
@@ -62,8 +62,8 @@ function append(obj) {
     return;
   }
   try {
-    mkdirSync(DIR, { recursive: true });
-    appendFileSync(dayFile(), JSON.stringify(obj) + '\n');
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(dayFile(Date.now(), dir), JSON.stringify(obj) + '\n');
   } catch (e) {
     // Never let bookkeeping break play.
     console.error('[ledger] ' + e.message);
@@ -132,6 +132,17 @@ export function recordEvent(character, kind, detail = {}) {
   if (_fireEvent) {
     try { _fireEvent(kind, { character, kind, detail }); } catch { /* never the ledger's problem */ }
   }
+}
+
+// THE SAME ROW, INTO A NAMED FLEET'S LEDGER. For a process that serves a roster it was handed by path and so
+// cannot trust its own checkout's `DIR` -- the gate proxy (m59-human-kills.mjs; ledgerDirForRoster in
+// m59-fleetpath.mjs). Identical shape to recordEvent; no hooks fire, because hooks belong to the broker and keepers
+// that loaded them. A falsy `dir` is recordEvent itself.
+export function recordEventIn(dir, character, kind, detail = {}) {
+  if (!dir) return recordEvent(character, kind, detail);
+  if (!character) return;
+  append({ t: Date.now(), iso: new Date().toISOString(), ...detail,
+           type: 'event', character, kind }, dir);
 }
 
 // Wired by whoever loads hooks (the broker/keeper at startup), so a tool that only reads the

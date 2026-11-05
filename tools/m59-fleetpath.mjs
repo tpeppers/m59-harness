@@ -17,7 +17,7 @@
 // is what the tests use.
 
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -123,6 +123,26 @@ export function ledgerDirFor(name, env = process.env) {
   if (env.M59_LEDGER_DIR) return env.M59_LEDGER_DIR;
   return name ? join(REPO, 'substrate', 'history', name)
               : join(REPO, 'substrate', 'history');
+}
+
+// THE LEDGER THAT BELONGS TO A ROSTER FILE, for a process that was handed the roster by path rather than
+// living in the checkout that holds it. The ledger is keyed by character name exactly as the roster is, so it
+// sits beside it: `<substrate>/fleets/<name>.json` -> `<substrate>/history/<name>`, and the unnamed
+// `<substrate>/fleet-state.json` -> `<substrate>/history`. Anything else -> null (the caller keeps its own).
+//
+// Why it exists, 2026-11-05: the gate proxy the operator plays through runs from the trunk checkout with
+// `--fleet-state <prod-deploy>/substrate/fleets/prod.json`, and `ledgerDirFor('prod')` resolves against the
+// CODE's checkout -- so a person's kills would go to trunk/substrate/history/prod while the broker counting
+// kills_30m reads prod-deploy/substrate/history/prod. Correct rows, in a file nobody reads.
+export function ledgerDirForRoster(stateFile, env = process.env) {
+  if (env.M59_LEDGER_DIR) return env.M59_LEDGER_DIR;
+  if (!stateFile) return null;
+  const p = resolve(String(stateFile));
+  const named = /^(.*)[\\/]fleets[\\/]([A-Za-z0-9_-]+)\.json$/.exec(p);
+  if (named) return join(named[1], 'history', named[2]);
+  const unnamed = /^(.*)[\\/]fleet-state\.json$/.exec(p);
+  if (unnamed) return join(unnamed[1], 'history');
+  return null;
 }
 
 // WHERE THE EVIDENCE IS WRITTEN, WHICH IS NOT NECESSARILY WHERE THE CODE IS.

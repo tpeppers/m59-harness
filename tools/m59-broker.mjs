@@ -19100,7 +19100,12 @@ const TOOLS = [
           // on its own; watch the log" over rows it could never reach. session() no
           // longer mints those, but a broker started before that fix still holds them,
           // and a row should say which kind it is rather than leaving it to be inferred.
+          // KILLS_30M HERE TOO. A character a PERSON is playing has its keeper stopped, so it lands on this row,
+          // and the kills it makes by hand are in the ledger (m59-human-kills.mjs, written by the gate proxy).
+          // Without the field the board read a person's half hour of fighting as nothing at all.
+          const offName = c?.me?.name ?? fleetState.get(name)?.credentials?.character ?? null;
           rows.push({ agent: name, character: c?.me?.name ?? null, in_game: false,
+                      kills_30m: offName ? (recentKills.get(offName) ?? 0) : 0,
                       in_roster: fleetState.has(name),
                       stalled: fleetState.has(name) ? 'not in game'
                         : 'not in game, and not in the roster either — nothing will rejoin this' });

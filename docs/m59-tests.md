@@ -333,13 +333,18 @@ through a nested shelter order.
   and before the ranking, the walk after the hunt-area return and before the wall vigil. **It should fail the day the
   loop's pocket leg goes missing from the bake again.**
 
-- `m59-human-kills-test.mjs` (10): a person's kills, counted from the gate proxy. Only "You killed ..." is a kill; the
+- `m59-human-kills-test.mjs` (15): a person's kills, counted from the gate proxy. "You killed ..." is a kill, and so
+  is each stroke / touch-spell line that REPLACES it (punch, kick, thrust, the five touch spells; kod text verbatim);
+  a bystander's "has slain", the victim's lines and the assassin dagger's player kill are not. The
   row is the keeper's `killed` shape plus `human: true, source: 'proxy'`; nothing is written while a keeper is attached
   to the connection, for a player's name, or before the character is known. `dedupeKills` keeps the keeper's row when
   both saw one kill (same character and creature within 5 s), keeps a different creature, another character or a later
   kill, and returns the list itself when there are no human rows -- so `countKills` and roomyield read a fleet nobody
   plays by hand exactly as before. `killRates` splits by hand / keeper over the window, per 30 minutes of window and
-  per room; the MANAGE-tab status line; the proxy, desk and roomyield wiring.
+  per room; the MANAGE-tab status line; the proxy, desk and roomyield wiring. End to end: a kill packet on a fake
+  session lands in the ledger BESIDE THE ROSTER the proxy serves (`ledgerDirForRoster`, not the code's checkout -- the
+  2026-11-05 trunk-proxy / prod-deploy-broker split), keeper-shaped, and `countKills` (behind the broker's
+  `kills_30m`) counts it; the broker's not-in-game row, where a piloted character sits, carries `kills_30m`.
 
 - `m59-gang-up-test.mjs` (33): `gangUp`, a creature fought only two-on-one or more. Through the keeper's own
   chooser (findCreature, `gangUpFilter`, the ranking, `hunt_priority`) over a fake room: a lone keeper beside a
