@@ -338,7 +338,7 @@ through a nested shelter order.
   A pass naming another room lets nothing out, and a cancel, the next journey, a different start room or
   two minutes ends it. See docs/m59-boundary.md.
 
-- `m59-needle-farm-test.mjs` (44): `needle`, the single striker in the needle with archers behind it. The field
+- `m59-needle-farm-test.mjs` (49): `needle`, the single striker in the needle with archers behind it. The field
   takes `{ site, role }` only and the site file refuses bare pairs, unknown keys (a `fleeBelow` included), a `hold`
   bench with no squares, a duplicated station or one on the striker's square; notes (`_x`, `why`) pass. Target choice:
   the closest valid monster in reach, a closer one takes the next swing, a tie keeps the current one, sight breaks a
@@ -368,7 +368,11 @@ through a nested shelter order.
   2000 random ticks never leave the needle without a striker. DISCO DUTY: a held seat survives a stale row and is never
   given away, an away archer is not the puller, `disco_missing` when no caster is present; on the keeper a disco archer in
   a storm stops shooting and publishes its hold, and shoots again from the same seat after. Shared rows go to a temp
-  `M59_NEEDLE_STATE_DIR`.
+  `M59_NEEDLE_STATE_DIR`. THE MENDER: usable stock is above the PvP floor and the need is the gap to 30/30; the mend
+  exemption moves to the new mender and off the old one, never off one it did not add; the courier's lap is the hall for
+  the mender's reagents and spare arrows above the hall floor, Hanla for the rest, nothing when the hall cannot spare it;
+  one mender (front-most `mend_ready`); on the keepers a worn bow is dropped on its station, the mender casts Mend on it
+  from hers, and the archer picks it back up.
 
 - `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy

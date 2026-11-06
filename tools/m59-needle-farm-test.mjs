@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { readToolSource } from './autopilot/source.mjs';
 import { Autopilot, HANDLED } from './m59-autopilot.mjs';
 import { STRATEGY_FIELDS, validateStrategy } from './m59-strategy-schema.mjs';
-import { allocate, archerSlots, chainVacancies, checkSite, chooseNextCourier, chooseTarget, preDispatchDue, rotateChain, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
+import { allocate, archerSlots, chainVacancies, checkSite, chooseCourierLap, chooseNextCourier, chooseTarget, mendExemptPlan, mendStock, preDispatchDue, rotateChain, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
   normNeedle, normSite, parseSquare, pullDue, readPresence, roleReach, shillingsIn, slotOf, weaponReach, writePresence } from './m59-needle-farm.mjs';
 import { OF } from './m59-parse.mjs';
 
@@ -614,6 +614,86 @@ await ok('the needle says it out loud when no Discordance caster is there', asyn
   assert.ok(notes.some(x => /NO DISCORDANCE CASTER/.test(x.what)));
 });
 
+// ------------------------------------------------------------------------------------ mending the needle's bows
+// Operator 2026-11-05: the disco caster also mends the needle's bows, carrying 30 orc teeth + 30 sapphires on top of its
+// PvP floor; the courier keeps it supplied from hall 713, and buys arrows at Hanla when the hall cannot spare them.
+await ok('mend stock: usable is above the PvP floor (always named), need is the gap to 30/30, ready at one cast', () => {
+  const m = mendStock({ have: { sapphires: 50, 'orc teeth': 32 }, floor: { sapphire: 20, 'orc tooth': 2 } });
+  assert.deepEqual(m.usable, { 'orc tooth': 30, sapphire: 30 }); assert.deepEqual(m.need, { 'orc tooth': 0, sapphire: 0 });
+  assert.deepEqual(m.floor, { 'orc tooth': 2, sapphire: 20 }); assert.equal(m.ready, true);
+  const low = mendStock({ have: { sapphire: 20, 'orc tooth': 5 }, floor: { sapphire: 20, 'orc tooth': 2 } });
+  assert.deepEqual(low.need, { 'orc tooth': 27, sapphire: 30 }); assert.equal(low.ready, false, 'every sapphire is the PvP floor');
+  const site = normSite({ ...SITE_RAW, mend: { stock: { 'orc tooth': 10, sapphire: 10 }, at: 'poor' } });
+  assert.equal(site.mend.at, 'poor'); assert.equal(site.mend.agents, null, 'null = the disco-duty archers that know Mend');
+  assert.throws(() => normSite({ ...SITE_RAW, mend: { at: 'broken' } }));
+});
+await ok('the mend exemption follows the role: given to the new mender, taken from the old, never from one it did not add', () => {
+  const book = { default: { items: { sapphire: 100000 }, exempt: ['discordance'] }, agents: { t9: { exempt: ['mend'] }, t4: { exempt: ['mend'], spells: { bless: 2 } } } };
+  const a = mendExemptPlan(book, ['t9'], []);
+  assert.equal(a.changed, false, 't9 already has it (the operator set it): nothing to do, and it is not ours to take');
+  const b = mendExemptPlan(book, ['t22'], ['t9']);
+  assert.deepEqual(b.book.agents.t22.exempt, ['mend']); assert.equal(b.book.agents.t9, undefined, 'the old mender loses it');
+  assert.deepEqual(b.owned, ['t22']); assert.ok(b.book.agents.t4.exempt.includes('mend'), 't4 was never ours');
+  assert.equal(b.log.length, 2);
+  const c2 = mendExemptPlan({ agents: { t9: { exempt: ['mend', 'bless'] } } }, [], ['t9']);
+  assert.deepEqual(c2.book.agents.t9.exempt, ['bless'], 'only "mend" is removed');
+});
+await ok('courier lap: the hall for the mender\'s reagents and spare arrows, Hanla for the arrows the hall cannot spare', () => {
+  const hall = { arrows: 3345, 'nerudite arrows': 5000, 'orc tooth': 200, sapphire: 80 };
+  const floor = { arrows: 1500, 'nerudite arrows': 2500 };
+  const a = chooseCourierLap({ hall, floor, arrowsWant: 400, menderNeed: { 'orc tooth': 22, sapphire: 30 } });
+  assert.equal(a.kind, 'hall'); assert.deepEqual(a.take, { 'orc tooth': 22, sapphire: 30, arrow: 400 }); assert.equal(a.then, null);
+  const b = chooseCourierLap({ hall: { ...hall, arrows: 1550, 'nerudite arrows': 2500 }, floor, arrowsWant: 400, menderNeed: {} });
+  assert.equal(b.kind, 'hanla', 'the hall spares 50 plain < 100: buy them'); assert.deepEqual(b.take, { arrow: 400 });
+  const c3 = chooseCourierLap({ hall: { ...hall, arrows: 1500 }, floor, arrowsWant: 4000, menderNeed: { sapphire: 5 } });
+  assert.equal(c3.kind, 'hall'); assert.equal(c3.take['nerudite arrow'], 2500); assert.equal(c3.then, 'hanla', 'the rest from Hanla');
+  assert.match(c3.why, /from Hanla/);
+  assert.equal(chooseCourierLap({ hall, floor }).kind, 'none');
+  assert.equal(chooseCourierLap({ hall: { sapphire: 0 }, menderNeed: { sapphire: 5 } }).kind, 'none', 'the hall cannot spare it: said, not looped');
+});
+await ok('the allocation names one mender: an archer that says it can mend, front-most first', () => {
+  const rows = [row('t9', 'archer', { slot: 'archer:3', mend_ready: true }), row('t22', 'archer', { slot: 'archer:1', mend_ready: true }),
+    row('t3', 'archer', { slot: 'archer:0' }), row('t1', 'striker')];
+  assert.equal(allocate(SITE, rows, { now: NOW }).mender, 't22');
+  assert.equal(allocate(SITE, rows.map(r => ({ ...r, mend_ready: false })), { now: NOW }).mender, null);
+  assert.deepEqual(allocate(SITE, [row('t9', 'archer', { disco: true })], { now: NOW }).disco, ['t9'], 'a keeper that knows Discordance says so');
+});
+await ok('on the keepers: a worn bow is dropped on the station, the mender casts Mend on it, the archer picks it back up', async () => {
+  reset();
+  const raw = { ...SITE_RAW, mend: { at: 'med', waitS: 60 } };
+  const mk = (agent, self, spells, inv) => {
+    const k = keeperAt(agent, 'archer', { self, inventory: inv });
+    k.policy.needle = { site: raw, role: 'archer' };
+    const c = k.s.client;
+    c.spells = spells.map((n, i) => ({ id: 900 + i, nameRsc: 50 + i, name: n }));
+    const base = c.rsc.get; c.rsc = { get: id => ({ 50: spells[0], 51: spells[1] })[id] ?? base(id) };
+    c.evSeq = 0; c.look = () => {}; c.unuse = () => {}; c.drop = ids => { for (const id of ids) objectsAt.set(id, { id, flags: 0 }); };
+    c.get = id => objectsAt.delete(id);
+    c.waitFor = async () => ({ events: [{ id: 101, description: 'The bow shows signs of wear; it is still an effective weapon.' }] });
+    c.room.objects = objectsAt;
+    k.s.pacer = { submit: async (_k, fn) => fn() };
+    k.reagentOnHand = n => ({ sapphire: 50, 'orc tooth': 32 })[n] ?? 0;
+    return k;
+  };
+  const objectsAt = new Map();
+  const archer = mk('t3', W(34, 42), [], null);
+  const mender = mk('t9', W(34, 41), ['discordance', 'mend'], null);
+  let casts = [];
+  mender.chaliceCast = async (name, id) => { casts.push({ name, id }); return { cast: true }; };
+  mender.needleBow = async () => null;                         // its own bow is fine
+  const pass = k => k.needlePass(ctxOf(k), [], k.needleHere(2143));
+  await pass(mender);                                           // publishes mend_ready (knows Mend, 30/30 above a 0 floor)
+  await pass(archer);                                           // drops its worn bow, asks t9
+  assert.ok(objectsAt.has(101), 'the bow is on the floor of its own station');
+  assert.equal(archer.needleStatus().mend_request.mender, 't9');
+  assert.equal(fightCalls.length, 0);
+  await pass(mender);
+  assert.deepEqual(casts, [{ name: 'mend', id: 101 }]);
+  await pass(archer);                                           // sees `mended`, picks it up
+  assert.ok(!objectsAt.has(101)); assert.equal(archer.needleStatus().mend_request, null);
+  assert.ok(notes.some(x => x.what === 'needle mend: bow picked back up'));
+});
+
 // ------------------------------------------------------------------------------ survival is the keeper's, by shape
 await ok('survival stays above: needle code lives in passFarm, below the ladder, and never names a protected faculty', () => {
   const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
@@ -639,7 +719,8 @@ await ok('the shipped 2143 example site loads and is proved on the shipped map',
   assert.deepEqual(site.roster.archers, ['t3', 't2', 't10', 't14', 't15', 't7', 't9']);
   assert.deepEqual(site.archers.stations[6], W(32, 43));
   assert.deepEqual(site.roster.strikers, ['t11', 't1'], 'Sweetums strikes, Kermit is next');
-  assert.deepEqual(site.disco.agents, ['t9'], 'Camilla is on disco duty');
+  assert.deepEqual(site.disco.agents, [], 'disco duty follows the rotation: any needle archer that knows Discordance');
+  assert.deepEqual(site.mend.stock, { 'orc tooth': 30, sapphire: 30 }); assert.equal(site.mend.agents, null);
   let map;
   try { map = (await import('./m59-map.mjs')).loadMap(); } catch { console.log('   (no map on disk: geometry half skipped)'); return; }
   (await import('./m59-routes.mjs')).attachStepMasks(map);

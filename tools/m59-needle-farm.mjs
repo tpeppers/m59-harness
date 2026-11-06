@@ -72,6 +72,14 @@ const ECON_DEFAULTS = Object.freeze({ arrowPrice: null, tickMin: 5 });
 // them stops shooting and stands by for the lift (the island coordinator casts it), from its station or from `castSquare`,
 // and its seat is HELD for `holdS` seconds even while its keeper is frozen in the trance and publishes nothing.
 const DISCO_DEFAULTS = Object.freeze({ agents: [], holdS: 120, castSquare: null });
+// MEND FOR THE NEEDLE'S BOWS (operator 2026-11-05: "let's have the discord caster for the archery needle group also provide
+// mending services for bows, so they'll need to carry extra orc teeth and sapphires, give them 30 of each"). Mend
+// (Kraanan 4: 9 mana, 1 sapphire + 1 orc tooth, mend.kod:55-56) reaches an item in the caster's pack OR ON THE FLOOR OF ITS
+// ROOM (mend.kod IsTargetInRange: the target's owner is the caster's owner), so an archer drops its worn bow on its own
+// threat-0 station and the mender casts from hers -- nobody walks. `agents` null = the disco-duty archers that know Mend;
+// `at` = mend when the bow reads this band or worse (m59-practicebow.mjs bowBand; mend late, mend.kod:112-134); `stock` =
+// what the mender keeps USABLE on top of its PvP reserve floor (always named, never spent here).
+const MEND_DEFAULTS = Object.freeze({ agents: null, at: 'med', stock: { 'orc tooth': 30, sapphire: 30 }, checkS: 120, waitS: 60 });
 
 const LIMITS = {
   killRadius: [1, 8], staleS: [5, 300], rounds: [1, 6],
@@ -79,7 +87,7 @@ const LIMITS = {
   'archers.capacity': [0, 12], 'archers.reach': [2, 100], 'archers.minHealth': [0, 1], 'archers.minArrows': [0, 1000],
   'pull.idleS': [5, 600], 'pull.everyS': [5, 3600], 'pull.maxPer10m': [0, 120], 'pull.excursionS': [5, 120],
   'pull.minHealth': [0, 1], 'pull.legSteps': [2, 60],
-  'econ.tickMin': [1, 60], 'disco.holdS': [10, 900],
+  'econ.tickMin': [1, 60], 'disco.holdS': [10, 900], 'mend.checkS': [20, 3600], 'mend.waitS': [10, 600],
 };
 
 const isNote = k => k.startsWith('_') || k === 'why' || k === 'describe' || k === 'derived';
@@ -129,7 +137,7 @@ export function siteName(v) {
  */
 export function normSite(v) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('a needle site must be an object');
-  known(v, ['name', 'room', 'kill', 'killRadius', 'striker', 'archers', 'pull', 'roster', 'reserve', 'staleS', 'rounds', 'econ', 'disco'], 'site');
+  known(v, ['name', 'room', 'kill', 'killRadius', 'striker', 'archers', 'pull', 'roster', 'reserve', 'staleS', 'rounds', 'econ', 'disco', 'mend'], 'site');
   const name = siteName(v.name);
   const room = Number(v.room);
   if (!Number.isInteger(room) || room <= 1) throw new Error('needle room must be a room number above 1');
@@ -183,6 +191,15 @@ export function normSite(v) {
   known(v.disco, Object.keys(DISCO_DEFAULTS), 'disco');
   out.disco = { agents: agentList(v.disco?.agents, 'disco.agents'), holdS: num(v.disco ?? {}, 'holdS', DISCO_DEFAULTS.holdS, 'disco.holdS'),
     castSquare: square(v.disco?.castSquare, 'needle disco.castSquare') };
+
+  known(v.mend, Object.keys(MEND_DEFAULTS), 'mend');
+  const M = v.mend ?? {};
+  if (M.at != null && !['top', 'good', 'med', 'poor'].includes(M.at)) throw new Error('needle mend.at must be one of top, good, med, poor');
+  if (M.stock != null && (typeof M.stock !== 'object' || Array.isArray(M.stock))) throw new Error('needle mend.stock must be { "<reagent>": <units> }');
+  out.mend = { agents: M.agents == null ? null : agentList(M.agents, 'mend.agents'), at: M.at ?? MEND_DEFAULTS.at,
+    stock: Object.fromEntries(Object.entries(M.stock ?? MEND_DEFAULTS.stock).map(([k, n]) => {
+      const v2 = Number(n); if (!Number.isFinite(v2) || v2 < 0 || v2 > 1000) throw new Error(`needle mend.stock.${k} must be 0..1000`); return [String(k).toLowerCase(), v2]; })),
+    checkS: num(M, 'checkS', MEND_DEFAULTS.checkS, 'mend.checkS'), waitS: num(M, 'waitS', MEND_DEFAULTS.waitS, 'mend.waitS') };
 
   known(v.econ, Object.keys(ECON_DEFAULTS), 'econ');
   const price = v.econ?.arrowPrice;
@@ -345,10 +362,13 @@ export function allocate(site, rows = [], { now = Date.now() } = {}) {
   // DISCO: is a Discordance caster of this needle here? Configured by name (site.disco.agents); none configured or none
   // present is `disco_missing`, which the keepers and the coordinator say out loud -- a storm nobody here can lift is the
   // needle's worst failure (the operator: "the sandstorms can be a serious problem for this strategy").
-  const discoHere = fresh.filter(r => site.disco.agents.includes(r.agent)).map(r => r.agent).sort();
+  const discoHere = fresh.filter(r => r.disco === true || site.disco.agents.includes(r.agent)).map(r => r.agent).sort();
+  // THE MENDER: an archer that says it can mend now (`mend_ready`: knows Mend, a sapphire and an orc tooth above its floor),
+  // the front-most station first, so two menders never cast on one bow.
+  const mender = archers.find(a => fresh.some(r => r.agent === a.agent && r.mend_ready === true))?.agent ?? null;
   return {
     mode, striker, archers, puller, reserve: [...reserve, ...overflow], overflow, unfit, stale,
-    away: [...away].sort(), disco: discoHere,
+    away: [...away].sort(), disco: discoHere, mender,
     disco_missing: discoHere.length === 0 && mode !== 'empty',
     money_losing: moneyLosing,
     why: mode === 'archers_only' ? 'no fit striker: archers alone spend arrows faster than the loot pays (operator 2026-11-05); they also pull'
@@ -526,6 +546,87 @@ export function preDispatchDue(archers = [], { preDispatchAt = COURIER_RULE_DEFA
   const near = archers.filter(a => Number.isFinite(a?.skill) && a.skill >= preDispatchAt).sort((a, b) => b.skill - a.skill);
   return near.length ? { due: true, archer: near[0].agent, why: `${near[0].agent} is at ${near[0].skill} (pre-dispatch at ${preDispatchAt})` }
     : { due: false, why: `no needle archer at ${preDispatchAt}` };
+}
+
+// ------------------------------------------------------------------------------------------- the mender's stock and lap
+const RK = s => String(s ?? '').trim().toLowerCase().replace(/^vials? of /, '').replace(/\bteeth$/, 'tooth').replace(/(?<=[a-z])s$/, '');
+
+/**
+ * WHAT THE MENDER HAS, AND NEEDS. `have` and `floor` are units by reagent (the floor is the PvP reserve's, always named);
+ * `stock` the target above it. -> { usable, need, floor, ready } -- `ready` while one cast (1 sapphire + 1 orc tooth) is
+ * usable.
+ */
+export function mendStock({ have = {}, floor = {}, stock = MEND_DEFAULTS.stock } = {}) {
+  const h = Object.fromEntries(Object.entries(have).map(([k, v]) => [RK(k), Number(v) || 0]));
+  const f = Object.fromEntries(Object.entries(floor).map(([k, v]) => [RK(k), Number(v) || 0]));
+  const usable = {}, need = {}, fl = {};
+  for (const [k0, want] of Object.entries(stock)) {
+    const k = RK(k0);
+    fl[k] = f[k] ?? 0; usable[k] = Math.max(0, (h[k] ?? 0) - fl[k]); need[k] = Math.max(0, want - usable[k]);
+  }
+  return { usable, need, floor: fl, ready: (usable.sapphire ?? 0) >= 1 && (usable['orc tooth'] ?? 0) >= 1 };
+}
+
+/**
+ * THE MEND EXEMPTION FOLLOWS THE ROLE. The PvP reserve book (m59-reagent-reserve.mjs) holds every sapphire for PvP and
+ * Discordance; `agents.<a>.exempt: ['mend']` lets one character spend it on Mend. The coordinator gives that to whoever
+ * holds the mender role now and takes it from whoever it gave it to before (`owned`), never touching an exemption it did
+ * not add. Pure. -> { book, owned, changed, log }
+ */
+export function mendExemptPlan(book, holders = [], owned = []) {
+  const b = JSON.parse(JSON.stringify(book ?? {}));
+  b.agents ??= {};
+  const log = [], keep = new Set(holders), nowOwned = new Set(owned.filter(a => keep.has(a)));
+  const has = a => [].concat(b.agents[a]?.exempt ?? []).map(x => String(x).toLowerCase()).includes('mend');
+  for (const a of owned) if (!keep.has(a) && b.agents[a]) {
+    const ex = [].concat(b.agents[a].exempt ?? []).filter(x => String(x).toLowerCase() !== 'mend');
+    if (ex.length) b.agents[a].exempt = ex; else delete b.agents[a].exempt;
+    if (!Object.keys(b.agents[a]).length) delete b.agents[a];
+    log.push(`mend exemption taken from ${a} (no longer the needle's mender)`);
+  }
+  for (const a of holders) {
+    if (has(a)) continue;
+    b.agents[a] = { ...(b.agents[a] ?? {}), exempt: [...[].concat(b.agents[a]?.exempt ?? []), 'mend'] };
+    nowOwned.add(a);
+    log.push(`mend exemption given to ${a} (the needle's mender: sapphires above its PvP floor may go to Mend)`);
+  }
+  return { book: b, owned: [...nowOwned].sort(), changed: log.length > 0, log };
+}
+
+/**
+ * HALL LAP OR HANLA LAP (operator 2026-11-05: "have the hanlan arrow courier be the guild hall version *optionally,
+ * as-needed* so it can bring those orc teeth and sapphires with it to keep the mending desk supplied as well as the arrows
+ * (there's arrows for from the hall when doing that, otherwise just buy arrows and deliver)").
+ *   `hall`       what hall 713's chests hold, as last read: { arrows, 'nerudite arrows', 'orc tooth', sapphire }
+ *   `floor`      what the hall keeps: { arrows, 'nerudite arrows', 'orc tooth', sapphire } (an open question for plain arrows)
+ *   `arrowsWant` arrows the needle's caches are short; `menderNeed` mendStock().need
+ * -> { kind: 'hall' | 'hanla' | 'none', take: { item: units }, then: 'hanla' | null, why }
+ * The mender's reagents only come from the hall, so a need there is always a hall lap; arrows come from the hall when it
+ * can spare at least `minTake` above its floor, else from Hanla.
+ */
+export function chooseCourierLap({ hall = {}, floor = {}, arrowsWant = 0, menderNeed = {}, minTake = 100 } = {}) {
+  const H = Object.fromEntries(Object.entries(hall).map(([k, v]) => [RK(k), Number(v) || 0]));
+  const F = Object.fromEntries(Object.entries(floor).map(([k, v]) => [RK(k), Number(v) || 0]));
+  const spare = k => Math.max(0, (H[RK(k)] ?? 0) - (F[RK(k)] ?? 0));
+  const take = {}, why = [];
+  for (const [k, n] of Object.entries(menderNeed)) {
+    if (!(n > 0)) continue;
+    const t = Math.min(n, spare(k));
+    if (t > 0) take[RK(k)] = t;
+    why.push(`mender short ${n} ${k}${t < n ? ` (hall spares ${spare(k)})` : ''}`);
+  }
+  let left = Math.max(0, Number(arrowsWant) || 0), then = null;
+  if (left > 0) {
+    for (const k of ['arrow', 'nerudite arrow']) {
+      const t = Math.min(left, spare(k));
+      if (left > 0 && t > 0 && t >= Math.min(minTake, left)) { take[k] = t; left -= t; }
+    }
+    why.push(`caches short ${arrowsWant} arrows; hall spares ${spare('arrow')} plain + ${spare('nerudite arrow')} nerudite above its floor`);
+    if (left > 0) then = 'hanla';
+  }
+  if (Object.keys(take).length) return { kind: 'hall', take, then, why: why.join('; ') + (then ? `; the other ${left} arrows from Hanla` : '') };
+  if (left > 0) return { kind: 'hanla', take: { arrow: left }, then: null, why: why.join('; ') + '; nothing to take from the hall' };
+  return { kind: 'none', take: {}, then: null, why: why.length ? why.join('; ') + '; the hall cannot spare any of it' : 'nothing needed' };
 }
 
 // --------------------------------------------------------------------------------------------------------- the pull

@@ -4,7 +4,8 @@
 // `installParts` (tools/autopilot/parts.mjs). Do not import this file directly: import tools/m59-autopilot.mjs, which
 // loads it. `autopilotSource()` (tools/autopilot/source.mjs) splices the `@part` block below into the keeper's text.
 //
-// 13 methods: needleState, needleSite, needleHere, needleSwing, needleStorm, needleWielded, needleArrows, needlePass, needleWalk, needleFight,
+// 18 methods: needleState, needleSite, needleHere, needleSwing, needleStorm, needleKnows, needleMendState, needleBow,
+//   needleMendArcher, needleMendServe, needleWielded, needleArrows, needlePass, needleWalk, needleFight,
 //   needlePull, needleTick, needleStatus
 //
 // Operator, 2026-11-05 (the design, verbatim in tools/m59-needle-farm.mjs): one striker holds the square at the tip of a
@@ -26,7 +27,9 @@
 // keeper's own flee line as `disengageAt`, and a striker that breaks off retreats through `retreatToSafety`, the same
 // call passFarm makes.
 import { bodyAuthority } from '../m59-body-command.mjs';
-import { allocate, chooseTarget, loadSite, needleBusy, normNeedle, pullDue, readPresence, roleReach, slotOf, sq, writePresence } from '../m59-needle-farm.mjs';
+import { allocate, chooseTarget, loadSite, mendStock, needleBusy, normNeedle, pullDue, readPresence, roleReach, slotOf, sq, writePresence } from '../m59-needle-farm.mjs';
+import { bandAtOrBelow, bowBand } from '../m59-practicebow.mjs';
+import { floorsFor, readReserve, reserveBreach, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
 import { OF } from '../m59-parse.mjs';
 import { lineOfSight } from '../m59-safespots.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -89,6 +92,116 @@ export class NeedlePart {
   needleStorm() {
     const e = this.s?.client?.enchantmentStatus?.()?.entries ?? [];
     return e.some(x => Number(x?.type) === 2 && /sand\s*storm/i.test(String(x?.name ?? '')));
+  }
+
+  /** Does this character know the spell (its own spell list)? */
+  needleKnows(name) {
+    const c = this.s?.client, n = String(name).toLowerCase();
+    return (c?.spells ?? []).some(sp => String(c?.rsc?.get?.(sp.nameRsc) ?? sp?.name ?? '').toLowerCase() === n);
+  }
+
+  /**
+   * THE MENDER'S STOCK: Mend known, the sapphires and orc teeth on hand, the PvP floor under them (the reserve book's
+   * casts-to-keep turned into reagents; an "everything" sentinel like `sapphire: 100000` is the PvP-and-Discordance lock,
+   * not a floor -- the exemption is what lets Mend past it), and whether the reserve would veto a Mend right now.
+   */
+  needleMendState(site) {
+    const c = this.s?.client;
+    const known = (c?.spells ?? []).map(sp => String(c?.rsc?.get?.(sp.nameRsc) ?? sp?.name ?? '').toLowerCase()).filter(Boolean);
+    const pack = (c?.inventory ?? []).map(o => ({ name: c?.rsc?.get?.(o.nameRsc) || o.name || '', amount: Number(o.amount) || 1 }));
+    const have = { sapphire: this.reagentOnHand?.('sapphire') ?? 0, 'orc tooth': this.reagentOnHand?.('orc tooth') ?? 0 };
+    let reserve = null, floor = {};
+    try {
+      const who = this.s?.reserveWho ?? {};
+      reserve = resolveReserve(readReserve(reserveFile(who.fleet ?? process.env.M59_FLEET)), { agent: who.agent ?? this.s?.name, character: who.character ?? this.who?.() });
+      if (reserve) floor = Object.fromEntries(floorsFor({ spells: reserve.spells ?? {}, items: Object.fromEntries(Object.entries(reserve.items ?? {}).filter(([, n]) => n < 10_000)), exempt: [] }, known));
+    } catch { reserve = null; floor = {}; }
+    const st = mendStock({ have, floor, stock: site.mend.stock });
+    const vetoed = reserveBreach({ spell: 'mend', known, pack, reserve });
+    const knows = known.includes('mend');
+    return { ...st, knows, vetoed: vetoed ? `${vetoed.reagent} ${vetoed.have} <= reserve floor ${vetoed.floor} (mend not exempt for this agent)` : null,
+      ready: knows && st.ready && !vetoed };
+  }
+
+  /** The bow in hand and its condition band, read by look at most every mend.checkS (cached). */
+  async needleBow(site) {
+    const s = this.s, c = s?.client, st = this.needleState(), using = skills.equippedNow(c);
+    const o = (c?.inventory ?? []).find(x => using?.has(x.id) && BOW.test(c.rsc?.get?.(x.nameRsc) || x.name || '') && !/crossbow/i.test(c.rsc?.get?.(x.nameRsc) || x.name || ''));
+    if (!o) return null;
+    if (st.bow?.id === o.id && Date.now() - st.bow.at < site.mend.checkS * 1000) return st.bow;
+    let band = null;
+    try {
+      const since = c.evSeq;
+      await s.pacer.submit('look', () => c.look(o.id));
+      const { events } = await c.waitFor({ since, kinds: ['look'], timeoutMs: 3000 });
+      band = bowBand(events.find(e => e.id === o.id)?.description ?? null);
+    } catch { band = null; }
+    st.bow = { id: o.id, name: c.rsc?.get?.(o.nameRsc) || o.name || 'bow', band, at: Date.now() };
+    return st.bow;
+  }
+
+  /**
+   * AN ARCHER'S MEND: with a request out, wait for it (nothing to shoot with) and pick the bow back up when the mender says
+   * it is done, or after mend.waitS; with none out and the bow at mend.at or worse, drop it on this station and ask.
+   * Returns HANDLED when the pass was spent on it, else null.
+   */
+  async needleMendArcher(ctx, { site, alloc, rows, valid, reach }) {
+    const { s, c } = ctx, st = this.needleState(), now = Date.now(), me = this.s.name;
+    if (st.mendReq) {
+      const r = st.mendReq, m = rows.find(x => x.agent === r.mender);
+      const done = (m?.mended ?? []).some(x => x.id === r.id && Number(x.at) >= r.at);
+      if (!done && now - r.at < site.mend.waitS * 1000) { this.doing = 'waiting for a mend'; this.emptyPasses = 0; return HANDLED; }
+      const onFloor = c.room?.objects?.has?.(r.id);
+      if (onFloor) await s.pacer.submit('trade', () => c.get(r.id)).catch(() => {});
+      this.note(onFloor ? 'needle mend: bow picked back up' : 'NEEDLE MEND: MY BOW IS NOT ON THE FLOOR ANY MORE', { bow: r.name, id: r.id, mender: r.mender,
+        mended: done, waited_s: Math.round((now - r.at) / 1000) });
+      this.ledgerEvent('needle_mend', { site: site.name, bow: r.name, mender: r.mender, mended: done, picked_up: !!onFloor });
+      st.mendReq = null; st.bow = null;
+      return HANDLED;
+    }
+    if (!alloc.mender || alloc.mender === me) return null;
+    const near = chooseTarget(valid, c.self, { reach }).target;
+    if (near) return null;                                        // never put the bow down with something in reach
+    const bow = await this.needleBow(site);
+    if (!bow?.band || !bandAtOrBelow(bow.band, site.mend.at) || bow.band === 'broken') return null;
+    await s.pacer.submit('use', () => c.unuse(bow.id)).catch(() => {});
+    await s.pacer.submit('act', () => c.drop([bow.id])).catch(() => {});
+    st.mendReq = { id: bow.id, name: bow.name, band: bow.band, mender: alloc.mender, at: now };
+    // Said at once, not at the next pass: the mender reads the request from this row.
+    try { const mine = readPresence(site.name).find(x => x.agent === me) ?? {};
+      writePresence(site.name, me, { ...mine, mend_req: st.mendReq, away: 'mend', hold_until: now + (site.mend.waitS + 30) * 1000 }, { now }); } catch { /* next pass */ }
+    this.note('needle mend: bow dropped on my station for the mender', { bow: bow.name, band: bow.band, mender: alloc.mender });
+    this.doing = 'waiting for a mend';
+    return HANDLED;
+  }
+
+  /** THE MENDER: one Mend per pass on a bow an archer dropped for it, on this room's floor (mend.kod IsTargetInRange). */
+  async needleMendServe(ctx, { site, alloc, rows }) {
+    const { c } = ctx, st = this.needleState(), now = Date.now();
+    if (alloc.mender !== this.s.name) return null;
+    st.mended = (st.mended ?? []).filter(x => now - x.at < 600_000);
+    const req = rows.find(r => r.mend_req && r.mend_req.mender === this.s.name && c.room?.objects?.has?.(r.mend_req.id)
+      && !st.mended.some(x => x.id === r.mend_req.id && x.at >= r.mend_req.at));
+    if (!req) {
+      // ITS OWN BOW: Mend reaches the caster's own pack too, so the mender keeps its own bow up without dropping it.
+      const own = await this.needleBow(site);
+      if (!own?.band || !bandAtOrBelow(own.band, site.mend.at) || own.band === 'broken' || st.mended.some(x => x.id === own.id && now - x.at < site.mend.checkS * 1000)) return null;
+      if (!this.needleMendState(site).ready) return null;
+      const r = await this.chaliceCast('mend', own.id).catch(e => ({ cast: false, why: e.message }));
+      st.mended.push({ id: own.id, at: now, for: this.s.name, cast: !!r?.cast }); st.bow = null;
+      this.note('needle mend: my own bow', { bow: own.name, band: own.band, cast: !!r?.cast });
+      return HANDLED;
+    }
+    const ms = this.needleMendState(site);
+    if (!ms.ready) { this.note('needle mend: cannot mend now', { for: req.agent, why: ms.vetoed ?? 'no sapphire or orc tooth above the floor', usable: ms.usable, floor: ms.floor }); return null; }
+    this.doing = `mending ${req.agent}'s bow`;
+    const r = await this.chaliceCast('mend', req.mend_req.id).catch(e => ({ cast: false, why: e.message }));
+    st.mended.push({ id: req.mend_req.id, at: now, for: req.agent, cast: !!r?.cast });
+    try { const mine = readPresence(site.name).find(x => x.agent === this.s.name) ?? {};
+      writePresence(site.name, this.s.name, { ...mine, mended: st.mended.slice(-10) }, { now: Date.now() }); } catch { /* next pass */ }
+    this.note('needle mend: cast', { for: req.agent, bow: req.mend_req.name, id: req.mend_req.id, cast: !!r?.cast, why: r?.why ?? undefined });
+    this.ledgerEvent('needle_mended', { site: site.name, for: req.agent, bow: req.mend_req.name, cast: !!r?.cast });
+    return HANDLED;
   }
 
   /** The name of the weapon in hand, or null. */
@@ -163,12 +276,19 @@ export class NeedlePart {
     // DISCO DUTY: one of this needle's Discordance casters, an archer, with a Sandstorm in the room. It stops shooting and
     // stands by for the lift (the island coordinator casts it; the cast freezes this keeper for the trance), and says so in
     // its row with a HELD seat, so the minutes it publishes nothing do not hand its station to anybody.
-    const disco = site.disco.agents.includes(me);
+    // Configured by name, or -- with no names -- any archer here that knows Discordance, so the role follows the rotation.
+    const disco = site.disco.agents.length ? site.disco.agents.includes(me) : (role === 'archer' && this.needleKnows('discordance'));
+    // THE MENDER: a disco-duty archer that knows Mend (or mend.agents by name), with its stock and the reserve's verdict.
+    const mendRole = role === 'archer' && (site.mend.agents ? site.mend.agents.includes(me) : disco) && this.needleKnows('mend');
+    const ms = mendRole ? this.needleMendState(site) : null;
+    st.mendState = ms;
     const onDisco = disco && role === 'archer' && fit && this.needleStorm();
     let rows = [];
     try { rows = readPresence(site.name); } catch { rows = []; }
     const mine = { role, room: site.room, fit, why_unfit: whyUnfit, health, slot: st.slot, row: self.row, col: self.col, pull: st.pull,
-      ...(disco ? { disco: true } : {}), ...(onDisco ? { away: 'disco', hold_until: now + site.disco.holdS * 1000 } : {}) };
+      ...(disco ? { disco: true } : {}), ...(onDisco ? { away: 'disco', hold_until: now + site.disco.holdS * 1000 } : {}),
+      ...(ms ? { mend_ready: !!ms.ready && !onDisco, mend_stock: { usable: ms.usable, need: ms.need, floor: ms.floor }, mended: (st.mended ?? []).slice(-10) } : {}),
+      ...(st.mendReq ? { mend_req: st.mendReq, away: 'mend', hold_until: st.mendReq.at + (site.mend.waitS + 30) * 1000 } : {}) };
     rows = rows.filter(r => r?.agent !== me).concat([{ ...mine, agent: me, at: now }]);
     const alloc = allocate(site, rows, { now });
     const slot = slotOf(alloc, me);
@@ -226,11 +346,20 @@ export class NeedlePart {
     // THE CLOSEST VALID MONSTER IN REACH, re-chosen every pass. Never a chase: fight() is held to this square.
     const wielded = this.needleWielded();
     const reach = roleReach(site, slot.role, wielded);
+    // A BOW ON THE FLOOR FOR THE MENDER: nothing to shoot with until it is back.
+    if (slot.role === 'archer' && st.mendReq) return this.needleMendArcher(ctx, { site, alloc, rows, valid, reach: 0 });
     const geo = s.world?.geometry;
     const los = slot.role === 'archer' && geo ? o => lineOfSight(geo, self.row, self.col, o.row, o.col, { fine: false }) : null;
     const pick = chooseTarget(valid, self, { reach, currentId: st.currentId, los });
     if (pick.target) return this.needleFight(ctx, pick.target, { site, role: slot.role, reach, seen: pick.seen });
 
+    // NOTHING IN REACH: the mender mends a dropped bow; an archer with a worn bow drops it for the mender.
+    if (slot.role === 'archer') {
+      const served = await this.needleMendServe(ctx, { site, alloc, rows });
+      if (served === HANDLED) return HANDLED;
+      const asked = await this.needleMendArcher(ctx, { site, alloc, rows, valid, reach: Math.max(reach, site.archers.reach) });
+      if (asked === HANDLED) return HANDLED;
+    }
     // NOTHING AT THE TIP. The puller decides whether to fetch something; everyone else waits on station.
     if (alloc.puller?.agent === me) {
       const lastPullAt = Math.max(st.lastPullAt, ...rows.map(r => Number(r.pull?.done_at) || 0));
@@ -403,6 +532,8 @@ export class NeedlePart {
     return { site: site?.name ?? (typeof p.site === 'string' ? p.site : null), room: site?.room ?? null, role: n?.role ?? p.role ?? null,
       slot: st?.slot ?? null, mode: st?.mode ?? null, money_losing: !!st?.alloc?.money_losing,
       disco_duty: !!st?.onDisco, disco_present: st?.alloc?.disco ?? [], disco_missing: !!st?.alloc?.disco_missing, away: st?.alloc?.away ?? [],
+      mender: st?.alloc?.mender ?? null, mend: st?.mendState ? { ready: st.mendState.ready, usable: st.mendState.usable, need: st.mendState.need,
+        pvp_floor: st.mendState.floor, vetoed: st.mendState.vetoed } : null, mend_request: st?.mendReq ?? null, bow: st?.bow ?? null,
       striker: st?.alloc?.striker ?? null, archers: (st?.alloc?.archers ?? []).map(a => ({ agent: a.agent, station: sq(a.station) })),
       puller: st?.alloc?.puller?.agent ?? null, reserve: st?.alloc?.reserve ?? [],
       quiet_s: st?.quietSince ? Math.round((Date.now() - st.quietSince) / 1000) : null,

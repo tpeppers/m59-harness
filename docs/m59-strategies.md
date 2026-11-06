@@ -574,6 +574,30 @@ coordinator (by spell knowledge, every 5 minutes) say so loudly. Disco duty is a
 (operator: "No other places will have sandstorms"); nothing else in this repository gains Discordance logic. The island
 coordinator's own dispel module is unchanged.
 
+**THE MENDER.** Operator, 2026-11-05: *"let's have the discord caster for the archery needle group also provide mending
+services for bows, so they'll need to carry extra orc teeth and sapphires, give them 30 of each.. and let's actually have
+the hanlan arrow courier be the guild hall version *optionally, as-needed* so it can bring those orc teeth and sapphires
+with it to keep the mending desk supplied as well as the arrows"*. Mend (Kraanan 4: 9 mana, 1 sapphire + 1 orc tooth,
+`mend.kod:55-56`) reaches an item in the caster's pack OR ON THE FLOOR OF ITS ROOM (`mend.kod` IsTargetInRange: the
+target's owner is the caster's owner), so nobody walks:
+
+- the site's `mend` block: `agents` null = the disco-duty archers that know Mend; `at` = the bow band to mend at
+  (`med`, read by look with `m59-practicebow.mjs` bowBand every `checkS`; mend late, `mend.kod:112-134`); `stock` =
+  30 orc teeth + 30 sapphires USABLE on top of the mender's PvP floor;
+- an archer whose bow reads `med` or worse, with nothing in reach, unwields it and drops it ON ITS OWN STATION (threat 0),
+  says `mend_req` in its row (its seat held, not the puller), and waits up to `waitS`; the mender (`alloc.mender`: the
+  front-most archer whose row says `mend_ready`) casts Mend on it from its own station and says `mended`; the archer picks
+  the bow back up. The mender mends its own bow in its pack. Each is a `needle_mend` / `needle_mended` ledger row;
+- `mend_ready` is honest: knows Mend, a sapphire and an orc tooth usable above the PvP floor, and the reserve would not
+  veto the cast. **The PvP floor is always named** (`needle.mend.pvp_floor` in status): the reserve book's
+  casts-to-keep turned into reagents. An "everything" item sentinel (`sapphire: 100000`, the PvP-and-Discordance lock) is
+  not a floor; what lets Mend past it is `agents.<a>.exempt: ['mend']`, which the coordinator draft moves to whoever holds
+  the mender role and takes from whoever it gave it to (`mendExemptPlan`; it never touches an exemption it did not add);
+- the stock comes from the courier: each round `chooseCourierLap` decides HALL or HANLA by need -- the mender's need
+  (from its row) is always a hall lap to 713 (`hall_withdraw`, with whatever arrows the hall can spare above its floor;
+  the reagents handed to the mender directly), and arrows the hall cannot spare are a Hanla lap. The hall's plain-arrow
+  floor is an open question for the operator (`HALL_FLOOR` in the courier draft).
+
 **Survival is the keeper's, unchanged** ([the boundary](m59-boundary.md)). The needle runs inside passFarm, below
 passFleeAndRest and the fight-back rungs; every exchange is `fight()` held to the square with the keeper's own flee
 line as `disengageAt`; a striker that breaks off retreats through `retreatToSafety`, the call passFarm makes; an
@@ -610,7 +634,7 @@ archer's behalf are not keeper rows -- both said in the report. Every pull is a 
 (no `autopilot` argument). On prod, the island coordinator gives the roles: `avar-village-ops.needle-draft.mjs` (beside
 the live file, for review) adds a `needle` module -- the first `needle.strikers` melee (default 2) get the striker
 strategy, the rationed archers get the needle's archer strategy, and `needle.archers` (`max`, `prefer`) replaces
-`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (44) pins it.
+`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (49) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 

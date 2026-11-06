@@ -119,11 +119,21 @@
     "tickMin": 5
   },
   "disco": {
-    "agents": [
-      "t9"
-    ],
+    "agents": [],
     "holdS": 120,
     "castSquare": null,
-    "_disco": "Operator 2026-11-05: one Discordance caster per needle group on 'disco duty'. Camilla (t9), the 7th archer. In a Sandstorm she stops shooting (a sandstorm ruins shots anyway: player.kod WindsRuinShot) and stands by while the island coordinator casts Discordance through her keeper; her seat is held for holdS seconds, through the trance in which her keeper publishes nothing. castSquare null = she casts where she stands: her station is threat 0, which is the casting safety standard's best case, and walking out costs storm time. Set castSquare to make her step to another square to cast; she walks back after."
+    "_disco": "Operator 2026-11-05: one Discordance caster per needle group on 'disco duty'. Camilla (t9), the 7th archer. In a Sandstorm she stops shooting (a sandstorm ruins shots anyway: player.kod WindsRuinShot) and stands by while the island coordinator casts Discordance through her keeper; her seat is held for holdS seconds, through the trance in which her keeper publishes nothing. castSquare null = she casts where she stands: her station is threat 0, which is the casting safety standard's best case, and walking out costs storm time. Set castSquare to make her step to another square to cast; she walks back after.",
+    "_agents": "Empty = THE ROLE FOLLOWS THE ROTATION: any archer at the needle that knows Discordance is on disco duty (Camilla t9 today). Name agents here to pin it instead. The island coordinator's chain keeps a Discordance knower in the room (the next-courier rule)."
+  },
+  "mend": {
+    "agents": null,
+    "at": "med",
+    "stock": {
+      "orc tooth": 30,
+      "sapphire": 30
+    },
+    "checkS": 120,
+    "waitS": 60,
+    "_mend": "Operator 2026-11-05: the disco caster also mends the needle's bows and carries 30 orc teeth + 30 sapphires USABLE, on top of her PvP floor (named in her status as mend.pvp_floor). agents null = the disco-duty archers that know Mend (Kraanan 4: 9 mana, 1 sapphire + 1 orc tooth). Mend reaches an item on the floor of the caster's room (mend.kod IsTargetInRange), so an archer whose bow reads 'med' or worse drops it on its own station, the mender casts from hers, and the archer picks it back up -- nobody walks. The reserve book's mend exemption follows the role (the coordinator draft). The courier keeps the stock from hall 713."
   }
 }
