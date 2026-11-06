@@ -29,6 +29,7 @@
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { allocate, chooseTarget, loadSite, mendStock, needleBusy, normNeedle, pullDue, readPresence, roleReach, monsterComponent, safeSquaresFor, slotOf, sq, standInFor, writePresence, yieldDecision } from '../m59-needle-farm.mjs';
 import * as party from '../m59-party.mjs';
+import { loadBook } from '../m59-abilities.mjs';
 import { bandAtOrBelow, bowBand } from '../m59-practicebow.mjs';
 import { floorsFor, readReserve, reserveBreach, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
 import { OF } from '../m59-parse.mjs';
@@ -98,7 +99,22 @@ export class NeedlePart {
   /** Does this character know the spell (its own spell list)? */
   needleKnows(name) {
     const c = this.s?.client, n = String(name).toLowerCase();
-    return (c?.spells ?? []).some(sp => String(c?.rsc?.get?.(sp.nameRsc) ?? sp?.name ?? '').toLowerCase() === n);
+    if ((c?.spells ?? []).some(sp => String(c?.rsc?.get?.(sp.nameRsc) ?? sp?.name ?? '').toLowerCase() === n)) return true;
+    // AN EMPTY SPELL LIST IS NOT "KNOWS NOTHING" (live 2026-11-06: Camilla's keeper, in game after a rejoin, had spells [] --
+    // the list arrives only when asked -- and every reader called the needle's only Discordance caster a stranger to it).
+    // Ask for the list (at most once a minute), and meanwhile believe the ability book the broker keeps.
+    if (!(c?.spells?.length) && this.s?.live !== false && c?.requestSpells) {
+      const now = Date.now();
+      if (!this._needleSpellsAskedAt || now - this._needleSpellsAskedAt > 60_000) {
+        this._needleSpellsAskedAt = now;
+        this.s.pacer?.submit?.('read', () => c.requestSpells())?.catch?.(() => {});
+      }
+    }
+    try {
+      const book = this._needleBook && Date.now() - this._needleBook.at < 60_000 ? this._needleBook.book
+        : (this._needleBook = { at: Date.now(), book: loadBook(this.who?.() ?? c?.me?.name) }).book;
+      return Object.keys(book?.spells ?? {}).some(k => String(k).toLowerCase() === n);
+    } catch { return false; }
   }
 
   /**
@@ -360,7 +376,9 @@ export class NeedlePart {
         return this.needleWalk(go.square, ON(go.square, station) ? (slot.role === 'striker' ? 'to the needle tip' : `to archer station ${slot.index + 1}`) : `to stand in on ${sq(go.square)}`);
       }
       const onSafe = safeSquaresFor(site, slot.role).some(q => ON(self, q));
-      if (slot.role === 'striker' || !onSafe) {
+      // A STRIKER KEPT OFF THE TIP BY A MONSTER STANDING ON IT FIGHTS IT FROM WHERE IT STANDS (live 2026-11-06: an avar warrior
+      // stood on r35c42 while t11 waited on r36c41 for minutes, "r35c42 is occupied"). Every square in its safe set is threat 0.
+      if (!onSafe) {
         this.doing = 'waiting for a free needle square'; this.emptyPasses = 0;
         st.last = { at: now, what: 'wait', at_square: sq(self), why: go ? go.why : 'every safe square is occupied or refused a walk' };
         return HANDLED;
@@ -490,7 +508,7 @@ export class NeedlePart {
     // square, into the pack. The tip itself stays walkable -- the striker makes space there.
     const here = { site: st.site ?? null };
     const accepted = here.site?.archers?.acceptUnsafeRoute?.some(q => ON(q, to));
-    const avoidSquares = here.site && !accepted ? this.needleMonsterGround(here.site) : null;
+    const avoidSquares = here.site && !accepted && here.site.trust !== 'operator' ? this.needleMonsterGround(here.site) : null;
     const w = await s.walkTo(to.col, to.row, { maxSteps: 24, ...(avoidSquares?.size ? { avoidSquares } : {}) }).catch(e => ({ arrived: false, steps: 0, reason: e.message }));
     const self = s.client?.self;
     if (ON(self, to) || w?.arrived) { st.walkFails = 0; this.progress(`walked ${why}`); return HANDLED; }

@@ -474,6 +474,13 @@ await ok('chain: a free seat CALLS UP the courier as the next striker; the pre-d
   assert.match(r.log[0], /called up/);
   assert.equal(r.chain.history.at(-1).kind, 'call_up');
 });
+await ok('chain: the coordinator\'s own fields (seed) survive a tick -- it seeded every 15 s live', () => {
+  const r = rotateChain({ ...CH, seed: '2026-11-05' }, { now: NOW });
+  assert.equal(r.chain.seed, '2026-11-05');
+  const p2 = rotateChain({ ...CH, seed: 's' }, { now: NOW, vacancies: vac, incoming: { agent: 't1' } });
+  assert.equal(p2.chain.seed, 's'); assert.ok(p2.chain.pending);
+  assert.equal(rotateChain(p2.chain, { now: NOW + 1, incoming: { agent: 't1', inRoom: true, fit: true } }).chain.seed, 's');
+});
 await ok('chain: the HANDOVER waits for the incoming striker to be in the room, fit, and between pulls', () => {
   const pending = rotateChain(CH, { now: NOW, vacancies: vac, incoming: { agent: 't1' } }).chain;
   for (const [inc, pulling, why] of [[{ agent: 't1', inRoom: false, fit: true }, false, /not in the needle/],
@@ -737,12 +744,30 @@ await ok('keeper: a refused station walk is HANDLED, blocks that square for 30 s
   assert.equal(a.needleStatus().last.what, 'fight');
   for (let i = 0; i < 6; i++) assert.equal(await go(), HANDLED);
 });
-await ok('keeper: a striker kept off the tip waits on the bench and never swings from it', async () => {
+await ok('keeper: a striker kept off the tip fights what is in reach from its safe square, and waits when nothing is', async () => {
   reset();
   const s = keeperAt('t1', 'striker', { self: W(34, 39), monsters: [M(80, 35, 42, { flags: OF.PLAYER }), M(52, 34, 41)] });
   assert.equal(await s.needlePass(ctxOf(s), [...s.s.client.room.objects.values()].filter(o => !(o.flags & OF.PLAYER)), s.needleHere(2143)), HANDLED);
-  assert.equal(fightCalls.length, 0); assert.equal(walkCalls.length, 0, 'already on the bench');
-  assert.equal(s.needleStatus().last.what, 'wait');
+  assert.equal(walkCalls.length, 0, 'already on a safe square');
+  assert.equal(fightCalls.length, 1, 'live 2026-11-06: waiting for minutes beside a monster on the tip was the bug');
+  assert.equal(fightCalls[0].exactTargetId, 52); assert.equal(fightCalls[0].holdPosition, true);
+  reset();
+  const q = keeperAt('t1', 'striker', { self: W(34, 39), monsters: [M(80, 35, 42, { flags: OF.PLAYER })] });
+  await q.needlePass(ctxOf(q), [], q.needleHere(2143));
+  assert.equal(fightCalls.length, 0); assert.equal(q.needleStatus().last.what, 'wait');
+});
+await ok('keeper: a MONSTER on the tip -- the striker takes the yield square beside it and kills it from there', async () => {
+  reset();
+  const s = keeperAt('t11', 'striker', { self: W(36, 39), monsters: [M(66, 35, 42)] });
+  s.policy.needle = { site: { ...SITE_RAW, striker: { ...SITE_RAW.striker, yieldSquares: [W(36, 41), W(35, 41)] } }, role: 'striker' };
+  const go = () => s.needlePass(ctxOf(s), [...s.s.client.room.objects.values()], s.needleHere(2143));
+  await go();
+  assert.deepEqual(walkCalls.map(w => w.to), ['r35c41'], 'beside the tip first (the nearest yield square), not the bench it stands on');
+  await go();
+  assert.equal(fightCalls.at(-1)?.exactTargetId, 66, 'the monster standing on the tip');
+  s.s.client.room.objects.delete(66);
+  await go();
+  assert.deepEqual(walkCalls.map(w => w.to), ['r35c41', 'r35c42'], 'and takes the tip once it is free');
 });
 await ok('cooperative combat leaves a needle keeper alone: not ordinary, so no hold, no veto of its swings, not a member', async () => {
   const { CooperativeCombat } = await import('./m59-cooperative-combat.mjs');
@@ -837,6 +862,56 @@ await ok('keeper: the striker on the tip steps to the yield square for a passing
   await a.needlePass(ctxOf(a), [], a.needleHere(2143));
   assert.ok(opts?.avoidSquares instanceof Set && opts.avoidSquares.has('34,43') && opts.avoidSquares.has('34,44'), 'the kill square and beyond are avoided');
   assert.ok(!opts.avoidSquares.has('35,42'), 'the tip is not: the striker makes space there');
+});
+
+await ok('cooperative LOGOFF leaves a needle keeper alone: it never asks for one, is never a helper, publishes disabled', async () => {
+  const L = await import('./m59-cooperative-logoff.mjs');
+  const a = keeperAt('t9', 'archer', { self: W(34, 41) });
+  a.s.world.room = { num: 2143 };
+  let asked = 0; a.note = () => {};
+  const orig = a.fleetLogoff;
+  assert.equal(await a.fleetLogoff('hurt'), false, 'no request: it stays in the game');
+  assert.equal(L.cooperativeHelperReady(a, { helper_health: 0.9, danger_quiet_ms: 3000 }), false);
+  let wrote = null;
+  a._cooperativeLogoffConfig = {}; a.s.fleetStateFile = null;
+  // presence: enabled false while holding a needle slot (the store is faked through the session's directory hook)
+  const plain = Object.create(Object.getPrototypeOf(a)); Object.assign(plain, a, { policy: { ...a.policy, needle: null } });
+  assert.equal(plain.needleHere(2143), null, 'the control: no needle, ordinary');
+  void orig; void asked; void wrote;
+});
+await ok('knowing a spell: the client list, else the ability book -- an empty list after a rejoin is not "knows nothing"', async () => {
+  const { mkdtempSync, writeFileSync: wf, mkdirSync } = await import('node:fs');
+  const a = keeperAt('t9', 'archer', { self: W(34, 41) });
+  a.s.client.spells = [];
+  let asked = 0; a.s.client.requestSpells = () => { asked++; }; a.s.pacer = { submit: async (_k, fn) => fn() };
+  a.who = () => 'NoSuchCharacterNeedleTest';
+  assert.equal(a.needleKnows('discordance'), false, 'no list, no book');
+  assert.equal(asked, 1, 'and it asked the server for the list');
+  a.needleKnows('mend');
+  assert.equal(asked, 1, 'at most once a minute');
+  a._needleBook = { at: Date.now(), book: { spells: { discordance: { ability: 35 }, mend: { ability: 19 } } } };
+  assert.equal(a.needleKnows('discordance'), true, 'the book says so');
+  a.s.client.spells = [{ id: 1, nameRsc: 77 }]; const g = a.s.client.rsc.get; a.s.client.rsc = { get: id => (id === 77 ? 'Zap' : g(id)) };
+  assert.equal(a.needleKnows('zap'), true, 'the live list first');
+});
+await ok('trust "operator": the operator\'s squares are taken verbatim -- check warns, never fails; walks do not avoid the model', async () => {
+  const site = normSite({ ...SITE_RAW, trust: 'operator', striker: { station: W(36, 40), reach: 3 }, kill: W(36, 41),
+    archers: { stations: [W(36, 38), W(1, 1)], capacity: 2 } });   // r1c1: no mover gets there -- the model objects
+  assert.equal(site.trust, 'operator');
+  assert.throws(() => normSite({ ...SITE_RAW, trust: 'mine' }));
+  let map; try { map = (await import('./m59-map.mjs')).loadMap(); } catch { return; }
+  (await import('./m59-routes.mjs')).attachStepMasks(map);
+  const geo = (await import('./m59-roo.mjs')).sharedRoomGeometry(map.rooms['2143']);
+  const r = checkSite(site, geo, await import('./m59-safespots.mjs'));
+  assert.equal(r.ok, true); assert.ok(r.warnings.length > 0, 'and says what the model thinks');
+  const strict = checkSite({ ...site, trust: 'derived' }, geo, await import('./m59-safespots.mjs'));
+  assert.equal(strict.ok, false, 'the same squares fail when they are the model\'s');
+  const a = keeperAt('t9', 'archer', { self: W(37, 37) });
+  a.policy.needle = { site: { ...SITE_RAW, trust: 'operator' }, role: 'archer' };
+  let opts = null; const w0 = a.s.walkTo; a.s.walkTo = async (col, row, o) => { opts = o; return w0(col, row, o); };
+  a.s.world.geometry = { openDirections: () => [{ dr: 0, dc: 1 }], inBounds: () => true, walkable: () => true, canMove: () => true };
+  await a.needlePass(ctxOf(a), [], a.needleHere(2143));
+  assert.ok(opts && !opts.avoidSquares, 'no avoidance of a model the operator overrode');
 });
 
 // ------------------------------------------------------------------------------ survival is the keeper's, by shape

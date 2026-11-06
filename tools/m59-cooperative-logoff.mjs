@@ -99,7 +99,8 @@ export function publishCooperativePresence(pilot,{now=Date.now()}={}) {
   if(now-(s._cooperativePublishedAt??0)<500)return false;
   const p={at:now,agent:s.name,pid:process.pid,character:c?.me?.name??s.credentials?.character,
     live:!!s.live&&c?.combatReady===true,body:c?.selfId,room:s.world?.room?.num,room_object:c?.room?.id,
-    health:c?.vitals?.()?.health??null,enabled:true};
+    // A needle keeper in its needle's room is never a helper: a distraction walks it off its station.
+    health:c?.vitals?.()?.health??null,enabled:!pilot.needleHere?.(s.world?.room?.num)};
   store.write('presence',s.name,p);s._cooperativePublishedAt=now;
   // Presence is published by the watchdog every 500ms whatever the keeper is doing, including
   // fighting, so the gone observation rides on it: a helper busy in combat still reports.
@@ -453,6 +454,7 @@ export function cooperativeAfterLogin(session) {
 export function cooperativeHelperReady(pilot,config,{now=Date.now(),during=false,requestId=null}={}) {
   const s=pilot.s,c=s.client,h=c?.vitals?.()?.health,v=c?.vitals?.()?.vigor;
   const movement=liveMoveOrder(s),ownApproach=during&&movement?.origin?.source==='keeper'&&movement.origin.name==='cooperative_distraction'&&movement.origin.run_id===requestId;
+  if(pilot.needleHere?.(s.world?.room?.num))return false;   // holding a needle slot (see publishCooperativePresence)
   if(!s.live||c?.combatReady!==true||!['farm','idle'].includes(pilot.mode)||pilot.stopping||pilot.inert||pilot.operatorSurvivalStandDown?.()||stationaryTradeActive(s)||s.combat?.active||s.job&&!s.job.done||
     movement&&!ownApproach||s._rite||pilot.checkFreeze?.()||pilot.keeperRecoveryTravel||s.keeperRecoveryTravel||
     isActiveRecoveryDecision(currentSurvivalDecision(s))||!(h?.max>0)||h.value/h.max<(during?pilot.safety?.().fleeAt??.9:config.helper_health)||

@@ -118,6 +118,14 @@ export class CooperativePart {
   }
 
   async fleetLogoff(why) {
+    // A NEEDLE KEEPER DOES NOT LOG OFF FOR A DISTRACTION (live 2026-11-06: Camilla went NOT IN GAME at 23:30:44Z and
+    // 23:42:08Z, "rejoin: cooperative logoff: wait for distraction", from a threat-0 archer station). Its square is one no
+    // monster in reach can see; it stays in the game and the rest of the ladder decides.
+    if(this.needleHere?.(this.s?.world?.room?.num)){
+      if(!this._needleLogoffSaid||Date.now()-this._needleLogoffSaid>60_000){this._needleLogoffSaid=Date.now();
+        this.note('no cooperative logoff: holding a needle slot',{why,room:this.s?.world?.room?.num});}
+      return false;
+    }
     const s=this.s,offered=await configureCooperativeLogoff(this,'request');
     const request=offered&&requestCooperativeLogoff(this,offered);
     if(!request)return false;

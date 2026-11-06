@@ -688,6 +688,39 @@ not the striker's body, stops the pack. `yieldDecision`:
 - `needle.yield` in status says who it made space for and why. The no-deadlock test walks two bodies through the
   one-wide part in opposite directions with the striker in the middle, and both get through.
 
+**LIVE, 2026-11-06 EVENING (deploy-2026-11-06-3), four more, and the site's premise.**
+
+- **Cooperative LOGOFF still took needle keepers.** Camilla went NOT IN GAME twice ("rejoin: cooperative logoff: wait for
+  distraction"). The fix above took needle keepers out of cooperative COMBAT only. Now `fleetLogoff` refuses while the
+  keeper holds a needle in its room, `cooperativeHelperReady` is false for one, and its cooperative presence publishes
+  `enabled: false`, so nobody counts it as a helper either.
+- **A monster stood on the tip and the striker waited beside it.** t11 at r36c41 read "r35c42 is occupied" for minutes:
+  an avar warrior (id 12966) stood on r35c42, with others on r34c43, r33c44, r34c44 (t11's own room view). On the coarse
+  grid r35c42 IS monster ground -- r34c43 steps SW onto it -- so the body on the tip holds it, and a striker that steps off
+  has to win it back. A striker on any square of its safe set now fights what is in reach, and when the tip is taken it
+  stands in beside it (yield squares before the bench), kills what is there, and takes the tip.
+- **The coordinator re-seeded the chain every tick.** `rotateChain` rebuilt the chain without the coordinator's `seed`,
+  so every 15 s it read as un-seeded (140 "NEEDLE CHAIN seeded" lines). It now keeps every field it does not own.
+- **"NEEDLE HAS NO DISCORDANCE CASTER" with Camilla there.** Her keeper was in game with `spells: []`: after a rejoin the
+  spell list arrives only when asked. `needleKnows` now asks the server for it (at most once a minute) and believes the
+  ability book (`substrate/abilities/<character>.json`) meanwhile; the coordinator draft's readFarmer does the same.
+
+**THE SITE'S PREMISE IS IN DOUBT, AND THE OPERATOR'S SQUARES WIN.** Operator: *"The needle positions are wrong. The correct
+needle should have nobody east of r36,c40 -- r36,c40 is the striker position for the needle"*. Why the derivation said
+otherwise: it never chose r35c42 / r34c43 -- those were the operator's first squares, and `derive` only proved them -- and
+it models monsters on the COARSE grid (a stock server, `piLOS = LOS_OLD`). There, the monster component reaches r35c42
+and stops; nothing in the pocket west of it (r36c40 included) is monster ground at all, so r36c40 cannot be a coarse dead
+end. On the `monster_grid` (a LOS_NEW_MONSTER server; `derive --grid fine`) the component covers the pocket too, and r36c40
+can be entered from r36c41, r35c41, r37c41, r35c40 and r36c39 -- not a dead end either. Neither 2D grid reproduces "the
+striker at r36c40, nobody east of c40"; the live room view (the pack on r34c43, r35c42, r33c44, r34c44, all coarse squares)
+fits the coarse grid, while archers on "threat 0" squares east of c40 losing health fits it less well (or was spell
+damage: shamans cast with no sight check). The server is two-dimensional (`CanMoveInRoomFine` takes no z), so sector
+heights are not the answer. What settles it is observation: where the avars stand, and which squares take melee hits.
+
+So a site may say `"trust": "operator"`: its squares are the operator's, taken VERBATIM. `checkSite` still reports what
+the model thinks of each square, as WARN lines and `warnings`, and passes; and needle walks do not route around the
+model's monster ground, since the model is what is in doubt. `derive --grid coarse|fine` shows either model.
+
 Not changed, and reported: the striker left the room through the survival ladder's caster exit ("a caster is in the room:
 no spot here holds") -- avar shamans cast without a range or sight check (monster.kod MonsterCanCastSpell), so no square in
 2143 is safe from a spell, and archers resting on a station can still take spell damage. That is survival, and it is the
@@ -729,7 +762,7 @@ archer's behalf are not keeper rows -- both said in the report. Every pull is a 
 (no `autopilot` argument). On prod, the island coordinator gives the roles: `avar-village-ops.needle-draft.mjs` (beside
 the live file, for review) adds a `needle` module -- the first `needle.strikers` melee (default 2) get the striker
 strategy, the rationed archers get the needle's archer strategy, and `needle.archers` (`max`, `prefer`) replaces
-`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (59) pins it.
+`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (64) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 

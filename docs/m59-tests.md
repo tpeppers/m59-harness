@@ -364,7 +364,7 @@ through a nested shelter order.
   `chaseMaxPieces`, and contact resets the count.
 
 - `m59-patrol-farm-test.mjs` (23): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
-- `m59-needle-farm-test.mjs` (59): `needle`, the single striker in the needle with archers behind it. The field
+- `m59-needle-farm-test.mjs` (64): `needle`, the single striker in the needle with archers behind it. The field
   takes `{ site, role }` only and the site file refuses bare pairs, unknown keys (a `fleeBelow` included), a `hold`
   bench with no squares, a duplicated station or one on the striker's square; notes (`_x`, `why`) pass. Target choice:
   the closest valid monster in reach, a closer one takes the next swing, a tie keeps the current one, sight breaks a
@@ -409,6 +409,11 @@ through a nested shelter order.
   directions past the striker and both get through, and it returns to the tip; on the keeper it walks aside and back; a
   needle walk avoids the monster component, the tip excepted. The 2143 example now checks the SAFE ROUTE: the old
   r32c43 seat and r30c43 pull square were reachable only across monster ground (the shipped-map case failed on them).
+  LIVE EVENING: a striker kept off the tip fights what is in reach from its safe square (and waits when nothing is); a
+  MONSTER on the tip sends it to the yield square beside it, it kills it, then takes the tip; the chain keeps the
+  coordinator's seed across ticks; cooperative LOGOFF never takes a needle keeper (no request, never a helper); knowing a
+  spell reads the live list, else asks the server and believes the ability book; `trust: "operator"` takes the squares
+  verbatim, warns instead of failing, and does not route walks around the doubted model.
 
 - `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy

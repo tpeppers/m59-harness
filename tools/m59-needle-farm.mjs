@@ -143,13 +143,19 @@ export function siteName(v) {
  */
 export function normSite(v) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('a needle site must be an object');
-  known(v, ['name', 'room', 'kill', 'killRadius', 'striker', 'archers', 'pull', 'roster', 'reserve', 'staleS', 'rounds', 'econ', 'disco', 'mend'], 'site');
+  known(v, ['name', 'room', 'kill', 'killRadius', 'striker', 'archers', 'pull', 'roster', 'reserve', 'staleS', 'rounds', 'econ', 'disco', 'mend', 'trust'], 'site');
   const name = siteName(v.name);
   const room = Number(v.room);
   if (!Number.isInteger(room) || room <= 1) throw new Error('needle room must be a room number above 1');
   const kill = square(v.kill, 'needle kill');
   if (!kill) throw new Error('needle kill square is required: where the pack stops');
-  const out = { name, room, kill };
+  // WHOSE SQUARES (operator 2026-11-06: "The needle positions are wrong. The correct needle should have nobody east of r36,c40
+  // -- r36,c40 is the striker position for the needle"). 'derived' (default): checkSite fails a square the map model calls
+  // unsafe. 'operator': the squares are the operator's, taken VERBATIM -- checkSite reports what the model thinks of each as
+  // a warning and passes, and needle walks do not route around the model's monster ground (the model is what is in doubt).
+  const trust = v.trust ?? 'derived';
+  if (!['derived', 'operator'].includes(trust)) throw new Error('needle trust must be "derived" or "operator"');
+  const out = { name, room, kill, trust };
   for (const k of Object.keys(SITE_DEFAULTS)) out[k] = num(v, k, SITE_DEFAULTS[k], k);
 
   known(v.striker, ['station', 'reach', 'pullStep', 'minHealth', 'yieldSquares', 'yieldMaxS', 'passRadius'], 'striker');
@@ -415,8 +421,10 @@ export function standInFor({ site, role, self, preferred, occupied = new Set(), 
   const free = q => !occupied.has(key(q)) && !blocked.has(key(q));
   if (preferred && (same(self, preferred) || free(preferred))) return { square: preferred, why: 'my station' };
   const here = self && safeSquaresFor(site, role).find(q => same(q, self));
+  const bench = new Set(site.reserve.squares.map(key));
   const opts = safeSquaresFor(site, role).filter(q => !same(q, preferred) && (same(q, self) || free(q)))
-    .sort((a, b) => (self ? d2(a, self) - d2(b, self) : 0) || a.row - b.row || a.col - b.col);
+    .sort((a, b) => (role === 'striker' && preferred ? (bench.has(key(a)) - bench.has(key(b))) || d2(a, preferred) - d2(b, preferred) : 0)
+      || (self ? d2(a, self) - d2(b, self) : 0) || a.row - b.row || a.col - b.col);
   if (!opts.length) return null;
   const why = preferred ? (occupied.has(key(preferred)) ? `${sq(preferred)} is occupied` : `a walk to ${sq(preferred)} just failed`) : 'no station';
   return { square: opts[0], why: here && same(opts[0], here) ? `${why}; staying on safe ${sq(here)}` : `${why}; the nearest free safe square` };
@@ -486,7 +494,9 @@ export function chainVacancies({ archers = [], rows = [], rooms = [], absentSinc
  */
 export function rotateChain(chain, { now = Date.now(), vacancies = [], incoming = null, oldStriker = null, pulling = false, holdMaxS = CHAIN_DEFAULTS.holdMaxS,
   nextCourier = undefined } = {}) {
-  const c = { striker: chain?.striker ?? null, courier: chain?.courier ?? null, next: chain?.next ?? null,
+  // EVERY FIELD IT DOES NOT OWN IS KEPT: the coordinator's `seed` rode on this object, and dropping it re-seeded the chain
+  // -- pending call-up, history and all -- on every 15 s tick (live 2026-11-06, "NEEDLE CHAIN seeded" 140 times).
+  const c = { ...(chain ?? {}), striker: chain?.striker ?? null, courier: chain?.courier ?? null, next: chain?.next ?? null,
     pending: chain?.pending ?? null, history: [...(chain?.history ?? [])].slice(-50) };
   const actions = [], log = [];
   const say = (line, rec) => { log.push(line); c.history.push({ at: now, ...rec, why: line }); };
@@ -743,13 +753,13 @@ export function needleBusy(site, valid = []) {
 // ------------------------------------------------------------------------------------------- deriving a site offline
 
 /** The monster's coarse component from a square: CanMoveInRoom's rule (source direction bit, destination floor bit). */
-export function monsterComponent(geo, from, cap = 20_000) {
+export function monsterComponent(geo, from, cap = 20_000, { fine = false } = {}) {
   const k0 = `${from.row},${from.col}`, seen = new Set([k0]), q = [[from.row, from.col]];
   for (let i = 0; i < q.length && seen.size < cap; i++) {
     const [r, c] = q[i];
-    for (const d of geo.openDirections(r, c, { fine: false }) ?? []) {
+    for (const d of geo.openDirections(r, c, { fine }) ?? []) {
       const R = r + d.dr, C = c + d.dc, k = `${R},${C}`;
-      if (seen.has(k) || !geo.inBounds(R, C) || !geo.walkable(R, C)) continue;
+      if (seen.has(k) || !geo.inBounds(R, C) || (!fine && !geo.walkable(R, C))) continue;
       seen.add(k); q.push([R, C]);
     }
   }
@@ -776,10 +786,13 @@ export function monsterComponent(geo, from, cap = 20_000) {
  * under that setting the pocket behind 2143's needle is monster ground and the whole site is wrong. It is reported, not
  * enforced, because the operator's observation (the pack stops at the tip) is only consistent with the coarse grid.
  */
-export function deriveNeedle(geo, { kill, striker, strikerReach = 3, bowReach = 17, monsterReach = 3, pullWithin = 6, entry = null, lib } = {}) {
+// `grid`: which grid MONSTERS move and see on. 'coarse' is a stock server (piLOS = LOS_OLD); 'fine' is the monster_grid a
+// LOS_NEW_MONSTER / LOS_NEW_BOTH server uses (room.kod:2102, 2125). The site's premise depends on which one prod runs.
+export function deriveNeedle(geo, { kill, striker, strikerReach = 3, bowReach = 17, monsterReach = 3, pullWithin = 6, entry = null, grid = 'coarse', lib } = {}) {
+  const FINE = grid === 'fine';
   const { lineOfSight, reachableFrom } = lib;
   const problems = [];
-  const M = monsterComponent(geo, kill);
+  const M = monsterComponent(geo, kill, 20_000, { fine: FINE });
   const inM = p => M.has(`${p.row},${p.col}`);
   if (!geo.walkable(kill.row, kill.col)) problems.push(`kill square ${sq(kill)} is not floor on the coarse grid`);
   if (d2(striker, kill) > strikerReach ** 2) problems.push(`striker ${sq(striker)} cannot reach the kill square ${sq(kill)} (reach ${strikerReach})`);
@@ -805,7 +818,7 @@ export function deriveNeedle(geo, { kill, striker, strikerReach = 3, bowReach = 
     for (const m of mList) {
       const dd = d2(m, p);
       if (dd < minD2) minD2 = dd;
-      if (dd <= monsterReach ** 2) { near++; if (lineOfSight(geo, m.row, m.col, row, col, { fine: false })) threat++; }
+      if (dd <= monsterReach ** 2) { near++; if (lineOfSight(geo, m.row, m.col, row, col, { fine: FINE })) threat++; }
       if (dd <= bowReach ** 2 && lineOfSight(geo, row, col, m.row, m.col, { fine: false })) coverage++;
     }
     const seesTip = lineOfSight(geo, row, col, kill.row, kill.col, { fine: false });
@@ -880,9 +893,10 @@ export function checkSite(site, geo, lib) {
     const c = byKey.get(sq(p));
     const safeRoute = SR ? SR.has(k) : null;
     const accepted = site.archers.acceptUnsafeRoute.some(q => same(q, p));
-    const ok = !!P?.has(k) && (!wantSafe || (c && c.threat === 0)) && (!wantSafe || safeRoute !== false || accepted);
+    const modelOk = !!P?.has(k) && (!wantSafe || (c && c.threat === 0)) && (!wantSafe || safeRoute !== false || accepted);
+    const ok = modelOk || site.trust === 'operator';
     rows.push({ what, square: sq(p), walkable_to: !!P?.has(k), threat: c?.threat ?? null, sees_tip: c?.sees_tip ?? null,
-      safe_route: safeRoute, monster_grid_reaches: c?.monster_grid_reaches ?? null, ok,
+      safe_route: safeRoute, monster_grid_reaches: c?.monster_grid_reaches ?? null, ok, warn: !modelOk && site.trust === 'operator',
       why: !P?.has(k) ? 'the mover cannot walk here from the striker station' : wantSafe && !c ? 'not a safe square (a monster can reach or see it)'
         : wantSafe && safeRoute === false ? `reachable from the bench ${sq(bench)} only across monster ground${accepted ? ' -- ACCEPTED by the site (archers.acceptUnsafeRoute)' : ''}` : null });
   };
@@ -892,7 +906,8 @@ export function checkSite(site, geo, lib) {
   look('archer pull square', site.archers.pullSquare, true);
   site.reserve.squares.forEach((s, i) => look(`reserve ${i + 1}`, s, true));
   site.striker.yieldSquares.forEach((s, i) => look(`striker yield ${i + 1}`, s, true));
-  return { site: site.name, room: site.room, ok: !derived.problems.length && rows.every(r => r.ok), problems: derived.problems, rows,
+  return { site: site.name, room: site.room, trust: site.trust, ok: (site.trust === 'operator' || !derived.problems.length) && rows.every(r => r.ok),
+    problems: derived.problems, warnings: rows.filter(r => r.warn).map(r => `${r.what} ${r.square}: ${r.why ?? 'the model disagrees'}`), rows,
     blind_stations: rows.filter(r => r.what.startsWith('archer station') && r.sees_tip === false).map(r => r.square) };
 }
 
@@ -1039,7 +1054,7 @@ if (isMain) {
     const room = Number(val('--room'));
     const kill = parseSquare(val('--kill')), striker = parseSquare(val('--striker'));
     const { geo, lib, name } = await geometryFor(room);
-    const d = deriveNeedle(geo, { kill, striker, strikerReach: Number(val('--striker-reach') ?? 3), bowReach: Number(val('--bow') ?? 17), lib });
+    const d = deriveNeedle(geo, { kill, striker, strikerReach: Number(val('--striker-reach') ?? 3), bowReach: Number(val('--bow') ?? 17), grid: val('--grid') ?? 'coarse', lib });
     print(d, () => [
       `${room} ${name}: striker ${d.striker}, kill ${d.kill}; monster component ${d.monster_component} squares, player reaches ${d.player_reachable}`,
       `  kill square coarse directions [${d.kill_coarse_dirs.join(' ')}]; striker [${d.striker_coarse_dirs.join(' ')}]` +
@@ -1061,7 +1076,8 @@ if (isMain) {
     const r = checkSite(site, geo, lib);
     print({ file, ...r }, () => [`${site.name} (${file}) in ${site.room} ${name}: ${r.ok ? 'ok' : 'NOT OK'}`,
       ...r.problems.map(p => '  PROBLEM ' + p),
-      ...r.rows.map(x => `  ${x.ok ? 'ok  ' : 'FAIL'} ${x.what.padEnd(26)} ${x.square.padEnd(8)}` +
+      ...(r.trust === 'operator' ? ['  trust: operator -- the squares are the operator\'s; the model\'s objections below are WARNINGS'] : []),
+      ...r.rows.map(x => `  ${x.warn ? 'WARN' : x.ok ? 'ok  ' : 'FAIL'} ${x.what.padEnd(26)} ${x.square.padEnd(8)}` +
         (x.threat != null ? ` threat ${x.threat} sees tip ${x.sees_tip}` : '') + (x.monster_grid_reaches ? ' [monster_grid reaches]' : '') + (x.why ? ` -- ${x.why}` : ''))].join('\n'));
     process.exitCode = r.ok ? 0 : 1;
   } else if (cmd === 'status') {
