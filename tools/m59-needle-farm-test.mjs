@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { readToolSource } from './autopilot/source.mjs';
 import { Autopilot, HANDLED } from './m59-autopilot.mjs';
 import { STRATEGY_FIELDS, validateStrategy } from './m59-strategy-schema.mjs';
-import { allocate, archerSlots, chainVacancies, checkSite, chooseTarget, rotateChain, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
+import { allocate, archerSlots, chainVacancies, checkSite, chooseNextCourier, chooseTarget, preDispatchDue, rotateChain, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
   normNeedle, normSite, parseSquare, pullDue, readPresence, roleReach, shillingsIn, slotOf, weaponReach, writePresence } from './m59-needle-farm.mjs';
 import { OF } from './m59-parse.mjs';
 
@@ -446,8 +446,8 @@ await ok('archers-only is said out loud as money-losing', async () => {
 
 // ------------------------------------------------------------------------- the rotation chain: courier -> striker -> archer
 // Operator 2026-11-05: Sweetums (t11) is the striker and takes the next free archer seat; the Hanla arrow courier (Kermit, t1)
-// becomes the striker; the next courier comes from courier_next. Never without a striker.
-const CH = { striker: 't11', courier: 't1', courierNext: ['t4'], pending: null, history: [] };
+// becomes the striker; the next courier is chosen by the rule (chooseNextCourier). Never without a striker.
+const CH = { striker: 't11', courier: 't1', next: { agent: 't4', why: 'pre-dispatched' }, pending: null, history: [] };
 const vac = [{ agent: 't3', why: 'reached 99' }];
 await ok('vacancies: off the roster, at stop_at, or away from the needle past seatVacantS', () => {
   const mem = {};
@@ -462,9 +462,10 @@ await ok('vacancies: off the roster, at stop_at, or away from the needle past se
   chainVacancies({ archers: ['t10'], rows: [{ ...rows[2], usable: true }], rooms: [2143], absentSince: mem, now: NOW + 302_000 });
   assert.equal(mem.t10, undefined, 'back at the needle: the clock resets');
 });
-await ok('chain: a free seat CALLS UP the courier as the next striker and takes the next courier from courier_next', () => {
+await ok('chain: a free seat CALLS UP the courier as the next striker; the pre-dispatched next courier takes the job', () => {
   const r = rotateChain(CH, { now: NOW, vacancies: vac, incoming: { agent: 't1', onLap: false } });
-  assert.deepEqual(r.actions, [{ kind: 'call_up', agent: 't1' }]);
+  assert.deepEqual(r.actions, [{ kind: 'call_up', agent: 't1' }, { kind: 'new_courier', agent: 't4', why: 'pre-dispatched' }]);
+  assert.equal(r.chain.next, null);
   assert.equal(r.chain.striker, 't11', 'the striker keeps the tip during the call-up');
   assert.equal(r.chain.courier, 't4');
   assert.deepEqual(r.chain.pending, { incoming: 't1', seat: 't3', why: 'reached 99', at: NOW });
@@ -489,8 +490,8 @@ await ok('chain: the handover gives the striker the seat (FIRE when it knows no 
   const r2 = rotateChain(pending, { now: NOW + 60_000, incoming: { agent: 't1', inRoom: true, fit: true }, oldStriker: { agent: 't11', knowsArchery: true } });
   assert.equal(r2.actions[0].skill, 'archery');
 });
-await ok('chain: courier_next empty -- the courier job stops, said out loud; the next free seat promotes nobody', () => {
-  const r = rotateChain({ ...CH, courierNext: [] }, { now: NOW, vacancies: vac, incoming: { agent: 't1' } });
+await ok('chain: nobody eligible for courier -- the job stops, said out loud; the next free seat promotes nobody', () => {
+  const r = rotateChain({ ...CH, next: null }, { now: NOW, vacancies: vac, incoming: { agent: 't1' }, nextCourier: { agent: null, why: 'nobody eligible who knows fire' } });
   assert.equal(r.chain.courier, null);
   assert.match(r.log[0], /NO NEXT COURIER/);
   const done = rotateChain(r.chain, { now: NOW + 1, incoming: { agent: 't1', inRoom: true, fit: true } }).chain;
@@ -508,21 +509,68 @@ await ok('chain: a courier on a lap holds the seat and is not called up mid-lap;
   assert.equal(t.hold, false); assert.equal(t.chain.pending, null); assert.equal(t.chain.striker, 't11');
 });
 await ok('NEVER WITHOUT A STRIKER: across random ticks the striker is never null and is replaced only by an incoming in the room and fit', () => {
-  let chain = { ...CH, courierNext: ['t4', 't6'] };
+  let chain = { ...CH };
+  let n = 20;
   let seed = 7; const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
   for (let i = 0; i < 2000; i++) {
     const inc = { agent: chain.pending?.incoming ?? chain.courier, inRoom: rnd() < 0.5, fit: rnd() < 0.6, onLap: rnd() < 0.2 };
     const before = chain.striker;
     const r = rotateChain(chain, { now: NOW + i * 15_000, vacancies: rnd() < 0.3 ? [{ agent: 'tx', why: 'test' }] : [], incoming: inc,
-      oldStriker: { agent: before, knowsArchery: rnd() < 0.5 }, pulling: rnd() < 0.2 });
+      oldStriker: { agent: before, knowsArchery: rnd() < 0.5 }, pulling: rnd() < 0.2,
+      nextCourier: rnd() < 0.2 ? { agent: null, why: 'none' } : { agent: `t${n++}`, why: 'rule' } });
     assert.ok(r.chain.striker, `tick ${i}: no striker`);
     if (r.chain.striker !== before) {
       assert.ok(inc.inRoom && inc.fit, `tick ${i}: tip handed to an incoming not in the room or not fit`);
       assert.deepEqual(r.actions.map(a => a.kind), ['to_archer']);
+      assert.equal(r.chain.striker, inc.agent, 'the tip goes to the called-up courier and nobody else');
     }
     for (const a of r.actions) if (a.kind === 'to_archer') assert.equal(a.agent, before, 'only the old striker goes to an archer seat');
     chain = r.chain;
   }
+});
+
+// ------------------------------------------------------------------- choosing the next courier, and sending it early
+const C = (agent, maxHealth, { fire = true, archery = false, disco = false, room = 2001, piloted = false } = {}) =>
+  ({ agent, maxHealth, knows: { fire, archery }, spells: disco ? ['discordance'] : [], room, piloted });
+const POOL = [C('t4', 120), C('t5', 140, { disco: true }), C('t6', 150, { archery: true }), C('t8', 130),
+  C('t16', 160, { fire: false }), C('hk2', 200), C('t12', 170, { piloted: true }), C('t19', 180, { room: 714 }),
+  C('t21', 175), C('t22', 165, { disco: true })];
+await ok('next courier, default rule: highest max health that knows fire and neither archery nor discordance', () => {
+  const r = chooseNextCourier({ candidates: POOL, needle: { archers: [{ agent: 't3', skill: 60, spells: [] }, { agent: 't9', skill: 90, spells: ['discordance'] }], others: ['t11', 't1'] },
+    hallGroup: ['t19', 't18', 't21', 't13', 't20'] });
+  assert.equal(r.rule, 'default'); assert.equal(r.top, 't3', 'most training ahead: 99 - 60');
+  assert.equal(r.agent, 't8', 't16 knows no fire, t6 knows archery, t5/t22 discordance, t12 piloted, t19/t21 the hall, hk2 the service fleet');
+  assert.match(r.why, /highest max health \(130\)/);
+});
+await ok('next courier, disco rule: the top archer knows discordance -> the highest max health discordance knower', () => {
+  const r = chooseNextCourier({ candidates: POOL, needle: { archers: [{ agent: 't3', skill: 95, spells: [] }, { agent: 't9', skill: 40, spells: ['discordance'] }], others: [] },
+    hallGroup: ['t19', 't21'] });
+  assert.equal(r.rule, 'disco'); assert.equal(r.top, 't9');
+  assert.equal(r.agent, 't22');
+  assert.match(r.why, /sandstorm room/);
+  const nextOut = chooseNextCourier({ candidates: POOL, needle: { archers: [{ agent: 't3', skill: 95, spells: [] }, { agent: 't9', skill: 40, spells: ['discordance'] }] },
+    hallGroup: ['t19', 't21'], rule: { topBy: 'next_out' } });
+  assert.equal(nextOut.top, 't3'); assert.equal(nextOut.rule, 'default', 'the other reading of "highest remaining"');
+});
+await ok('next courier: the exclusions, and nobody eligible is said with the reasons', () => {
+  const r = chooseNextCourier({ candidates: POOL, needle: { archers: [{ agent: 't3', skill: 60 }], others: ['t8', 't4'] }, exclude: ['t22', 't21'], hallGroup: [] });
+  assert.equal(r.agent, null, 't8 and t4 in the needle; nobody else qualifies');
+  assert.match(r.why, /nobody eligible/); assert.equal(r.refused.hk2, 'service fleet'); assert.equal(r.refused.t12, 'piloted');
+  assert.equal(r.refused.t19, 'posted in the guild hall 714'); assert.equal(r.refused.t8, 'already in the needle'); assert.equal(r.refused.t22, 'excluded');
+  const d = chooseNextCourier({ candidates: POOL, needle: { archers: [{ agent: 't9', skill: 10, spells: ['discordance'] }] }, exclude: ['t5', 't22'] });
+  assert.equal(d.agent, null); assert.equal(d.rule, 'disco');
+});
+await ok('pre-dispatch: an archer at 98 (in the skill it trains) sends the next courier now, once', () => {
+  assert.equal(preDispatchDue([{ agent: 't3', skill: 97 }, { agent: 't9', skill: 50 }]).due, false);
+  const d = preDispatchDue([{ agent: 't3', skill: 98 }, { agent: 't9', skill: 50 }]);
+  assert.equal(d.due, true); assert.equal(d.archer, 't3');
+  assert.equal(preDispatchDue([{ agent: 't3', skill: 98 }], { already: { agent: 't8' } }).due, false, 'not twice');
+  // The pre-dispatched courier is the one the call-up uses, and it is out of the candidate pool meanwhile.
+  const pick = chooseNextCourier({ candidates: POOL, needle: { archers: [{ agent: 't3', skill: 98 }], others: ['t11', 't1'] }, hallGroup: ['t19', 't21'] });
+  const r = rotateChain({ striker: 't11', courier: 't1', next: { agent: pick.agent, why: pick.why }, pending: null, history: [] },
+    { now: NOW, vacancies: [{ agent: 't3', why: 'reached 99' }], incoming: { agent: 't1' } });
+  assert.equal(r.chain.courier, pick.agent);
+  assert.equal(chooseNextCourier({ candidates: POOL, needle: { archers: [], others: [pick.agent] } }).agent === pick.agent, false);
 });
 
 // ----------------------------------------------------------------------------------------------------- disco duty

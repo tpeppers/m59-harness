@@ -338,7 +338,7 @@ through a nested shelter order.
   A pass naming another room lets nothing out, and a cancel, the next journey, a different start room or
   two minutes ends it. See docs/m59-boundary.md.
 
-- `m59-needle-farm-test.mjs` (40): `needle`, the single striker in the needle with archers behind it. The field
+- `m59-needle-farm-test.mjs` (44): `needle`, the single striker in the needle with archers behind it. The field
   takes `{ site, role }` only and the site file refuses bare pairs, unknown keys (a `fleeBelow` included), a `hold`
   bench with no squares, a duplicated station or one on the striker's square; notes (`_x`, `why`) pass. Target choice:
   the closest valid monster in reach, a closer one takes the next swing, a tie keeps the current one, sight breaks a
@@ -358,9 +358,13 @@ through a nested shelter order.
   the 2143 example site checks clean, every station sees the tip, the tip steps only NE/E/SW and the striker square
   only back; the example holds seven archers, Sweetums then Kermit as strikers, Camilla on disco duty. The ROTATION CHAIN
   (courier -> striker -> archer): vacancies (off roster, at stop_at, away past seatVacantS); a free seat calls the
-  courier up and takes the next from courier_next; the handover waits for the incoming striker in the room, fit and
-  between pulls, then gives the old striker the seat (FIRE without archery); an empty courier_next stops the courier job
-  out loud and the next free seat promotes nobody; a courier on a lap is never called up; a stuck handover times out;
+  courier up and hands the job to the pre-dispatched next courier; the handover waits for the incoming striker in the room,
+  fit and between pulls, then gives the old striker the seat (FIRE without archery); nobody eligible stops the courier job
+  out loud and the next free seat promotes nobody; the NEXT-COURIER RULE picks the highest max health fire-not-archery-
+  not-discordance character by default and the highest max health discordance knower when the archer with the most
+  training ahead knows discordance (`top_by: 'next_out'` the other reading), refusing hk*, piloted, in-the-needle, the
+  714 hall group and `exclude` with reasons; PRE-DISPATCH fires at 98, once, and the pre-dispatched courier is the one the
+  call-up uses; a courier on a lap is never called up; a stuck handover times out;
   2000 random ticks never leave the needle without a striker. DISCO DUTY: a held seat survives a stale row and is never
   given away, an away archer is not the puller, `disco_missing` when no caster is present; on the keeper a disco archer in
   a storm stops shooting and publishes its hold, and shoots again from the same seat after. Shared rows go to a temp

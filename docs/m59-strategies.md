@@ -519,13 +519,13 @@ striker, so he gets first dibs on next becoming a bower as people cycle out/in (
 will be selected, they become the next bower, etc.)... and we'll have the Han-lan arrow person become the next striker, as
 each person rotates (that way the arrow person is what's really rotating, which leaves the group basically never without
 a striker)."* The decisions are pure (`chainVacancies`, `rotateChain` in `m59-needle-farm.mjs`) and the island
-coordinator executes them (`avar-village-ops.needle-draft.mjs`, config `needle.chain { striker, courier, courier_next }`;
-2143: Sweetums t11, Kermit t1, `courier_next` empty):
+coordinator executes them (`avar-village-ops.needle-draft.mjs`, config `needle.chain { striker, courier, ... }`; 2143:
+Sweetums t11 strikes, Kermit t1 couriers, and every courier after him is CHOSEN, below):
 
 | step | when | what |
 |---|---|---|
 | vacancy | an archer reaches `stop_at` (99), leaves the roster, or is away from the island's farm rooms (dead, logged out, locked out) for `seat_vacant_s` (300) | the seat is free |
-| call-up | a free seat, a courier, and the courier not on a lap (`scratch/needle-courier-state.json`) | the courier gets the striker strategy and goes back on the roster; its keeper walks to the needle and waits on the bench (the incumbent keeps the tip). The next courier is `courier_next[0]` -- or nobody: logged, and the courier job stops |
+| call-up | a free seat, a courier, and the courier not on a lap (`scratch/needle-courier-state.json`) | the courier gets the striker strategy and goes back on the roster; its keeper walks to the needle and waits on the bench (the incumbent keeps the tip). The pre-dispatched next courier takes the job -- or, if none was sent, the rule chooses one now -- or nobody (none eligible): logged with the reasons, and the courier job stops |
 | handover | the called-up striker is IN the needle's room, fit for the tip (`minHealth + 0.2`), and no pull is out | the old striker gets the archer strategy and takes the free seat first; `archers.skill_by` FIRE when it knows no archery (Sweetums: fire 11, archery unknown). The tip passes at the next keeper pass |
 
 While either step waits, the free seat is HELD for the striker (the archer queue may not fill it), up to `hold_max_s`
@@ -535,6 +535,30 @@ its replacement is a fit striker-role keeper in the room, and `m59-needle-farm-t
 chain to pin it. Every step is logged with why. The courier half is `hanla-courier.needle-draft.mjs`: it serves whoever
 the chain names, lives in the clearing (2144) between laps, drops its arrows on Zheng He (and any 2101 cache) where the
 archers restock, and never on the guild hall chests.
+
+**THE NEXT COURIER IS CHOSEN, AND SENT EARLY.** Operator, 2026-11-05: *"The arrow carrier should be replaced by the
+highest health person who has fire but not [archery or discordance] each time, unless the bow practicer in the needle who
+has the highest remaining archery skill knows discordance, in which case the next hanlan arrow carrier should be someone
+who knows discordance: this should ensure someone who knows discordance is always in the room that sandstorms are cast
+... The next arrow carrier should actually just head to the island when someone hits 98 archery (since they'll imminently
+hit 99 archery, in the next hour or two, but it's a long walk to the island)."* `chooseNextCourier`:
+
+- **candidates**: the fleet's `t<n>` characters only (never the service fleet `hk*`), never piloted, never anyone already
+  in the needle (its striker, courier, called-up striker, pre-dispatched courier, archers), never anyone posted in the
+  Barloque guild hall (room 714, or `hall_group`: the maxed-archery group t19, t18, t21, t13, t20), never `exclude`;
+- **default**: the highest MAX health that knows fire and knows neither archery nor Discordance;
+- **disco**: when the needle archer with the most training still ahead knows Discordance, the highest max health
+  Discordance knower instead -- so a Discordance knower is always in the sandstorm room.
+
+**"Highest remaining" is read as the most training still ahead: the largest `99 - skill`** in the skill the archer trains
+(archery, or fire for an archer `skill_by` fire). That is the archer who will be at the needle longest. The other reading
+-- the archer closest to 99, who leaves next -- is `top_by: 'next_out'`; this is an open question for the operator. Every
+choice is logged with its reasons (`NEEDLE NEXT COURIER`), including who was refused and why when nobody qualifies.
+
+**PRE-DISPATCH.** When any needle archer reaches `pre_dispatch_at` (98) in the skill it trains, the next courier is chosen
+then and walked to `stage_room` (2144, the clearing beside the needle, where the courier lives; NO_COMBAT for monsters) so
+it is on the island before the seat frees. It is kept out of the archer queue and the candidate pool meanwhile, and the
+call-up hands it the courier job.
 
 **DISCO DUTY.** Operator: *"Ideally one person in each group has 'Discordance' and can be on 'disco duty' to keep the
 sandstorms down, the sandstorms can be a serious problem for this strategy."* The site's `disco.agents` (2143: Camilla,
@@ -546,7 +570,9 @@ casts, each cast freezing that keeper for the trance). Its row says `away: 'disc
 next archer meanwhile. `disco.castSquare` null (2143) casts from the station -- threat 0, the casting safety standard's
 best case; set it to make the caster step out and back. The storm lifted, it shoots again from the same seat. A needle
 with no configured caster present is `disco_missing`, and both the keepers (`NEEDLE HAS NO DISCORDANCE CASTER`) and the
-coordinator (by spell knowledge, every 5 minutes) say so loudly.
+coordinator (by spell knowledge, every 5 minutes) say so loudly. Disco duty is a property of the NEEDLE SITE only
+(operator: "No other places will have sandstorms"); nothing else in this repository gains Discordance logic. The island
+coordinator's own dispel module is unchanged.
 
 **Survival is the keeper's, unchanged** ([the boundary](m59-boundary.md)). The needle runs inside passFarm, below
 passFleeAndRest and the fight-back rungs; every exchange is `fight()` held to the square with the keeper's own flee
@@ -584,7 +610,7 @@ archer's behalf are not keeper rows -- both said in the report. Every pull is a 
 (no `autopilot` argument). On prod, the island coordinator gives the roles: `avar-village-ops.needle-draft.mjs` (beside
 the live file, for review) adds a `needle` module -- the first `needle.strikers` melee (default 2) get the striker
 strategy, the rationed archers get the needle's archer strategy, and `needle.archers` (`max`, `prefer`) replaces
-`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (40) pins it.
+`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (44) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 

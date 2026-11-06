@@ -375,11 +375,12 @@ export function slotOf(alloc, agent) {
 // rotating, which leaves the group basically never without a striker)."
 //
 // So the chain is ARROW COURIER -> STRIKER -> ARCHER. When an archer seat frees, the current striker takes it; the courier
-// becomes the striker; the next courier comes from `courierNext`. It is TWO STEPS so the tip is never empty:
+// becomes the striker; the next courier is CHOSEN by `chooseNextCourier` (below) -- usually ahead of time, when an archer
+// nears the end (`preDispatchDue`), so it is already on the island. It is TWO STEPS so the tip is never empty:
 //
 //   CALL-UP     a seat is vacant, there is a courier, and the courier is not on a lap: the courier is given the striker's
 //               strategy (its keeper walks to the needle and waits on the bench, because the incumbent keeps the tip), and
-//               the next courier is taken from `courierNext` -- or nobody, said out loud, and the courier job stops.
+//               the chosen next courier takes the job -- or nobody (none eligible), said out loud, and the job stops.
 //   HANDOVER    the called-up striker is IN the needle's room and fit for the tip (minHealth + 0.2, the newcomer floor
 //               `allocate` uses), and no pull is out: the old striker is given the archer strategy (FIRE if it knows no
 //               archery), and the tip passes to the bench at the next keeper pass. Only then.
@@ -412,13 +413,15 @@ export function chainVacancies({ archers = [], rows = [], rooms = [], absentSinc
 }
 
 /**
- * One coordinator tick of the chain. `chain` = { striker, courier, courierNext: [], pending: null | { incoming, seat, why,
+ * One coordinator tick of the chain. `chain` = { striker, courier, next: null | { agent, why }, pending: null | { incoming, seat, why,
  * at }, history: [] }. `incoming` = { agent, inRoom, fit, onLap } for the courier (before a call-up) or the pending
- * incoming striker; `oldStriker` = { agent, knowsArchery }.
+ * incoming striker; `oldStriker` = { agent, knowsArchery }; `nextCourier` = { agent, why } | null, the courier to take the job
+ * at a call-up (the caller's chooseNextCourier, or the one it already pre-dispatched, `chain.next`).
  * -> { chain, actions: [{ kind: 'call_up', agent } | { kind: 'to_archer', agent, skill: 'archery'|'fire' }], hold, log }
  */
-export function rotateChain(chain, { now = Date.now(), vacancies = [], incoming = null, oldStriker = null, pulling = false, holdMaxS = CHAIN_DEFAULTS.holdMaxS } = {}) {
-  const c = { striker: chain?.striker ?? null, courier: chain?.courier ?? null, courierNext: [...(chain?.courierNext ?? [])],
+export function rotateChain(chain, { now = Date.now(), vacancies = [], incoming = null, oldStriker = null, pulling = false, holdMaxS = CHAIN_DEFAULTS.holdMaxS,
+  nextCourier = undefined } = {}) {
+  const c = { striker: chain?.striker ?? null, courier: chain?.courier ?? null, next: chain?.next ?? null,
     pending: chain?.pending ?? null, history: [...(chain?.history ?? [])].slice(-50) };
   const actions = [], log = [];
   const say = (line, rec) => { log.push(line); c.history.push({ at: now, ...rec, why: line }); };
@@ -454,13 +457,75 @@ export function rotateChain(chain, { now = Date.now(), vacancies = [], incoming 
   }
   // CALL-UP.
   const up = c.courier;
-  c.courier = c.courierNext.shift() ?? null;
+  const nx = nextCourier !== undefined ? nextCourier : c.next;
+  c.courier = nx?.agent ?? null;
+  c.next = null;
   c.pending = { incoming: up, seat: v.agent, why: v.why, at: now };
   actions.push({ kind: 'call_up', agent: up });
+  if (c.courier) actions.push({ kind: 'new_courier', agent: c.courier, why: nx.why ?? null });
   say(`chain: ${v.agent}'s seat is free (${v.why}); courier ${up} is called up to the needle as the next striker; ` +
-    (c.courier ? `${c.courier} is the new arrow courier` : 'NO NEXT COURIER (courier_next is empty): the arrow courier job stops'),
+    (c.courier ? `${c.courier} is the new arrow courier (${nx.why ?? 'chosen'})` : `NO NEXT COURIER (${nx?.why ?? 'nobody eligible'}): the arrow courier job stops`),
     { kind: 'call_up', agent: up, next_courier: c.courier });
   return { chain: c, actions, hold: true, log };
+}
+
+// --------------------------------------------------------------------------------------------- choosing the next courier
+//
+// Operator, 2026-11-05: "The arrow carrier should be replaced by the highest health person who has fire but not [archery or
+// discordance] each time, unless the bow practicer in the needle who has the highest remaining archery skill knows
+// discordance, in which case the next hanlan arrow carrier should be someone who knows discordance: this should ensure
+// someone who knows discordance is always in the room that sandstorms are cast". And: "The next arrow carrier should
+// actually just head to the island when someone hits 98 archery".
+//
+// "HIGHEST REMAINING" IS READ AS THE MOST TRAINING STILL AHEAD: the needle archer with the largest `stopAt - skill`, i.e. the
+// one who will stay at the needle longest (the coordinator's reading, 2026-11-05). The other reading -- the archer closest to
+// 99, who leaves NEXT -- is `topBy: 'next_out'`; the operator should say which he meant.
+
+export const COURIER_RULE_DEFAULTS = Object.freeze({ stopAt: 99, preDispatchAt: 98, topBy: 'most_remaining', hallRoom: 714 });
+
+/**
+ * THE NEXT ARROW COURIER. `candidates` are the fleet's characters as read: `{ agent, maxHealth, knows: { fire, archery },
+ * spells: [names], piloted, room }`. `needle` = { archers: [{ agent, skill, spells }], others: [agents already in the
+ * needle: striker, courier, pending, pre-dispatched] }. Never a service body (only `t<n>`), never piloted, never anyone in
+ * the needle, never anyone in the Barloque guild hall (`hallRoom` 714) or on `hallGroup`, never `exclude`.
+ *   default   the highest max health that knows fire and knows neither archery nor discordance;
+ *   disco     when the top needle archer (`topBy`) knows discordance: the highest max health that knows discordance.
+ * -> { agent, why, rule, top } or { agent: null, why, rule, top }. Every reason is in `why`.
+ */
+export function chooseNextCourier({ candidates = [], needle = {}, exclude = [], hallGroup = [], rule = {} } = {}) {
+  const R = { ...COURIER_RULE_DEFAULTS, ...rule };
+  const DISCO = /\bdiscordance\b/i;
+  const knowsDisco = x => (x?.spells ?? []).some(n => DISCO.test(String(n)));
+  const archers = (needle.archers ?? []).filter(a => Number.isFinite(a?.skill));
+  const left = a => R.stopAt - a.skill;
+  const top = [...archers].sort((a, b) => (R.topBy === 'next_out' ? left(a) - left(b) : left(b) - left(a)) || String(a.agent).localeCompare(String(b.agent)))[0] ?? null;
+  const disco = !!top && knowsDisco(top);
+  const inNeedle = new Set([...(needle.archers ?? []).map(a => a.agent), ...(needle.others ?? [])].filter(Boolean));
+  const refused = {};
+  const eligible = candidates.filter(x => {
+    const why = !/^t\d+$/.test(String(x?.agent)) ? 'service fleet' : x.piloted ? 'piloted' : inNeedle.has(x.agent) ? 'already in the needle'
+      : (Number(x.room) === R.hallRoom || hallGroup.includes(x.agent)) ? `posted in the guild hall ${R.hallRoom}` : exclude.includes(x.agent) ? 'excluded' : null;
+    if (why) refused[x.agent] = why;
+    return !why;
+  });
+  const want = disco ? (x => knowsDisco(x)) : (x => x.knows?.fire && !x.knows?.archery && !knowsDisco(x));
+  const pick = eligible.filter(want).sort((a, b) => (Number(b.maxHealth) || 0) - (Number(a.maxHealth) || 0) || String(a.agent).localeCompare(String(b.agent)))[0] ?? null;
+  const topSay = top ? `${top.agent} has the most training ahead (${left(top)} to ${R.stopAt})${disco ? ' and knows discordance' : ''}` : 'no needle archer read';
+  const ruleSay = disco ? 'a discordance knower, so one is always in the sandstorm room' : 'knows fire, knows neither archery nor discordance';
+  return {
+    agent: pick?.agent ?? null, rule: disco ? 'disco' : 'default', top: top?.agent ?? null,
+    why: pick ? `${pick.agent}: highest max health (${pick.maxHealth}) that ${ruleSay}; ${topSay}`
+      : `nobody eligible who ${ruleSay}; ${topSay}; refused: ${Object.entries(refused).map(([a, w]) => `${a} ${w}`).join(', ') || 'none'}`,
+    refused,
+  };
+}
+
+/** PRE-DISPATCH: a needle archer at `preDispatchAt` (98) in the skill it trains -> choose and send the next courier now. */
+export function preDispatchDue(archers = [], { preDispatchAt = COURIER_RULE_DEFAULTS.preDispatchAt, already = null } = {}) {
+  if (already) return { due: false, why: `${already.agent ?? already} is already on the way` };
+  const near = archers.filter(a => Number.isFinite(a?.skill) && a.skill >= preDispatchAt).sort((a, b) => b.skill - a.skill);
+  return near.length ? { due: true, archer: near[0].agent, why: `${near[0].agent} is at ${near[0].skill} (pre-dispatch at ${preDispatchAt})` }
+    : { due: false, why: `no needle archer at ${preDispatchAt}` };
 }
 
 // --------------------------------------------------------------------------------------------------------- the pull
