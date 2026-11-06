@@ -414,6 +414,9 @@ through a nested shelter order.
   coordinator's seed across ticks; cooperative LOGOFF never takes a needle keeper (no request, never a helper); knowing a
   spell reads the live list, else asks the server and believes the ability book; `trust: "operator"` takes the squares
   verbatim, warns instead of failing, and does not route walks around the doubted model.
+  The shipped 2143 example is the operator's needle: striker r36c40, kill r35c41, his six wall squares in his order then the
+  two between, nobody east of c40, every square standable, check passing with the model's objections as warnings and
+  nothing dropped or reordered.
 
 - `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy

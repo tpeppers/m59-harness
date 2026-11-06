@@ -930,29 +930,33 @@ await ok('survival stays above: needle code lives in passFarm, below the ladder,
 });
 
 // ------------------------------------------------------------------------------- the 2143 example, on the shipped map
-await ok('the shipped 2143 example site loads and is proved on the shipped map', async () => {
+await ok('the shipped 2143 example is the OPERATOR\'s needle, verbatim: striker r36c40, kill r35c41, the wall line, nobody east of c40', async () => {
   const { site } = loadSite('deep-jungle-2143', { dirs: [], extraDirs: [new URL('../substrate/needles.example', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')] });
-  assert.deepEqual(site.kill, W(34, 43));
-  assert.deepEqual(site.striker.station, W(35, 42));
-  // Operator 2026-11-05: seven archers, in this order; the seventh station is r32c43.
+  assert.equal(site.trust, 'operator');
+  assert.deepEqual(site.kill, W(35, 41));
+  assert.deepEqual(site.striker.station, W(36, 40));
+  // Operator 2026-11-06, in his fill order, then the wall squares between them.
+  assert.deepEqual(site.archers.stations.slice(0, 6), [W(37, 40), W(38, 38), W(40, 36), W(41, 36), W(42, 36), W(43, 36)]);
   assert.equal(archerSlots(site), 7);
+  const all = [site.striker.station, ...site.archers.stations, ...site.reserve.squares, ...site.striker.yieldSquares];
+  assert.ok(all.every(q => q.col <= 40), 'nobody east of c40');
   assert.deepEqual(site.roster.archers, ['t3', 't2', 't10', 't14', 't15', 't7', 't9']);
-  assert.deepEqual(site.archers.stations[6], W(32, 43));
-  assert.deepEqual(site.roster.strikers, ['t11', 't1'], 'Sweetums strikes, Kermit is next');
-  assert.deepEqual(site.disco.agents, [], 'disco duty follows the rotation: any needle archer that knows Discordance');
-  assert.deepEqual(site.mend.stock, { 'orc tooth': 30, sapphire: 30 }); assert.equal(site.mend.agents, null);
+  assert.deepEqual(site.roster.strikers, ['t11', 't1']);
+  assert.deepEqual(site.mend.stock, { 'orc tooth': 30, sapphire: 30 });
   let map;
   try { map = (await import('./m59-map.mjs')).loadMap(); } catch { console.log('   (no map on disk: geometry half skipped)'); return; }
   (await import('./m59-routes.mjs')).attachStepMasks(map);
   const geo = (await import('./m59-roo.mjs')).sharedRoomGeometry(map.rooms['2143']);
   const lib = await import('./m59-safespots.mjs');
   const r = checkSite(site, geo, lib);
-  assert.ok(r.ok, JSON.stringify(r.rows.filter(x => !x.ok)));
-  assert.deepEqual(r.blind_stations, [], 'every archer station sees the tip');
-  const d = deriveNeedle(geo, { kill: site.kill, striker: site.striker.station, strikerReach: 3, lib });
-  assert.deepEqual(d.kill_coarse_dirs.sort(), ['-1,1', '0,1', '1,-1'].sort(), 'the tip steps NE, E and SW only');
-  assert.deepEqual(d.striker_coarse_dirs, ['-1,1'], 'the striker square leads only back to the tip');
-  assert.equal(d.stations[0].square, 'r34c41');
+  assert.equal(r.ok, true, 'operator squares pass');
+  assert.ok(r.warnings.length > 0, 'and the model\'s disagreement is reported, not hidden');
+  assert.deepEqual(r.rows.filter(x => x.what.startsWith('archer station')).map(x => x.square), site.archers.stations.map(q => `r${q.row}c${q.col}`), 'nothing dropped or reordered');
+  for (const q of all) assert.ok(geo.walkable(q.row, q.col) && !!geo.standPoint(q.row, q.col), `r${q.row}c${q.col} is standable`);
+  // The retired first approximation, as geometry facts: on the coarse grid r34c43 steps NE, E and SW, and r35c42 only back.
+  const d = deriveNeedle(geo, { kill: W(34, 43), striker: W(35, 42), strikerReach: 3, lib });
+  assert.deepEqual(d.kill_coarse_dirs.sort(), ['-1,1', '0,1', '1,-1'].sort());
+  assert.deepEqual(d.striker_coarse_dirs, ['-1,1']);
 });
 
 console.log(`\n${n} passed`);

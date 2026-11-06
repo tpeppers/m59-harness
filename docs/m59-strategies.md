@@ -721,6 +721,15 @@ So a site may say `"trust": "operator"`: its squares are the operator's, taken V
 the model thinks of each square, as WARN lines and `warnings`, and passes; and needle walks do not route around the
 model's monster ground, since the model is what is in doubt. `derive --grid coarse|fine` shows either model.
 
+**THE 2143 SITE IS NOW THE OPERATOR'S** (2026-11-06): *"Striker r36c40. Kill square r35c41: the monster stops there, NE of the
+striker. Archers, in fill order: r37,c40 , r38,c38 , r40,c36, r41,c36 , r42,c36 , r43,c36 and anywhere in between it's
+basically just 'line up along the wall that has line of sight to r36,c41 area'"*. The example () has
+those six in that order, then the wall squares between them (r39c37, r38c39), capacity 7; the bench south along the same
+wall (r44c36, r44c37, r45c37, r46c37); the striker's yield squares west and south-west of it (r36c39, r37c39); the front
+archer pulling from r37c40. Nothing is east of c40. Every square is walkable, BSP-standable and reachable. The model's
+staircase line of sight says only r37c40 sees r35c41 (and only on the monster_grid), and  says so as warnings --
+the operator's squares stand. The first site (striker r35c42, kill r34c43) is retired.
+
 Not changed, and reported: the striker left the room through the survival ladder's caster exit ("a caster is in the room:
 no spot here holds") -- avar shamans cast without a range or sight check (monster.kod MonsterCanCastSpell), so no square in
 2143 is safe from a spell, and archers resting on a station can still take spell damage. That is survival, and it is the
