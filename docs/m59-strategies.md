@@ -658,6 +658,36 @@ every decision: `walk`, `stand_in`, `fight`, `wait`, `pull`, `bench`). What took
   monster other than its own choice -- "broke off, landed 0" pass after pass -- and its passive hold took whole passes before
   passFarm. A keeper with a needle in its room is now out of cooperative combat, like a buddy farmer.
 
+- **Two of the seven stations and the pull square could only be walked to ACROSS MONSTER GROUND.** The derivation had
+  asked "can the mover reach it from the striker's square", and in 2143 every shortest walk from the pocket to the east
+  stations ran through the tip and the kill square; r32c43 and the old pull square r30c43 had no other way at all. Now
+  `deriveNeedle` seeds the bench and keeps only squares reachable from it without stepping on the monster component
+  (`reachAvoiding`, `safe_route`; `unsafe_route` lists the rest), `checkSite` fails a station, the pull square, the bench
+  or a yield square that has no safe route unless the site names it in `archers.acceptUnsafeRoute` (a compromise, said in
+  the check), and every needle walk passes the monster component, the tip excepted, as `avoidSquares`. In 2143 only SIX
+  sighted stations have a safe route, and they form a ONE-WIDE CORRIDOR (bench -> r34c40 -> r34c41 -> r34c42 -> r35c43 ->
+  r35c44 -> r34c45, r33c43 off r34c42): the example orders them FAR END FIRST so each arrival passes empty squares, and the
+  front archer pulls from its own seat, r34c45, which sees 90 monster squares. The operator's seventh seat is r32c43,
+  accepted by name: threat 0, sees the tip, and every walk to it crosses r34c43/r33c44.
+
+**THE STRIKER ALWAYS MAKES SPACE.** Operator, 2026-11-06: *"the striker should step back/aside (toward the archers, away
+from monsters) if/when the courier try to walk past, because they don't want to be blocking the thin part of the needle
+and start a forever traffic jam that stops their own archers from resupplying"*, and then *"It should just always make
+space, they dont actually block the needle from monsters, only from players (the monsters are blocked by the map
+itself)"*. So there is NO exception for a monster at the kill square: the tip is a coarse-grid dead end, and the geometry,
+not the striker's body, stops the pack. `yieldDecision`:
+
+- a PASSER is a fleet-mate (`party.isFleetmate`: the roster and the menagerie) within `striker.passRadius` (3) of the tip
+  that is in transit -- not standing on one of the site's safe squares -- or a needle keeper whose row says `passing`
+  (written by `needleWalk` before it walks, with its target). A body that has not moved for 30 s is PARKED, not passing,
+  or one idling beside the tip would keep the striker off it for ever;
+- the striker steps to the first of `striker.yieldSquares` (derived: safe squares one mover step off the tip and back,
+  not stations, farthest from monster ground first -- 2143: r36c41, r35c41) that is free and not on a passer's planned
+  way, stays while anyone is passing, at most `striker.yieldMaxS` (20 s) at a time, then goes back, and yields again
+  after a 3 s cooldown if somebody still is. It swings from a yield square if something comes into reach (threat 0);
+- `needle.yield` in status says who it made space for and why. The no-deadlock test walks two bodies through the
+  one-wide part in opposite directions with the striker in the middle, and both get through.
+
 Not changed, and reported: the striker left the room through the survival ladder's caster exit ("a caster is in the room:
 no spot here holds") -- avar shamans cast without a range or sight check (monster.kod MonsterCanCastSpell), so no square in
 2143 is safe from a spell, and archers resting on a station can still take spell damage. That is survival, and it is the
@@ -699,7 +729,7 @@ archer's behalf are not keeper rows -- both said in the report. Every pull is a 
 (no `autopilot` argument). On prod, the island coordinator gives the roles: `avar-village-ops.needle-draft.mjs` (beside
 the live file, for review) adds a `needle` module -- the first `needle.strikers` melee (default 2) get the striker
 strategy, the rationed archers get the needle's archer strategy, and `needle.archers` (`max`, `prefer`) replaces
-`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (54) pins it.
+`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (59) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 

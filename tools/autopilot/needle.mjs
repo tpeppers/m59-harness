@@ -27,7 +27,8 @@
 // keeper's own flee line as `disengageAt`, and a striker that breaks off retreats through `retreatToSafety`, the same
 // call passFarm makes.
 import { bodyAuthority } from '../m59-body-command.mjs';
-import { allocate, chooseTarget, loadSite, mendStock, needleBusy, normNeedle, pullDue, readPresence, roleReach, safeSquaresFor, slotOf, sq, standInFor, writePresence } from '../m59-needle-farm.mjs';
+import { allocate, chooseTarget, loadSite, mendStock, needleBusy, normNeedle, pullDue, readPresence, roleReach, monsterComponent, safeSquaresFor, slotOf, sq, standInFor, writePresence, yieldDecision } from '../m59-needle-farm.mjs';
+import * as party from '../m59-party.mjs';
 import { bandAtOrBelow, bowBand } from '../m59-practicebow.mjs';
 import { floorsFor, readReserve, reserveBreach, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
 import { OF } from '../m59-parse.mjs';
@@ -243,6 +244,7 @@ export class NeedlePart {
     }
     this._needleHeldNoted = null;
     const st = this.needleState(), now = Date.now(), me = this.s.name;
+    st.site = site;
     if (st.lastPassAt && now - st.lastPassAt <= 120_000) st.dutyMs += now - st.lastPassAt;   // gaps over 2 min are not duty
     st.lastPassAt = now;
     st.quietSince ??= now;
@@ -338,6 +340,11 @@ export class NeedlePart {
       return HANDLED;
     }
     let station = slot.role === 'striker' ? site.striker.station : slot.station;
+    // THE STRIKER MAKES SPACE for a fleet-mate passing the tip (see yieldDecision): the map, not its body, holds the pack.
+    if (slot.role === 'striker' && site.striker.yieldSquares.length) {
+      const y = this.needleYield(site, rows, self, now);
+      if (y.yield) station = y.square;
+    }
     if (slot.role === 'striker' && site.striker.pullStep && alloc.puller?.role === 'archer') {
       const pr = rows.find(r => r.agent === alloc.puller.agent)?.pull;
       if (pr?.phase === 'out' && now - Number(pr.at) < site.pull.excursionS * 1000) station = site.striker.pullStep;
@@ -401,6 +408,57 @@ export class NeedlePart {
     return HANDLED;
   }
 
+  /**
+   * WHO IS PASSING THE TIP, and whether to step aside for them. Fleet-mates seen in this room (the roster and the
+   * menagerie: party.isFleetmate), with when each last moved; needle keepers' rows say `passing` while they walk to a station.
+   */
+  needleYield(site, rows, self, now = Date.now()) {
+    const c = this.s?.client, st = this.needleState();
+    const seen = (st.passSeen ??= new Map()), passers = [];
+    for (const o of c?.room?.objects?.values?.() ?? []) {
+      if (!o || o.id === c.selfId || !(o.flags & OF.PLAYER) || !Number.isFinite(o.row)) continue;
+      const name = c.rsc?.get?.(o.nameRsc) || o.name || '';
+      if (!name || /^<.*>$/.test(name) || !party.isFleetmate(name)) continue;
+      const prev = seen.get(name);
+      const movedAt = !prev || prev.row !== o.row || prev.col !== o.col ? now : prev.movedAt;
+      seen.set(name, { row: o.row, col: o.col, movedAt });
+      passers.push({ name, row: o.row, col: o.col, movedAt });
+    }
+    // A needle keeper walking to a station says so; its body is a passer while it is near the tip, moving or not yet.
+    for (const r of rows ?? []) {
+      if (!r?.passing || r.agent === this.s.name || now - Number(r.passing.at) > 15_000 || !Number.isFinite(r.row)) continue;
+      passers.push({ name: r.agent, row: r.row, col: r.col, movedAt: now, passing: r.passing });
+    }
+    const geo = this.s?.world?.geometry, onWay = new Set();
+    for (const p of passers) {
+      const to = p.passing?.to;
+      if (!to || typeof geo?.path !== 'function') continue;
+      try { for (const q of geo.path(p.row, p.col, to.row, to.col)?.steps ?? []) onWay.add(`${q.row},${q.col}`); } catch { /* no plan: no exclusion */ }
+    }
+    const ys = (st.yield ??= { since: null, endedAt: null });
+    const d = yieldDecision({ site, now, passers, state: ys, occupied: this.needleOccupied(), onWay });
+    if (d.yield && ys.since == null) {
+      ys.since = now;
+      this.note('striker: making space at the tip', { for: d.passers, to: sq(d.square), why: d.why, max_s: site.striker.yieldMaxS });
+    } else if (!d.yield && ys.since != null) {
+      ys.since = null; ys.endedAt = now;
+      this.note('striker: back to the tip', { why: d.why });
+    }
+    st.lastYield = { at: now, ...d, square: d.square ? sq(d.square) : null };
+    return d;
+  }
+
+  /** The needle's monster ground ("row,col"), the striker's station excepted: what a needle walk routes around. Cached. */
+  needleMonsterGround(site) {
+    const geo = this.s?.world?.geometry;
+    if (!geo || typeof geo.openDirections !== 'function') return null;
+    if (this._needleGround?.geo === geo && this._needleGround?.site === site) return this._needleGround.set;
+    let set = null;
+    try { set = monsterComponent(geo, site.kill); set.delete(`${site.striker.station.row},${site.striker.station.col}`); } catch { set = null; }
+    this._needleGround = { geo, site, set };
+    return set;
+  }
+
   /** Squares ("row,col") another body stands on: players and monsters, not floor items (an item has no collision). */
   needleOccupied() {
     const c = this.s?.client, out = new Set();
@@ -424,7 +482,16 @@ export class NeedlePart {
     const left = await this.leaveHold?.(`walking ${why}`).catch(e => ({ refused: true, why: e.message }));
     if (left?.refused) { this.doing = 'waiting'; return HANDLED; }
     this.doing = 'taking the needle';
-    const w = await s.walkTo(to.col, to.row, { maxSteps: 24 }).catch(e => ({ arrived: false, steps: 0, reason: e.message }));
+    // SAID BEFORE THE WALK: the striker reads it and makes space at the tip (yieldDecision).
+    try { const site = st.site;
+      if (site) { const mine = readPresence(site.name).find(x => x.agent === s.name) ?? {};
+        writePresence(site.name, s.name, { ...mine, room: site.room, row: s.client?.self?.row, col: s.client?.self?.col, passing: { to, at: Date.now() } }); } } catch { /* best effort */ }
+    // ROUTED AROUND MONSTER GROUND (live 2026-11-06): the planner's shortest way to the east stations ran across the kill
+    // square, into the pack. The tip itself stays walkable -- the striker makes space there.
+    const here = { site: st.site ?? null };
+    const accepted = here.site?.archers?.acceptUnsafeRoute?.some(q => ON(q, to));
+    const avoidSquares = here.site && !accepted ? this.needleMonsterGround(here.site) : null;
+    const w = await s.walkTo(to.col, to.row, { maxSteps: 24, ...(avoidSquares?.size ? { avoidSquares } : {}) }).catch(e => ({ arrived: false, steps: 0, reason: e.message }));
     const self = s.client?.self;
     if (ON(self, to) || w?.arrived) { st.walkFails = 0; this.progress(`walked ${why}`); return HANDLED; }
     st.walkFails = (st.walkFails ?? 0) + 1;
@@ -576,7 +643,7 @@ export class NeedlePart {
       puller: st?.alloc?.puller?.agent ?? null, reserve: st?.alloc?.reserve ?? [],
       quiet_s: st?.quietSince ? Math.round((Date.now() - st.quietSince) / 1000) : null,
       last_pull: st?.lastPullAt || null, pulls_10m: (st?.pullTimes ?? []).filter(t => Date.now() - t < 600_000).length,
-      last: st?.last ?? null };
+      last: st?.last ?? null, yield: st?.lastYield ?? null };
   }
   // @end 1
 }

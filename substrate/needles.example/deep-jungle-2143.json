@@ -17,52 +17,68 @@
     "_reach": "3 is a thrust weapon (the nerudite sword the island strikers carry); the keeper clamps it to the weapon in hand (2 for a mace or axe).",
     "pullStep": null,
     "_pullStep": "null: the striker holds the tip through a pull. Every square forward of r35c42 is monster ground.",
-    "minHealth": 0.5
+    "minHealth": 0.5,
+    "yieldSquares": [
+      {
+        "row": 36,
+        "col": 41
+      },
+      {
+        "row": 35,
+        "col": 41
+      }
+    ],
+    "yieldMaxS": 20,
+    "passRadius": 3,
+    "_yield": "Operator 2026-11-06: the striker ALWAYS makes space for a passing fleet-mate -- the map, not its body, stops the monsters. Derived (derive: 'yield'): safe squares one mover step off the tip and back, not stations, threat 0, farthest from monster ground first: r36c41 (2 monster squares within 3, none can see it), r35c41. The keeper takes the one off the passer's way."
   },
   "archers": {
     "stations": [
       {
         "row": 34,
-        "col": 41
-      },
-      {
-        "row": 34,
-        "col": 42
-      },
-      {
-        "row": 35,
-        "col": 43
+        "col": 45
       },
       {
         "row": 35,
         "col": 44
       },
       {
-        "row": 34,
-        "col": 45
-      },
-      {
         "row": 33,
         "col": 43
+      },
+      {
+        "row": 35,
+        "col": 43
+      },
+      {
+        "row": 34,
+        "col": 42
+      },
+      {
+        "row": 34,
+        "col": 41
       },
       {
         "row": 32,
         "col": 43
       }
     ],
-    "_stations": "`derive --room 2143 --striker r35c42 --kill r34c43`, best first: every one is player-walkable from the tip, off the monster component, threat 0 (no monster square within 3 has coarse line of sight to it, so nothing can swing at it: monster.kod:1782) and SEES the tip (so shots count toward archery: player.kod:4096-4108). Ranked by how few monster squares sit within 3 at all. The pocket behind the striker (r35c41, r36c41, ...) is safe too but cannot see the tip: 1-in-25 training.",
+    "_stations": "LIVE FIX 2026-11-06: the six squares that are threat 0, see the tip AND can be walked to from the bench WITHOUT crossing monster ground, ordered FAR END FIRST along the one-wide corridor they form (bench -> r34c40 -> r34c41 -> r34c42 -> r35c43 -> r35c44 -> r34c45, with r33c43 off r34c42): the first archer walks to the end, later ones stop sooner, so an arrival passes empty squares. Station 1 (r34c45) sees 90 monster squares within bow range, so the front archer pulls from its own seat. Station 7 (r32c43) is the operator's seventh seat and a NAMED COMPROMISE: threat 0 and sees the tip, but the only walk to it crosses monster ground (r34c43 / r33c44) -- see acceptUnsafeRoute. The old r30c43 pull square had the same flaw and is gone.",
     "capacity": 7,
     "_capacity": "7 by operator order 2026-11-05: Statler t3, Pepe t2, Animal t10, Piggy t14, Clifford t15, Janice t7, and Camilla t9 as the hopeful +1. The operator's general estimate is 1 striker : 1-4 archers to break even; 1:7 is a training-heavy needle, read `econ` to see what it costs.",
     "reach": 17,
     "_reach": "17 is the battle bow, the shortest bow; a practice bow is 30, a long bow 100. Clamped to the bow in hand.",
-    "pullSquare": {
-      "row": 30,
-      "col": 43
-    },
-    "_pullSquare": "threat 0, sees the tip, 5 squares from the striker, and sees 122 monster squares within bow range: the most of any safe square within 6.",
+    "pullSquare": null,
+    "_pullSquare": "null: the front archer pulls from its own seat, r34c45 (sees 90 monster squares). The old r30c43 was reachable only across the kill square.",
     "minHealth": 0.3,
     "minArrows": 1,
-    "_station7": "r32c43 (the 7th, added 2026-11-05): the 7th square `derive` ranks, so it meets every criterion -- walkable from the tip, off the monster component, threat 0, sees the tip (2.0 squares from it, sees 105 monster squares within bow range). No compromise was needed. It is the most exposed of the seven by `near` (11 monster squares within 3, none of which can see it), and it sits on the front archer's way to the pull square r30c43; bodies do not block a walk."
+    "_station7": "r32c43 (the 7th, added 2026-11-05): the 7th square `derive` ranks, so it meets every criterion -- walkable from the tip, off the monster component, threat 0, sees the tip (2.0 squares from it, sees 105 monster squares within bow range). No compromise was needed. It is the most exposed of the seven by `near` (11 monster squares within 3, none of which can see it), and it sits on the front archer's way to the pull square r30c43; bodies do not block a walk.",
+    "acceptUnsafeRoute": [
+      {
+        "row": 32,
+        "col": 43
+      }
+    ]
   },
   "pull": {
     "idleS": 15,
@@ -94,10 +110,6 @@
     "mode": "hold",
     "squares": [
       {
-        "row": 34,
-        "col": 39
-      },
-      {
         "row": 36,
         "col": 39
       },
@@ -106,11 +118,15 @@
         "col": 41
       },
       {
-        "row": 33,
+        "row": 37,
         "col": 39
+      },
+      {
+        "row": 38,
+        "col": 40
       }
     ],
-    "_squares": "no monster square within 3 of any of them: the bench for the second striker and overflow archers."
+    "_squares": "no monster square within 3, and OFF the corridor to the stations (r33c39 and r34c39 are on or beside it, and were dropped)."
   },
   "staleS": 20,
   "rounds": 1,

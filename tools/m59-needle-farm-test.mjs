@@ -19,9 +19,10 @@ import { join } from 'node:path';
 import { readToolSource } from './autopilot/source.mjs';
 import { Autopilot, HANDLED } from './m59-autopilot.mjs';
 import { STRATEGY_FIELDS, validateStrategy } from './m59-strategy-schema.mjs';
-import { allocate, archerSlots, safeSquaresFor, standInFor, chainVacancies, checkSite, chooseCourierLap, chooseNextCourier, chooseTarget, mendExemptPlan, mendStock, preDispatchDue, rotateChain, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
+import { allocate, archerSlots, safeSquaresFor, standInFor, yieldDecision, chainVacancies, checkSite, chooseCourierLap, chooseNextCourier, chooseTarget, mendExemptPlan, mendStock, preDispatchDue, rotateChain, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
   normNeedle, normSite, parseSquare, pullDue, readPresence, roleReach, shillingsIn, slotOf, weaponReach, writePresence } from './m59-needle-farm.mjs';
 import { OF } from './m59-parse.mjs';
+import * as party from './m59-party.mjs';
 
 const STATE = mkdtempSync(join(tmpdir(), 'needle-test-'));
 process.env.M59_NEEDLE_STATE_DIR = STATE;
@@ -757,6 +758,85 @@ for (const k of ['travelling', 'inert']) Object.defineProperty(ap, k, { value: f
   assert.equal(co.decision(), null); assert.equal(asked, 0);
   ap.policy = { ...ap.policy, needle: null };
   assert.equal(co.ordinary(), true, 'the same keeper without a needle is an ordinary farmer (the control)');
+});
+
+// --------------------------------------------------------------------- the striker makes space; walks avoid monster ground
+// Operator 2026-11-06: "the striker should step back/aside (toward the archers, away from monsters) if/when the courier try
+// to walk past" ... "It should just always make space, they dont actually block the needle from monsters, only from players
+// (the monsters are blocked by the map itself)".
+const YSITE = normSite({ ...SITE_RAW, striker: { ...SITE_RAW.striker, yieldSquares: [W(36, 41), W(35, 41)], yieldMaxS: 20 } });
+const P = (name, row, col, extra = {}) => ({ name, row, col, movedAt: NOW, ...extra });
+await ok('yield: ALWAYS for a fleet-mate in transit near the tip -- no monster exception -- to the first free square off its way', () => {
+  const st = {};
+  const a = yieldDecision({ site: YSITE, now: NOW, passers: [P('Kermit', 36, 40)], state: st });
+  assert.equal(a.yield, true); assert.deepEqual(a.square, W(36, 41)); assert.deepEqual(a.passers, ['Kermit']);
+  const off = yieldDecision({ site: YSITE, now: NOW, passers: [P('Kermit', 36, 40)], state: {}, onWay: new Set(['36,41']) });
+  assert.deepEqual(off.square, W(35, 41), 'r36c41 is on the passer\'s way: the other one');
+  const taken = yieldDecision({ site: YSITE, now: NOW, passers: [P('Kermit', 36, 40)], state: {}, occupied: new Set(['36,41']) });
+  assert.deepEqual(taken.square, W(35, 41));
+  assert.equal(yieldDecision({ site: YSITE, now: NOW, passers: [], state: {} }).yield, false);
+});
+await ok('yield: a seated archer, a far body, or a body parked for 30 s is not passing; a needle walker saying so is', () => {
+  assert.equal(yieldDecision({ site: YSITE, now: NOW, passers: [P('Statler', 34, 41)], state: {} }).yield, false, 'on a station');
+  assert.equal(yieldDecision({ site: YSITE, now: NOW, passers: [P('Kermit', 40, 40)], state: {} }).yield, false, 'beyond passRadius');
+  assert.equal(yieldDecision({ site: YSITE, now: NOW, passers: [P('Kermit', 36, 40, { movedAt: NOW - 31_000 })], state: {} }).yield, false, 'parked');
+  assert.equal(yieldDecision({ site: YSITE, now: NOW, passers: [P('t3', 34, 41, { passing: { to: W(34, 45) } })], state: {} }).yield, true, 'walking through');
+});
+await ok('yield is bounded: back to the tip after yieldMaxS, a short cooldown, then make space again if still needed', () => {
+  const st = { since: NOW - 21_000 };
+  const a = yieldDecision({ site: YSITE, now: NOW, passers: [P('Kermit', 36, 40)], state: st });
+  assert.equal(a.yield, false); assert.equal(a.expired, true);
+  const b = yieldDecision({ site: YSITE, now: NOW + 1000, passers: [P('Kermit', 36, 40, { movedAt: NOW + 1000 })], state: { since: null, endedAt: NOW } });
+  assert.equal(b.yield, false, 'cooldown');
+  const c2 = yieldDecision({ site: YSITE, now: NOW + 4000, passers: [P('Kermit', 36, 40, { movedAt: NOW + 4000 })], state: { since: null, endedAt: NOW } });
+  assert.equal(c2.yield, true, 'and again');
+});
+await ok('NO DEADLOCK: two bodies passing each other in the one-wide part both get through, and the striker is back after', () => {
+  // The corridor the stations form (derive, 2143): bench r36c39 ... r34c41 r34c42 r35c43 r35c44 r34c45, one square wide,
+  // and the tip r35c42 beside it. Two fleet-mates cross it in opposite directions; each square holds one body at a time
+  // unless the two are passing (keepRightAim: a one-square pipe is two lanes, CLAUDE.md), and the striker makes space.
+  const lane = [W(36, 40), W(35, 41), W(35, 42), W(35, 43), W(35, 44), W(34, 45)];
+  let a = 0, b = lane.length - 1, striker = W(35, 42), state = {}, t = NOW, aside = 0;
+  const key = q => `${q.row},${q.col}`;
+  for (let tick = 0; tick < 40 && (a < lane.length - 1 || b > 0); tick++, t += 1000) {
+    const passers = [P('Kermit', lane[a].row, lane[a].col, { movedAt: t }), P('Statler', lane[b].row, lane[b].col, { movedAt: t })]
+      .filter((p, i) => (i === 0 ? a < lane.length - 1 : b > 0));
+    const d = yieldDecision({ site: YSITE, now: t, passers, state, occupied: new Set(passers.map(key)) });
+    if (d.yield) { if (state.since == null) state.since = t; striker = d.square; aside++; }
+    else if (state.since != null) { state.since = null; state.endedAt = t; striker = W(35, 42); }
+    // Each walker steps when its next square is free of the striker; meeting each other they pass (two lanes).
+    const na = Math.min(a + 1, lane.length - 1), nb = Math.max(b - 1, 0);
+    if (a < lane.length - 1 && key(lane[na]) !== key(striker)) a = na;
+    if (b > 0 && key(lane[nb]) !== key(striker)) b = nb;
+  }
+  assert.equal(a, lane.length - 1, 'Kermit got through'); assert.equal(b, 0, 'Statler got through');
+  assert.ok(aside > 0, 'the striker made space');
+  const end = yieldDecision({ site: YSITE, now: t + 1000, passers: [], state });
+  assert.equal(end.yield, false, 'and goes back to the tip when nobody is passing');
+});
+await ok('keeper: the striker on the tip steps to the yield square for a passing fleet-mate, and the walks avoid monster ground', async () => {
+  reset();
+  party.setRosterSource(() => new Set(['Kermit']));
+  const s = keeperAt('t1', 'striker', { monsters: [M(52, 34, 43), M(90, 36, 40, { flags: OF.PLAYER })] });
+  s.policy.needle = { site: { ...SITE_RAW, striker: { ...SITE_RAW.striker, yieldSquares: [W(36, 41), W(35, 41)] } }, role: 'striker' };
+  const names = s.s.client.rsc.get; s.s.client.rsc = { get: id => (id === 9090 ? 'Kermit' : names(id)) };
+  s.s.client.room.objects.get(90).nameRsc = 9090;
+  const found = () => [...s.s.client.room.objects.values()].filter(o => !(o.flags & OF.PLAYER));
+  await s.needlePass(ctxOf(s), found(), s.needleHere(2143));
+  assert.deepEqual(walkCalls.map(w => w.to), ['r36c41'], 'aside, toward the archers, with a monster at the kill square all the same');
+  assert.equal(s.needleStatus().yield.yield, true);
+  s.s.client.room.objects.delete(90);
+  await s.needlePass(ctxOf(s), found(), s.needleHere(2143));
+  assert.deepEqual(walkCalls.map(w => w.to), ['r36c41', 'r35c42'], 'back to the tip once nobody is passing');
+  party.setRosterSource(null);
+  // A needle walk routes around the monster component (the tip excepted), unless the square is an accepted compromise.
+  reset();
+  const a = keeperAt('t9', 'archer', { self: W(36, 39) });
+  let opts = null; const w0 = a.s.walkTo; a.s.walkTo = async (col, row, o) => { opts = o; return w0(col, row, o); };
+  a.s.world.geometry = { openDirections: (r, c) => (r === 34 && c === 43 ? [{ dr: 1, dc: -1 }, { dr: 0, dc: 1 }] : []), inBounds: () => true, walkable: () => true, canMove: () => true };
+  await a.needlePass(ctxOf(a), [], a.needleHere(2143));
+  assert.ok(opts?.avoidSquares instanceof Set && opts.avoidSquares.has('34,43') && opts.avoidSquares.has('34,44'), 'the kill square and beyond are avoided');
+  assert.ok(!opts.avoidSquares.has('35,42'), 'the tip is not: the striker makes space there');
 });
 
 // ------------------------------------------------------------------------------ survival is the keeper's, by shape

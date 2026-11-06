@@ -2,6 +2,7 @@
 // THE NEEDLE: ONE STRIKER AT THE TIP, ARCHERS BEHIND, AND THE ROOM WALKS INTO IT.
 //
 //   node tools/m59-needle-farm.mjs derive --room 2143 --striker r35c42 --kill r34c43     candidate squares, and why
+//                                                    (stations, pull, bench and yield squares, all with a safe route)
 //   node tools/m59-needle-farm.mjs check  --site deep-jungle-2143                         prove a site file on the map
 //   node tools/m59-needle-farm.mjs status --site deep-jungle-2143                         who holds what, right now
 //   node tools/m59-needle-farm.mjs econ   --site deep-jungle-2143 [--since 2h] [--arrow-price 5]
@@ -61,7 +62,12 @@ export const SITE_DEFAULTS = Object.freeze({
   // and slower re-targeting.
   rounds: 1,
 });
-const STRIKER_DEFAULTS = Object.freeze({ reach: 2, pullStep: null, minHealth: 0.5 });
+// YIELD (operator 2026-11-06: "the striker should step back/aside (toward the archers, away from monsters) if/when the
+// courier try to walk past, because they don't want to be blocking the thin part of the needle and start a forever traffic
+// jam that stops their own archers from resupplying" -- and: "It should just always make space, they dont actually block the
+// needle from monsters, only from players (the monsters are blocked by the map itself)"). `yieldSquares` are where it steps,
+// best first; `yieldMaxS` bounds one step-aside; `passRadius` is how near the tip a fleet-mate in transit counts as passing.
+const STRIKER_DEFAULTS = Object.freeze({ reach: 2, pullStep: null, minHealth: 0.5, yieldSquares: [], yieldMaxS: 20, passRadius: 3 });
 const ARCHER_DEFAULTS = Object.freeze({ capacity: 4, reach: 17, pullSquare: null, minHealth: 0.3, minArrows: 1 });
 // Operator 2026-11-05: "Idle for 15s even is enough to be worth pulling".
 const PULL_DEFAULTS = Object.freeze({ idleS: 15, everyS: 20, maxPer10m: 20, excursionS: 25, minHealth: 0.7, legSteps: 16 });
@@ -83,7 +89,7 @@ const MEND_DEFAULTS = Object.freeze({ agents: null, at: 'med', stock: { 'orc too
 
 const LIMITS = {
   killRadius: [1, 8], staleS: [5, 300], rounds: [1, 6],
-  'striker.reach': [1, 3], 'striker.minHealth': [0, 1],
+  'striker.reach': [1, 3], 'striker.minHealth': [0, 1], 'striker.yieldMaxS': [3, 300], 'striker.passRadius': [1, 8],
   'archers.capacity': [0, 12], 'archers.reach': [2, 100], 'archers.minHealth': [0, 1], 'archers.minArrows': [0, 1000],
   'pull.idleS': [5, 600], 'pull.everyS': [5, 3600], 'pull.maxPer10m': [0, 120], 'pull.excursionS': [5, 120],
   'pull.minHealth': [0, 1], 'pull.legSteps': [2, 60],
@@ -146,17 +152,22 @@ export function normSite(v) {
   const out = { name, room, kill };
   for (const k of Object.keys(SITE_DEFAULTS)) out[k] = num(v, k, SITE_DEFAULTS[k], k);
 
-  known(v.striker, ['station', 'reach', 'pullStep', 'minHealth'], 'striker');
+  known(v.striker, ['station', 'reach', 'pullStep', 'minHealth', 'yieldSquares', 'yieldMaxS', 'passRadius'], 'striker');
   const st = v.striker ?? {};
   out.striker = {
     station: square(st.station, 'needle striker.station'),
     reach: num(st, 'reach', STRIKER_DEFAULTS.reach, 'striker.reach'),
     pullStep: square(st.pullStep, 'needle striker.pullStep'),
     minHealth: num(st, 'minHealth', STRIKER_DEFAULTS.minHealth, 'striker.minHealth'),
+    yieldSquares: (() => { if (st.yieldSquares != null && !Array.isArray(st.yieldSquares)) throw new Error('needle striker.yieldSquares must be a list of { row, col }');
+      return (st.yieldSquares ?? []).map(q => square(q, 'needle striker.yieldSquare')); })(),
+    yieldMaxS: num(st, 'yieldMaxS', STRIKER_DEFAULTS.yieldMaxS, 'striker.yieldMaxS'),
+    passRadius: num(st, 'passRadius', STRIKER_DEFAULTS.passRadius, 'striker.passRadius'),
   };
+  if (out.striker.yieldSquares.some(q => q.row === out.striker.station?.row && q.col === out.striker.station?.col)) throw new Error('a yield square cannot be the striker station');
   if (!out.striker.station) throw new Error('needle striker.station is required (the striker is optional at run time, the square is not)');
 
-  known(v.archers, ['stations', 'capacity', 'reach', 'pullSquare', 'minHealth', 'minArrows'], 'archers');
+  known(v.archers, ['stations', 'capacity', 'reach', 'pullSquare', 'minHealth', 'minArrows', 'acceptUnsafeRoute'], 'archers');
   const ar = v.archers ?? {};
   if (ar.stations != null && !Array.isArray(ar.stations)) throw new Error('needle archers.stations must be a list of { row, col }');
   const stations = [];
@@ -173,6 +184,10 @@ export function normSite(v) {
     pullSquare: square(ar.pullSquare, 'needle archers.pullSquare'),
     minHealth: num(ar, 'minHealth', ARCHER_DEFAULTS.minHealth, 'archers.minHealth'),
     minArrows: num(ar, 'minArrows', ARCHER_DEFAULTS.minArrows, 'archers.minArrows'),
+    // Squares the operator accepts that only a walk ACROSS MONSTER GROUND reaches (checkSite warns instead of failing, and
+    // the keeper's walk there does not avoid the monster component). A compromise, always named.
+    acceptUnsafeRoute: (() => { if (ar.acceptUnsafeRoute != null && !Array.isArray(ar.acceptUnsafeRoute)) throw new Error('needle archers.acceptUnsafeRoute must be a list of { row, col }');
+      return (ar.acceptUnsafeRoute ?? []).map(q => square(q, 'needle archers.acceptUnsafeRoute')); })(),
   };
 
   known(v.pull, Object.keys(PULL_DEFAULTS), 'pull');
@@ -384,7 +399,7 @@ export function allocate(site, rows = [], { now = Date.now() } = {}) {
  */
 export function safeSquaresFor(site, role) {
   const list = role === 'archer' ? [...site.archers.stations, site.archers.pullSquare, ...site.reserve.squares]
-    : role === 'striker' ? [site.striker.station, ...site.reserve.squares] : [...site.reserve.squares];
+    : role === 'striker' ? [site.striker.station, ...(site.striker.yieldSquares ?? []), ...site.reserve.squares] : [...site.reserve.squares];
   const seen = new Set();
   return list.filter(q => q && !seen.has(`${q.row},${q.col}`) && seen.add(`${q.row},${q.col}`));
 }
@@ -659,6 +674,41 @@ export function chooseCourierLap({ hall = {}, floor = {}, arrowsWant = 0, mender
   return { kind: 'none', take: {}, then: null, why: why.length ? why.join('; ') + '; the hall cannot spare any of it' : 'nothing needed' };
 }
 
+// ------------------------------------------------------------------------------------------------- the striker yields
+//
+// THE STRIKER ALWAYS MAKES SPACE. Operator, 2026-11-06: "It should just always make space, they dont actually block the
+// needle from monsters, only from players (the monsters are blocked by the map itself)". The tip is a coarse-grid dead end:
+// the GEOMETRY stops the pack, not the striker's body, so stepping off it for a passing fleet-mate costs nothing but a few
+// swings, and standing on it while a courier or a resupplying archer tries to get by is how a one-wide needle jams for ever.
+//
+// A PASSER is a fleet-mate within `passRadius` of the striker's station that is IN TRANSIT: not standing on one of the
+// site's safe squares (a seated archer is not passing), or a needle keeper whose row says `passing` (it is walking to a
+// station). One that has not moved for `parkedS` is PARKED, not passing -- otherwise a body idling beside the tip would
+// keep the striker off it for ever. The striker steps to the first yield square that is free and not on the passer's way,
+// stays while anyone is passing, at most `yieldMaxS` at a time, then goes back; if somebody is still passing it yields again.
+
+export const YIELD_DEFAULTS = Object.freeze({ parkedS: 30, cooldownS: 3 });
+
+/**
+ * -> { yield: boolean, square?, passers: [names], why }. `passers` = [{ name, row, col, movedAt, passing?: { to } }];
+ * `state` = { since: ms | null, endedAt: ms | null } (mutated by the caller); `occupied` / `onWay` sets of "row,col".
+ */
+export function yieldDecision({ site, now = Date.now(), passers = [], state = {}, occupied = new Set(), onWay = new Set(), parkedS = YIELD_DEFAULTS.parkedS, cooldownS = YIELD_DEFAULTS.cooldownS }) {
+  const S = site.striker.station, R = site.striker.passRadius;
+  const safeSet = new Set([...site.archers.stations, site.archers.pullSquare, ...site.reserve.squares].filter(Boolean).map(q => `${q.row},${q.col}`));
+  const moving = passers.filter(p => Number.isFinite(p?.row) && dist(p, S) <= R + 1e-9
+    && (p.passing || !safeSet.has(`${p.row},${p.col}`)) && now - (Number(p.movedAt) || 0) < parkedS * 1000);
+  if (!moving.length) return { yield: false, passers: [], why: 'nobody passing' };
+  if (state.since != null && now - state.since >= site.striker.yieldMaxS * 1000) return { yield: false, passers: moving.map(p => p.name), why: `aside ${site.striker.yieldMaxS} s: back to the tip for now`, expired: true };
+  if (state.since == null && state.endedAt != null && now - state.endedAt < cooldownS * 1000) return { yield: false, passers: moving.map(p => p.name), why: 'just back on the tip' };
+  const k = q => `${q.row},${q.col}`;
+  const at = new Set(moving.map(p => k(p)));
+  const square = site.striker.yieldSquares.find(q => !occupied.has(k(q)) && !onWay.has(k(q)) && !at.has(k(q)))
+    ?? site.striker.yieldSquares.find(q => !occupied.has(k(q)) && !at.has(k(q))) ?? null;
+  if (!square) return { yield: false, passers: moving.map(p => p.name), why: 'every yield square is taken' };
+  return { yield: true, square, passers: moving.map(p => p.name), why: `making space for ${moving.map(p => p.name).join(', ')}` };
+}
+
 // --------------------------------------------------------------------------------------------------------- the pull
 
 /**
@@ -726,7 +776,7 @@ export function monsterComponent(geo, from, cap = 20_000) {
  * under that setting the pocket behind 2143's needle is monster ground and the whole site is wrong. It is reported, not
  * enforced, because the operator's observation (the pack stops at the tip) is only consistent with the coarse grid.
  */
-export function deriveNeedle(geo, { kill, striker, strikerReach = 3, bowReach = 17, monsterReach = 3, pullWithin = 6, lib } = {}) {
+export function deriveNeedle(geo, { kill, striker, strikerReach = 3, bowReach = 17, monsterReach = 3, pullWithin = 6, entry = null, lib } = {}) {
   const { lineOfSight, reachableFrom } = lib;
   const problems = [];
   const M = monsterComponent(geo, kill);
@@ -763,7 +813,13 @@ export function deriveNeedle(geo, { kill, striker, strikerReach = 3, bowReach = 
     candidates.push({ square: sq(p), row, col, d2_kill: d2(p, kill), d2_striker: d2(p, striker), threat, near,
       min_d2_monster: minD2, sees_tip: seesTip, coverage, stand, monster_grid_reaches: F.has(k) });
   }
-  const safeOnes = candidates.filter(c => c.threat === 0 && c.stand);
+  // A SAFE ROUTE (live 2026-11-06): a square is only useful if a body can walk to it from the bench WITHOUT crossing monster
+  // ground. The first derivation asked only "walkable from the striker's square", and in 2143 the 7th station and the
+  // pull square turned out to be reachable only THROUGH the kill square -- every walk there crossed the pack.
+  const benchSeed = entry ?? candidates.filter(c => c.threat === 0 && c.stand && c.near === 0).sort((a, b) => a.d2_striker - b.d2_striker)[0] ?? null;
+  const R = benchSeed ? reachAvoiding(geo, benchSeed, M) : null;
+  for (const c of candidates) c.safe_route = R ? R.has(`${c.row},${c.col}`) : null;
+  const safeOnes = candidates.filter(c => c.threat === 0 && c.stand && c.safe_route !== false);
   const stations = safeOnes.filter(c => c.sees_tip)
     .sort((a, b) => a.near - b.near || a.d2_kill - b.d2_kill || a.row - b.row || a.col - b.col)
     .map(c => ({ ...c, why: `no monster square in reach can see it (threat 0, ${c.near} monster squares within ${monsterReach}); sees the tip; ${Math.sqrt(c.d2_kill).toFixed(1)} from it` }));
@@ -775,35 +831,67 @@ export function deriveNeedle(geo, { kill, striker, strikerReach = 3, bowReach = 
     .slice(0, 5).map(c => ({ ...c, why: `safe, ${Math.sqrt(c.d2_striker).toFixed(1)} from the striker, sees ${c.coverage} monster squares within bow range` }));
   const reserve = safeOnes.filter(c => c.near === 0).sort((a, b) => a.d2_striker - b.d2_striker || a.row - b.row || a.col - b.col)
     .slice(0, 8).map(c => ({ ...c, why: `no monster square within ${monsterReach} at all` }));
+  // WHERE THE STRIKER STEPS ASIDE: safe squares one mover step from its station and back, not a station, farthest from
+  // monster ground first. The live choice among them is the one off the passer's way.
+  const stationKeys = new Set(stations.map(c => c.square));
+  const yieldSquares = safeOnes.filter(c => !stationKeys.has(c.square) && Math.max(Math.abs(c.row - striker.row), Math.abs(c.col - striker.col)) === 1
+      && safe(() => geo.moverStepLands(striker.row, striker.col, c.row, c.col)) && safe(() => geo.moverStepLands(c.row, c.col, striker.row, striker.col)))
+    .sort((a, b) => b.min_d2_monster - a.min_d2_monster || a.near - b.near || b.d2_kill - a.d2_kill)
+    .map(c => ({ ...c, why: `one step off the tip and back, threat 0, ${c.near} monster squares within ${monsterReach}` }));
   return {
     kill: sq(kill), striker: sq(striker), problems, monster_component: M.size, player_reachable: P?.size ?? null,
     striker_in_monster_component: inM(striker), striker_coarse_dirs: strikerDirs,
     kill_coarse_dirs: (geo.openDirections(kill.row, kill.col, { fine: false }) ?? []).map(d => `${d.dr},${d.dc}`),
-    stations, blind, pull, reserve,
+    entry: benchSeed ? sq(benchSeed) : null,
+    unsafe_route: candidates.filter(c => c.threat === 0 && c.stand && c.safe_route === false).map(c => c.square),
+    stations, blind, pull, reserve, yield: yieldSquares, candidates,
   };
+}
+
+/** Every square the mover reaches from `from` without stepping on a square in `avoid` ("row,col"). */
+export function reachAvoiding(geo, from, avoid = new Set(), cap = 20_000) {
+  const k0 = `${from.row},${from.col}`, seen = new Set([k0]), q = [[from.row, from.col]];
+  for (let i = 0; i < q.length && seen.size < cap; i++) {
+    const [a, b] = q[i];
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      if (!dr && !dc) continue;
+      const r = a + dr, c = b + dc, k = `${r},${c}`;
+      if (seen.has(k) || avoid.has(k) || !geo.inBounds(r, c)) continue;
+      if (!safe(() => geo.moverStepLands(a, b, r, c))) continue;
+      seen.add(k); q.push([r, c]);
+    }
+  }
+  return seen;
 }
 
 /** Prove a site file against the map: every square standable and walkable to, every archer station safe and sighted. */
 export function checkSite(site, geo, lib) {
   const derived = deriveNeedle(geo, { kill: site.kill, striker: site.striker.station, strikerReach: site.striker.reach,
     bowReach: site.archers.reach, lib });
-  const byKey = new Map([...derived.stations, ...derived.blind].map(c => [c.square, c]));
+  const byKey = new Map(derived.candidates.filter(c => c.threat === 0 && c.stand).map(c => [c.square, c]));
   const P = lib.reachableFrom(geo, site.striker.station);
+  const M = monsterComponent(geo, site.kill);
+  const bench = site.reserve.squares[0] ?? null;
+  const SR = bench ? reachAvoiding(geo, bench, M) : null;
   const rows = [];
   const look = (what, p, wantSafe) => {
     if (!p) return;
     const k = `${p.row},${p.col}`;
     const c = byKey.get(sq(p));
-    const ok = !!P?.has(k) && (!wantSafe || (c && c.threat === 0));
+    const safeRoute = SR ? SR.has(k) : null;
+    const accepted = site.archers.acceptUnsafeRoute.some(q => same(q, p));
+    const ok = !!P?.has(k) && (!wantSafe || (c && c.threat === 0)) && (!wantSafe || safeRoute !== false || accepted);
     rows.push({ what, square: sq(p), walkable_to: !!P?.has(k), threat: c?.threat ?? null, sees_tip: c?.sees_tip ?? null,
-      monster_grid_reaches: c?.monster_grid_reaches ?? null, ok,
-      why: !P?.has(k) ? 'the mover cannot walk here from the striker station' : wantSafe && !c ? 'not a safe square (a monster can reach or see it)' : null });
+      safe_route: safeRoute, monster_grid_reaches: c?.monster_grid_reaches ?? null, ok,
+      why: !P?.has(k) ? 'the mover cannot walk here from the striker station' : wantSafe && !c ? 'not a safe square (a monster can reach or see it)'
+        : wantSafe && safeRoute === false ? `reachable from the bench ${sq(bench)} only across monster ground${accepted ? ' -- ACCEPTED by the site (archers.acceptUnsafeRoute)' : ''}` : null });
   };
   look('striker station', site.striker.station, false);
   look('striker pull step', site.striker.pullStep, false);
   site.archers.stations.forEach((s, i) => look(`archer station ${i + 1}${i === 0 ? ' (front)' : ''}`, s, true));
   look('archer pull square', site.archers.pullSquare, true);
   site.reserve.squares.forEach((s, i) => look(`reserve ${i + 1}`, s, true));
+  site.striker.yieldSquares.forEach((s, i) => look(`striker yield ${i + 1}`, s, true));
   return { site: site.name, room: site.room, ok: !derived.problems.length && rows.every(r => r.ok), problems: derived.problems, rows,
     blind_stations: rows.filter(r => r.what.startsWith('archer station') && r.sees_tip === false).map(r => r.square) };
 }
@@ -962,6 +1050,8 @@ if (isMain) {
       '  pull squares (safe, most of the room in sight):',
       ...d.pull.map(c => `    ${c.square.padEnd(8)} covers ${c.coverage} sees tip ${c.sees_tip}`),
       '  reserve (no monster square within 3):', '    ' + d.reserve.map(c => c.square).join(' '),
+      '  striker yield squares (one step off the tip and back, safe):', '    ' + (d.yield.map(c => c.square).join(' ') || 'NONE'),
+      `  only across monster ground (not offered): ${d.unsafe_route.length} safe squares, e.g. ${d.unsafe_route.slice(0, 6).join(' ')}`,
       `  blind but safe (1-in-25 training): ${d.blind.length} squares, nearest ${d.blind.slice(0, 6).map(c => c.square).join(' ')}`,
     ].join('\n'));
     process.exitCode = d.problems.length ? 1 : 0;

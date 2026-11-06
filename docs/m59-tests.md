@@ -364,7 +364,7 @@ through a nested shelter order.
   `chaseMaxPieces`, and contact resets the count.
 
 - `m59-patrol-farm-test.mjs` (23): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
-- `m59-needle-farm-test.mjs` (54): `needle`, the single striker in the needle with archers behind it. The field
+- `m59-needle-farm-test.mjs` (59): `needle`, the single striker in the needle with archers behind it. The field
   takes `{ site, role }` only and the site file refuses bare pairs, unknown keys (a `fleeBelow` included), a `hold`
   bench with no squares, a duplicated station or one on the striker's square; notes (`_x`, `why`) pass. Target choice:
   the closest valid monster in reach, a closer one takes the next swing, a tie keeps the current one, sight breaks a
@@ -402,7 +402,13 @@ through a nested shelter order.
   free square of the role's safe set (never the tip for the bench); an occupied station sends the archer to the nearest
   free safe square; a refused walk is HANDLED (never ordinary farming), blocks that square 30 s, and the archer shoots
   from its safe stand-in; a striker kept off the tip waits on the bench and never swings; cooperative combat leaves a
-  needle keeper alone (not ordinary: no hold, no veto), with the same keeper sans needle as the control.
+  needle keeper alone (not ordinary: no hold, no veto), with the same keeper sans needle as the control. THE STRIKER
+  ALWAYS MAKES SPACE: a fleet-mate in transit near the tip gets the first free yield square off its way, with a monster at
+  the kill square all the same; a seated archer, a far body or one parked 30 s is not passing, a needle walker saying so
+  is; bounded by yieldMaxS with a cooldown, then again; NO DEADLOCK: two bodies cross the one-wide part in opposite
+  directions past the striker and both get through, and it returns to the tip; on the keeper it walks aside and back; a
+  needle walk avoids the monster component, the tip excepted. The 2143 example now checks the SAFE ROUTE: the old
+  r32c43 seat and r30c43 pull square were reachable only across monster ground (the shipped-map case failed on them).
 
 - `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy
