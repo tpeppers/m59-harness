@@ -128,5 +128,29 @@ section('a launch takes ITS characters out of a lockdown, to a hold, and leaves 
   ok('a partial release that restores takes only its own; the last one out turns the posture off', !P.readSave('launch', 'hold-38').active);
 }
 
+section('a release that lands DURING a tend pass stays released (prod 2026-11-06, Scooter and Zoot re-locked)');
+{
+  // tend read the save once, spent a minute re-pushing 19 units, then wrote that stale copy back over the release.
+  const b = fakeBroker([{ agent: 't1' }, { agent: 't2' }, { agent: 't3' }]);
+  await P.apply('hold-38', { fleet: 'race', call: b.call, log: quiet });
+  for (const a of ['t1', 't2', 't3']) b.policy[a].assignedRoom = 27;   // all three drifted (a keeper handoff)
+  let released = false;
+  const racing = async (name, args = {}) => {
+    // The first re-push of the pass is the moment the operator's release lands for t2 and t3.
+    if (!released && name === 'autopilot' && args.action === 'start' && /^tend/.test(args.why ?? '')) {
+      released = true;
+      const r = await b.call(name, args);
+      await P.release('hold-38', { fleet: 'race', call: b.call, log: quiet, only: ['t2', 't3'] });
+      return r;
+    }
+    return b.call(name, args);
+  };
+  await P.tend({ fleet: 'race', call: racing, log: quiet });
+  const save = P.readSave('race', 'hold-38');
+  ok('the released units are not written back into the save', save.active && Object.keys(save.units).join() === 't1');
+  ok('and are not re-locked by the rest of the pass', b.policy.t2.assignedRoom !== 38 && b.policy.t3.assignedRoom !== 38);
+  ok('the drift is still recorded on the fresh save', save.drift?.length === 1);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;

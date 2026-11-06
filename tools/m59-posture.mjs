@@ -326,6 +326,11 @@ export async function tend({ fleet, dry = false, log = console.log, call = null,
     const units = await fleetUnits(call);
     const drift = [];
     for (const [agent, u] of Object.entries(save.units ?? {})) {
+      // THE SAVE ON DISK IS THE AUTHORITY, NOT THE COPY READ AT THE TOP. A pass over 19 units takes over a minute, and a
+      // release landing in that minute (prod 2026-11-06: Scooter and Zoot, `release --agents t21,t17`) was re-locked by
+      // the units still left in this pass and then erased by the write below. Re-read before every push.
+      const live = readSave(fleet, save.name);
+      if (!live?.active || !live.units?.[agent]) continue;
       const unit = units.find(x => x.agent === agent);
       if (!unit || !unit.in_game) continue;                    // out of the world: nothing to read, nothing to push
       if (unit.piloted || unit.host) continue;                 // a person at the controls is not re-ordered
@@ -340,8 +345,12 @@ export async function tend({ fleet, dry = false, log = console.log, call = null,
       if (still.length) log(`  ${save.name}: ${agent} STILL does not hold ${still.map(m => m.key).join(', ')}${r?.error ? ` (${r.error})` : ''}`);
     }
     if (!dry && drift.length) {
-      save.drift = [...(save.drift ?? []), { at: new Date(now).toISOString(), units: drift }].slice(-50);
-      writeSave(fleet, save.name, save);
+      // Merge into a FRESH read: writing `save` back would restore every unit released while this pass ran (lost update).
+      const fresh = readSave(fleet, save.name);
+      if (fresh) {
+        fresh.drift = [...(fresh.drift ?? []), { at: new Date(now).toISOString(), units: drift }].slice(-50);
+        writeSave(fleet, save.name, fresh);
+      }
     }
     out.push({ name: save.name, drift });
   }

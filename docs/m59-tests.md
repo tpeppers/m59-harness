@@ -72,10 +72,12 @@ while the socket still reads as alive. The postmortem's `hearing` block carries 
 received bytes, the last parsed message, framing drops, STAT parse errors, and when the watchdog last ran and why it
 last stepped aside, and whether survival was on. With survival off, a hit still writes a frame.
 
-`m59-posture-test.mjs` (18) pins a posture's live half against a fake broker. A hazardous order (survival off, no
+`m59-posture-test.mjs` (32) pins a posture's live half against a fake broker. A hazardous order (survival off, no
 flee line) is refused unless accepted by name, and nothing is pushed or saved. `tend` finds a handoff's reset by key
 and re-pushes it, says out loud when the re-push is refused, and pushes nothing in a dry run. A lease releases itself
-through `tend` and puts the character back.
+through `tend` and puts the character back. A release that lands while a `tend` pass is running stays released:
+`tend` re-reads the save before each push and merges its drift into a fresh read, rather than writing back the copy it
+started with (prod 2026-11-06: Scooter and Zoot re-locked a minute after `release --agents`).
 
 `m59-tripwire-test.mjs` (39) pins tripwires (docs/m59-joints.md "Tripwires"). Nothing is armed without a fleet
 file, and a file that does not parse arms nothing. A stale or missing `who` resets the quiet clock. A tripwire
