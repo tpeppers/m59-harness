@@ -938,7 +938,9 @@ await ok('the shipped 2143 example is the OPERATOR\'s needle, verbatim: striker 
   // Operator 2026-11-06, in his fill order, then the wall squares between them.
   assert.deepEqual(site.archers.stations.slice(0, 6), [W(37, 40), W(38, 38), W(40, 36), W(41, 36), W(42, 36), W(43, 36)]);
   assert.equal(archerSlots(site), 7);
-  const all = [site.striker.station, ...site.archers.stations, ...site.reserve.squares, ...site.striker.yieldSquares];
+  // Operator: the pull may step into the open toward the generator round r23c32; the 15 s idle trigger.
+  assert.deepEqual(site.archers.pullSquare, W(27, 37)); assert.equal(site.pull.idleS, 15); assert.ok(site.pull.minHealth >= 0.8);
+  const all = [site.striker.station, ...site.archers.stations, ...site.reserve.squares, ...site.striker.yieldSquares, site.archers.pullSquare];
   assert.ok(all.every(q => q.col <= 40), 'nobody east of c40');
   assert.deepEqual(site.roster.archers, ['t3', 't2', 't10', 't14', 't15', 't7', 't9']);
   assert.deepEqual(site.roster.strikers, ['t11', 't1']);

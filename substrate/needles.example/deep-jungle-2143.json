@@ -71,8 +71,11 @@
     "_capacity": "7 by operator order 2026-11-05: Statler t3, Pepe t2, Animal t10, Piggy t14, Clifford t15, Janice t7, and Camilla t9 as the hopeful +1. The operator's general estimate is 1 striker : 1-4 archers to break even; 1:7 is a training-heavy needle, read `econ` to see what it costs.",
     "reach": 17,
     "_reach": "17 is the battle bow, the shortest bow; a practice bow is 30, a long bow 100. Clamped to the bow in hand.",
-    "pullSquare": null,
-    "_pullSquare": "null: the front archer pulls from its own seat (r37c40), on the wall.",
+    "pullSquare": {
+      "row": 27,
+      "col": 37
+    },
+    "_pullSquare": "Operator 2026-11-06: \"they might have to step out into the open to pull from that area... there's a monster generator around r23,c32 and its spawns probably won't route correctly to the striker zone for a while\". r27c37 (west of c40): 13 mover steps from the front station r37c40, 6.4 squares from r23c32, and the model's line of sight sees 29 of the 44 walkable squares in r20-26 c29-35 from it -- the nearest square that sees that area at all (r36c30 also sees it but is 29 steps away). It is OPEN GROUND: the excursion is bounded by pull.excursionS and pull.minHealth below.",
     "minHealth": 0.3,
     "minArrows": 1,
     "acceptUnsafeRoute": []
@@ -81,9 +84,10 @@
     "idleS": 15,
     "everyS": 20,
     "maxPer10m": 20,
-    "excursionS": 25,
-    "minHealth": 0.7,
-    "legSteps": 16
+    "excursionS": 45,
+    "minHealth": 0.8,
+    "legSteps": 18,
+    "_pull": "15 s idle (operator); 45 s excursion and 18-step legs so the 13-step walk out and back fits; 80% health floor because r27c37 is in the open."
   },
   "roster": {
     "strikers": [

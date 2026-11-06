@@ -726,7 +726,9 @@ striker. Archers, in fill order: r37,c40 , r38,c38 , r40,c36, r41,c36 , r42,c36 
 basically just 'line up along the wall that has line of sight to r36,c41 area'"*. The example (`trust: "operator"`) has
 those six in that order, then the wall squares between them (r39c37, r38c39), capacity 7; the bench south along the same
 wall (r44c36, r44c37, r45c37, r46c37); the striker's yield squares west and south-west of it (r36c39, r37c39); the front
-archer pulling from r37c40. Nothing is east of c40. Every square is walkable, BSP-standable and reachable. The model's
+front archer pulling from r27c37 -- OPEN GROUND toward the generator round r23c32 (operator: "they might have to step out
+into the open to pull from that area"): 13 steps from r37c40, and the nearest square that sees that area at all -- after the
+15 s idle trigger, with a 45 s excursion and an 80% health floor. Nothing is east of c40. Every square is walkable, BSP-standable and reachable. The model's
 staircase line of sight says only r37c40 sees r35c41 (and only on the monster_grid), and `check` says so as warnings --
 the operator's squares stand. The first site (striker r35c42, kill r34c43) is retired.
 
