@@ -514,6 +514,40 @@ body the ladder just let go is not handed the tip at the edge of its flee line; 
 so a healed striker coming back does not displace its replacement. This needs a second melee carrying the striker
 strategy on the bench -- the coordinator gives it to two by default.
 
+**THE ROTATION CHAIN: ARROW COURIER -> STRIKER -> ARCHER.** Operator, 2026-11-05: *"Let's have Sweetums be the
+striker, so he gets first dibs on next becoming a bower as people cycle out/in (he'll replace the bower, another striker
+will be selected, they become the next bower, etc.)... and we'll have the Han-lan arrow person become the next striker, as
+each person rotates (that way the arrow person is what's really rotating, which leaves the group basically never without
+a striker)."* The decisions are pure (`chainVacancies`, `rotateChain` in `m59-needle-farm.mjs`) and the island
+coordinator executes them (`avar-village-ops.needle-draft.mjs`, config `needle.chain { striker, courier, courier_next }`;
+2143: Sweetums t11, Kermit t1, `courier_next` empty):
+
+| step | when | what |
+|---|---|---|
+| vacancy | an archer reaches `stop_at` (99), leaves the roster, or is away from the island's farm rooms (dead, logged out, locked out) for `seat_vacant_s` (300) | the seat is free |
+| call-up | a free seat, a courier, and the courier not on a lap (`scratch/needle-courier-state.json`) | the courier gets the striker strategy and goes back on the roster; its keeper walks to the needle and waits on the bench (the incumbent keeps the tip). The next courier is `courier_next[0]` -- or nobody: logged, and the courier job stops |
+| handover | the called-up striker is IN the needle's room, fit for the tip (`minHealth + 0.2`), and no pull is out | the old striker gets the archer strategy and takes the free seat first; `archers.skill_by` FIRE when it knows no archery (Sweetums: fire 11, archery unknown). The tip passes at the next keeper pass |
+
+While either step waits, the free seat is HELD for the striker (the archer queue may not fill it), up to `hold_max_s`
+(2700 s, longer than a courier lap). With no courier there is no call-up, nothing is held, the archer queue fills the seat
+and the striker stays at the tip. **The needle is never without a striker:** the old striker leaves the tip only after
+its replacement is a fit striker-role keeper in the room, and `m59-needle-farm-test.mjs` drives 2000 random ticks of the
+chain to pin it. Every step is logged with why. The courier half is `hanla-courier.needle-draft.mjs`: it serves whoever
+the chain names, lives in the clearing (2144) between laps, drops its arrows on Zheng He (and any 2101 cache) where the
+archers restock, and never on the guild hall chests.
+
+**DISCO DUTY.** Operator: *"Ideally one person in each group has 'Discordance' and can be on 'disco duty' to keep the
+sandstorms down, the sandstorms can be a serious problem for this strategy."* The site's `disco.agents` (2143: Camilla,
+t9, the seventh archer) are its Discordance casters. While a Sandstorm is on the room (the keeper's own room-enchantment
+observations), such an archer stops shooting -- a sandstorm ruins shots anyway (`player.kod` WindsRuinShot) -- and stands
+by while the island coordinator casts Discordance through it (the dispel module, `cast_all`: every knower in the room
+casts, each cast freezing that keeper for the trance). Its row says `away: 'disco'` with a `hold_until` (`disco.holdS`,
+120 s), so the seconds its frozen keeper publishes nothing do not free its seat, and the front-archer pull passes to the
+next archer meanwhile. `disco.castSquare` null (2143) casts from the station -- threat 0, the casting safety standard's
+best case; set it to make the caster step out and back. The storm lifted, it shoots again from the same seat. A needle
+with no configured caster present is `disco_missing`, and both the keepers (`NEEDLE HAS NO DISCORDANCE CASTER`) and the
+coordinator (by spell knowledge, every 5 minutes) say so loudly.
+
 **Survival is the keeper's, unchanged** ([the boundary](m59-boundary.md)). The needle runs inside passFarm, below
 passFleeAndRest and the fight-back rungs; every exchange is `fight()` held to the square with the keeper's own flee
 line as `disengageAt`; a striker that breaks off retreats through `retreatToSafety`, the call passFarm makes; an
@@ -550,7 +584,7 @@ archer's behalf are not keeper rows -- both said in the report. Every pull is a 
 (no `autopilot` argument). On prod, the island coordinator gives the roles: `avar-village-ops.needle-draft.mjs` (beside
 the live file, for review) adds a `needle` module -- the first `needle.strikers` melee (default 2) get the striker
 strategy, the rationed archers get the needle's archer strategy, and `needle.archers` (`max`, `prefer`) replaces
-`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (30) pins it.
+`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (40) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 

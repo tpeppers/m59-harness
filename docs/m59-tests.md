@@ -338,7 +338,7 @@ through a nested shelter order.
   A pass naming another room lets nothing out, and a cancel, the next journey, a different start room or
   two minutes ends it. See docs/m59-boundary.md.
 
-- `m59-needle-farm-test.mjs` (30): `needle`, the single striker in the needle with archers behind it. The field
+- `m59-needle-farm-test.mjs` (40): `needle`, the single striker in the needle with archers behind it. The field
   takes `{ site, role }` only and the site file refuses bare pairs, unknown keys (a `fleeBelow` included), a `hold`
   bench with no squares, a duplicated station or one on the striker's square; notes (`_x`, `why`) pass. Target choice:
   the closest valid monster in reach, a closer one takes the next swing, a tie keeps the current one, sight breaks a
@@ -356,7 +356,15 @@ through a nested shelter order.
   null (not zero) net without an arrow price, arrows bought from `bought` rows. Source pins: the seam is in passFarm
   after the patrol filter and before the ranking, and the needle code names no protected faculty. On the shipped map
   the 2143 example site checks clean, every station sees the tip, the tip steps only NE/E/SW and the striker square
-  only back. Shared rows go to a temp `M59_NEEDLE_STATE_DIR`.
+  only back; the example holds seven archers, Sweetums then Kermit as strikers, Camilla on disco duty. The ROTATION CHAIN
+  (courier -> striker -> archer): vacancies (off roster, at stop_at, away past seatVacantS); a free seat calls the
+  courier up and takes the next from courier_next; the handover waits for the incoming striker in the room, fit and
+  between pulls, then gives the old striker the seat (FIRE without archery); an empty courier_next stops the courier job
+  out loud and the next free seat promotes nobody; a courier on a lap is never called up; a stuck handover times out;
+  2000 random ticks never leave the needle without a striker. DISCO DUTY: a held seat survives a stale row and is never
+  given away, an away archer is not the puller, `disco_missing` when no caster is present; on the keeper a disco archer in
+  a storm stops shooting and publishes its hold, and shoots again from the same seat after. Shared rows go to a temp
+  `M59_NEEDLE_STATE_DIR`.
 
 - `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy

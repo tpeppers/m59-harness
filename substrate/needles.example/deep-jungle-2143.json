@@ -73,7 +73,10 @@
     "legSteps": 16
   },
   "roster": {
-    "strikers": [],
+    "strikers": [
+      "t11",
+      "t1"
+    ],
     "archers": [
       "t3",
       "t2",
@@ -84,7 +87,8 @@
       "t9"
     ],
     "_roster": "Preference order by agent slot (t1...). Empty = by name. Who has which ROLE is the strategy assignment (needle.role); this only orders the replacement.",
-    "_archers": "Operator order 2026-11-05, in this order: Statler t3, Pepe t2, Animal t10, Piggy t14, Clifford t15, Janice t7, Camilla t9 (the hopeful +1). The order decides who takes a FREE station first, lowest index first; an archer already on a station keeps it."
+    "_archers": "Operator order 2026-11-05, in this order: Statler t3, Pepe t2, Animal t10, Piggy t14, Clifford t15, Janice t7, Camilla t9 (the hopeful +1). The order decides who takes a FREE station first, lowest index first; an archer already on a station keeps it.",
+    "_strikers": "Operator order 2026-11-05: Sweetums (t11) is the striker; Kermit (t1), the Hanla arrow courier, is the next one. Who carries the striker strategy is the island coordinator's rotation chain (avar-village-ops needle.chain: courier -> striker -> archer); this list only orders the tip among the keepers that carry it."
   },
   "reserve": {
     "mode": "hold",
@@ -113,5 +117,13 @@
   "econ": {
     "arrowPrice": null,
     "tickMin": 5
+  },
+  "disco": {
+    "agents": [
+      "t9"
+    ],
+    "holdS": 120,
+    "castSquare": null,
+    "_disco": "Operator 2026-11-05: one Discordance caster per needle group on 'disco duty'. Camilla (t9), the 7th archer. In a Sandstorm she stops shooting (a sandstorm ruins shots anyway: player.kod WindsRuinShot) and stands by while the island coordinator casts Discordance through her keeper; her seat is held for holdS seconds, through the trance in which her keeper publishes nothing. castSquare null = she casts where she stands: her station is threat 0, which is the casting safety standard's best case, and walking out costs storm time. Set castSquare to make her step to another square to cast; she walks back after."
   }
 }

@@ -67,6 +67,11 @@ const ARCHER_DEFAULTS = Object.freeze({ capacity: 4, reach: 17, pullSquare: null
 const PULL_DEFAULTS = Object.freeze({ idleS: 15, everyS: 20, maxPer10m: 20, excursionS: 25, minHealth: 0.7, legSteps: 16 });
 const RESERVE_DEFAULTS = Object.freeze({ mode: 'farm', squares: [] });
 const ECON_DEFAULTS = Object.freeze({ arrowPrice: null, tickMin: 5 });
+// DISCO DUTY (operator 2026-11-05: "Ideally one person in each group has 'Discordance' and can be on 'disco duty' to keep
+// the sandstorms down"): `agents` are this needle's Discordance casters; while a Sandstorm is in the room an archer among
+// them stops shooting and stands by for the lift (the island coordinator casts it), from its station or from `castSquare`,
+// and its seat is HELD for `holdS` seconds even while its keeper is frozen in the trance and publishes nothing.
+const DISCO_DEFAULTS = Object.freeze({ agents: [], holdS: 120, castSquare: null });
 
 const LIMITS = {
   killRadius: [1, 8], staleS: [5, 300], rounds: [1, 6],
@@ -74,7 +79,7 @@ const LIMITS = {
   'archers.capacity': [0, 12], 'archers.reach': [2, 100], 'archers.minHealth': [0, 1], 'archers.minArrows': [0, 1000],
   'pull.idleS': [5, 600], 'pull.everyS': [5, 3600], 'pull.maxPer10m': [0, 120], 'pull.excursionS': [5, 120],
   'pull.minHealth': [0, 1], 'pull.legSteps': [2, 60],
-  'econ.tickMin': [1, 60],
+  'econ.tickMin': [1, 60], 'disco.holdS': [10, 900],
 };
 
 const isNote = k => k.startsWith('_') || k === 'why' || k === 'describe' || k === 'derived';
@@ -124,7 +129,7 @@ export function siteName(v) {
  */
 export function normSite(v) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('a needle site must be an object');
-  known(v, ['name', 'room', 'kill', 'killRadius', 'striker', 'archers', 'pull', 'roster', 'reserve', 'staleS', 'rounds', 'econ'], 'site');
+  known(v, ['name', 'room', 'kill', 'killRadius', 'striker', 'archers', 'pull', 'roster', 'reserve', 'staleS', 'rounds', 'econ', 'disco'], 'site');
   const name = siteName(v.name);
   const room = Number(v.room);
   if (!Number.isInteger(room) || room <= 1) throw new Error('needle room must be a room number above 1');
@@ -174,6 +179,10 @@ export function normSite(v) {
   if (v.reserve?.squares != null && !Array.isArray(v.reserve.squares)) throw new Error('needle reserve.squares must be a list of { row, col }');
   out.reserve = { mode, squares: (v.reserve?.squares ?? []).map(q => square(q, 'needle reserve square')) };
   if (mode === 'hold' && !out.reserve.squares.length) throw new Error('needle reserve.mode "hold" needs reserve.squares');
+
+  known(v.disco, Object.keys(DISCO_DEFAULTS), 'disco');
+  out.disco = { agents: agentList(v.disco?.agents, 'disco.agents'), holdS: num(v.disco ?? {}, 'holdS', DISCO_DEFAULTS.holdS, 'disco.holdS'),
+    castSquare: square(v.disco?.castSquare, 'needle disco.castSquare') };
 
   known(v.econ, Object.keys(ECON_DEFAULTS), 'econ');
   const price = v.econ?.arrowPrice;
@@ -287,8 +296,12 @@ const prefIndex = (list, agent) => { const i = list.indexOf(agent); return i < 0
  */
 export function allocate(site, rows = [], { now = Date.now() } = {}) {
   const staleMs = site.staleS * 1000;
-  const fresh = rows.filter(r => r && r.agent && Number(r.room) === site.room && now - Number(r.at) <= staleMs);
-  const stale = rows.filter(r => r && r.agent && Number(r.room) === site.room && now - Number(r.at) > staleMs).map(r => r.agent);
+  // A HELD SEAT: an archer that said it is stepping away for a reason the needle wants (disco duty: a Discordance cast
+  // freezes its keeper for the trance) keeps its station until `hold_until`, fresh or not. Nobody else is given it, and it
+  // is not the puller while it is away.
+  const heldSeat = r => Number(r?.hold_until) > now;
+  const fresh = rows.filter(r => r && r.agent && Number(r.room) === site.room && (now - Number(r.at) <= staleMs || heldSeat(r)));
+  const stale = rows.filter(r => r && r.agent && Number(r.room) === site.room && now - Number(r.at) > staleMs && !heldSeat(r)).map(r => r.agent);
   const unfit = fresh.filter(r => !r.fit).map(r => ({ agent: r.agent, role: r.role, why: r.why_unfit ?? 'unfit' }));
 
   const strikerRows = fresh.filter(r => r.role === 'striker' && r.fit);
@@ -321,14 +334,22 @@ export function allocate(site, rows = [], { now = Date.now() } = {}) {
     .map(([index, agent]) => ({ agent, index, station: site.archers.stations[index] }));
   const overflow = archerRows.filter(r => !placed.has(r.agent)).map(r => r.agent).sort();
 
+  const away = new Set(fresh.filter(r => r.away || (heldSeat(r) && now - Number(r.at) > staleMs)).map(r => r.agent));
   let puller = null;
-  if (archers.length) puller = { agent: archers[0].agent, role: 'archer', from: site.archers.pullSquare ?? archers[0].station };
+  const front = archers.find(a => !away.has(a.agent));
+  if (front) puller = { agent: front.agent, role: 'archer', from: site.archers.pullSquare ?? front.station };
   else if (striker && site.striker.pullStep) puller = { agent: striker, role: 'striker', from: site.striker.pullStep };
 
   const mode = striker && archers.length ? 'needle' : striker ? 'striker_only' : archers.length ? 'archers_only' : 'empty';
   const moneyLosing = mode === 'archers_only';
+  // DISCO: is a Discordance caster of this needle here? Configured by name (site.disco.agents); none configured or none
+  // present is `disco_missing`, which the keepers and the coordinator say out loud -- a storm nobody here can lift is the
+  // needle's worst failure (the operator: "the sandstorms can be a serious problem for this strategy").
+  const discoHere = fresh.filter(r => site.disco.agents.includes(r.agent)).map(r => r.agent).sort();
   return {
     mode, striker, archers, puller, reserve: [...reserve, ...overflow], overflow, unfit, stale,
+    away: [...away].sort(), disco: discoHere,
+    disco_missing: discoHere.length === 0 && mode !== 'empty',
     money_losing: moneyLosing,
     why: mode === 'archers_only' ? 'no fit striker: archers alone spend arrows faster than the loot pays (operator 2026-11-05); they also pull'
       : mode === 'striker_only' ? 'no archer at the needle: the striker holds alone' + (site.striker.pullStep ? ' and pulls from its pull step' : ', nobody can pull')
@@ -344,6 +365,102 @@ export function slotOf(alloc, agent) {
   if (a) return { role: 'archer', slot: `archer:${a.index}`, index: a.index, station: a.station };
   if (alloc.reserve.includes(agent)) return { role: 'reserve', slot: 'reserve' };
   return { role: 'none', slot: null };
+}
+
+// ------------------------------------------------------------------------------------------------ the rotation chain
+//
+// Operator, 2026-11-05: "Let's have Sweetums be the striker, so he gets first dibs on next becoming a bower as people cycle
+// out/in (he'll replace the bower, another striker will be selected, they become the next bower, etc.)... and we'll have
+// the Han-lan arrow person become the next striker, as each person rotates (that way the arrow person is what's really
+// rotating, which leaves the group basically never without a striker)."
+//
+// So the chain is ARROW COURIER -> STRIKER -> ARCHER. When an archer seat frees, the current striker takes it; the courier
+// becomes the striker; the next courier comes from `courierNext`. It is TWO STEPS so the tip is never empty:
+//
+//   CALL-UP     a seat is vacant, there is a courier, and the courier is not on a lap: the courier is given the striker's
+//               strategy (its keeper walks to the needle and waits on the bench, because the incumbent keeps the tip), and
+//               the next courier is taken from `courierNext` -- or nobody, said out loud, and the courier job stops.
+//   HANDOVER    the called-up striker is IN the needle's room and fit for the tip (minHealth + 0.2, the newcomer floor
+//               `allocate` uses), and no pull is out: the old striker is given the archer strategy (FIRE if it knows no
+//               archery), and the tip passes to the bench at the next keeper pass. Only then.
+//
+// The seat is HELD for the striker while either step waits (no other candidate gets it), up to `holdMaxS`; with no
+// courier at all there is no call-up, nothing is held, and the striker stays at the tip. Every decision returns its
+// `log` lines with why. Pure: the coordinator executes the actions.
+
+export const CHAIN_DEFAULTS = Object.freeze({ seatVacantS: 300, holdMaxS: 2700 });
+
+/**
+ * Which archer seats are free. `archers` are the needle's seated archer agents; `rows` are what the coordinator read of
+ * each, `{ agent, present, usable, room, skill, stopAt }` (`present`: still on its roster; `room`: where it is). A seat is
+ * free when its archer is off the roster, reached `stopAt`, or has been out of the needle's rooms or unusable (dead,
+ * logged out, locked out) for `seatVacantS`. `absentSince` (agent -> ms) is the caller's memory and is updated in place.
+ */
+export function chainVacancies({ archers = [], rows = [], rooms = [], absentSince = {}, now = Date.now(), seatVacantS = CHAIN_DEFAULTS.seatVacantS }) {
+  const out = [];
+  for (const a of archers) {
+    const r = rows.find(x => x.agent === a);
+    if (!r || r.present === false) { out.push({ agent: a, why: 'left the roster' }); delete absentSince[a]; continue; }
+    if (Number.isFinite(r.skill) && Number.isFinite(r.stopAt) && r.skill >= r.stopAt) { out.push({ agent: a, why: `reached ${r.stopAt}` }); delete absentSince[a]; continue; }
+    const here = r.usable !== false && rooms.includes(Number(r.room));
+    if (here) { delete absentSince[a]; continue; }
+    absentSince[a] ??= now;
+    if (now - absentSince[a] >= seatVacantS * 1000)
+      out.push({ agent: a, why: `away from the needle ${Math.round((now - absentSince[a]) / 1000)} s (${r.usable === false ? 'not usable' : `in ${r.room}`})` });
+  }
+  return out;
+}
+
+/**
+ * One coordinator tick of the chain. `chain` = { striker, courier, courierNext: [], pending: null | { incoming, seat, why,
+ * at }, history: [] }. `incoming` = { agent, inRoom, fit, onLap } for the courier (before a call-up) or the pending
+ * incoming striker; `oldStriker` = { agent, knowsArchery }.
+ * -> { chain, actions: [{ kind: 'call_up', agent } | { kind: 'to_archer', agent, skill: 'archery'|'fire' }], hold, log }
+ */
+export function rotateChain(chain, { now = Date.now(), vacancies = [], incoming = null, oldStriker = null, pulling = false, holdMaxS = CHAIN_DEFAULTS.holdMaxS } = {}) {
+  const c = { striker: chain?.striker ?? null, courier: chain?.courier ?? null, courierNext: [...(chain?.courierNext ?? [])],
+    pending: chain?.pending ?? null, history: [...(chain?.history ?? [])].slice(-50) };
+  const actions = [], log = [];
+  const say = (line, rec) => { log.push(line); c.history.push({ at: now, ...rec, why: line }); };
+  // HANDOVER: a called-up striker is on its way or on the bench.
+  if (c.pending) {
+    const p = c.pending, inc = incoming?.agent === p.incoming ? incoming : null;
+    if (now - p.at > holdMaxS * 1000) {
+      say(`chain: handover to ${p.incoming} timed out after ${holdMaxS} s; the seat is no longer held and ${c.striker} stays the striker`,
+        { kind: 'timeout', agent: p.incoming });
+      c.pending = null;
+      return { chain: c, actions, hold: false, log };
+    }
+    const wait = !inc ? `${p.incoming} not read` : !inc.inRoom ? `${p.incoming} is not in the needle's room yet` : !inc.fit ? `${p.incoming} is not fit for the tip`
+      : pulling ? 'a pull is out' : null;
+    if (wait) { log.push(`chain: holding ${p.seat}'s seat for ${c.striker} -- ${wait}`); return { chain: c, actions, hold: true, log }; }
+    const skill = oldStriker && oldStriker.knowsArchery === false ? 'fire' : 'archery';
+    actions.push({ kind: 'to_archer', agent: c.striker, skill });
+    say(`chain: ${c.striker} (striker) takes ${p.seat}'s archer seat${skill === 'fire' ? ', training FIRE (knows no archery)' : ''}; ` +
+      `${p.incoming} has the tip (in the room, fit, no pull out) -- seat freed because ${p.why}`, { kind: 'handover', agent: p.incoming, from: c.striker });
+    c.striker = p.incoming; c.pending = null;
+    return { chain: c, actions, hold: false, log };
+  }
+  if (!vacancies.length) return { chain: c, actions, hold: false, log };
+  const v = vacancies[0];
+  if (!c.striker) { log.push(`chain: ${v.agent}'s seat is free (${v.why}) but there is no striker to promote; the archer queue fills it`); return { chain: c, actions, hold: false, log }; }
+  if (!c.courier) {
+    log.push(`chain: ${v.agent}'s seat is free (${v.why}) but there is NO COURIER to become the striker; ${c.striker} stays at the tip and the archer queue fills the seat`);
+    return { chain: c, actions, hold: false, log };
+  }
+  if (incoming?.agent === c.courier && incoming.onLap) {
+    log.push(`chain: holding ${v.agent}'s seat for ${c.striker} -- courier ${c.courier} is on a lap`);
+    return { chain: c, actions, hold: true, log };
+  }
+  // CALL-UP.
+  const up = c.courier;
+  c.courier = c.courierNext.shift() ?? null;
+  c.pending = { incoming: up, seat: v.agent, why: v.why, at: now };
+  actions.push({ kind: 'call_up', agent: up });
+  say(`chain: ${v.agent}'s seat is free (${v.why}); courier ${up} is called up to the needle as the next striker; ` +
+    (c.courier ? `${c.courier} is the new arrow courier` : 'NO NEXT COURIER (courier_next is empty): the arrow courier job stops'),
+    { kind: 'call_up', agent: up, next_courier: c.courier });
+  return { chain: c, actions, hold: true, log };
 }
 
 // --------------------------------------------------------------------------------------------------------- the pull
@@ -667,6 +784,7 @@ if (isMain) {
     const a = allocate(site, rows);
     print({ allocation: a, rows }, () => [`${site.name}: mode ${a.mode}${a.money_losing ? ' (MONEY-LOSING)' : ''}${a.why ? ' -- ' + a.why : ''}`,
       `  striker ${a.striker ?? '-'}; puller ${a.puller ? `${a.puller.agent} from ${sq(a.puller.from)}` : '-'}`,
+      `  disco ${a.disco.join(' ') || (a.disco_missing ? 'NONE -- NO DISCORDANCE CASTER AT THE NEEDLE' : '-')}; away ${a.away.join(' ') || '-'}`,
       ...a.archers.map(x => `  archer ${x.index + 1} ${sq(x.station)} ${x.agent}`),
       `  reserve ${a.reserve.join(' ') || '-'}; unfit ${a.unfit.map(u => `${u.agent} (${u.why})`).join(' ') || '-'}; stale ${a.stale.join(' ') || '-'}`].join('\n'));
   } else if (cmd === 'econ') {

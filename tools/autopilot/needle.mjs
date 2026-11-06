@@ -4,7 +4,7 @@
 // `installParts` (tools/autopilot/parts.mjs). Do not import this file directly: import tools/m59-autopilot.mjs, which
 // loads it. `autopilotSource()` (tools/autopilot/source.mjs) splices the `@part` block below into the keeper's text.
 //
-// 12 methods: needleState, needleSite, needleHere, needleSwing, needleWielded, needleArrows, needlePass, needleWalk, needleFight,
+// 13 methods: needleState, needleSite, needleHere, needleSwing, needleStorm, needleWielded, needleArrows, needlePass, needleWalk, needleFight,
 //   needlePull, needleTick, needleStatus
 //
 // Operator, 2026-11-05 (the design, verbatim in tools/m59-needle-farm.mjs): one striker holds the square at the tip of a
@@ -85,6 +85,12 @@ export class NeedlePart {
   /** The one exchange: skills.fight, held. A method so the offline test can stand in for the server. */
   needleSwing(s, opts) { return skills.fight(s, opts); }
 
+  /** A Sandstorm on this room right now (the shamans' room enchantment, sandstor.kod), from the keeper's own observations. */
+  needleStorm() {
+    const e = this.s?.client?.enchantmentStatus?.()?.entries ?? [];
+    return e.some(x => Number(x?.type) === 2 && /sand\s*storm/i.test(String(x?.name ?? '')));
+  }
+
   /** The name of the weapon in hand, or null. */
   needleWielded() {
     const c = this.s?.client, using = skills.equippedNow(c);
@@ -154,14 +160,28 @@ export class NeedlePart {
       else if (ammo.arrows < site.archers.minArrows) { fit = false; whyUnfit = `${ammo.arrows} arrows`; }
     }
 
+    // DISCO DUTY: one of this needle's Discordance casters, an archer, with a Sandstorm in the room. It stops shooting and
+    // stands by for the lift (the island coordinator casts it; the cast freezes this keeper for the trance), and says so in
+    // its row with a HELD seat, so the minutes it publishes nothing do not hand its station to anybody.
+    const disco = site.disco.agents.includes(me);
+    const onDisco = disco && role === 'archer' && fit && this.needleStorm();
     let rows = [];
     try { rows = readPresence(site.name); } catch { rows = []; }
-    const mine = { role, room: site.room, fit, why_unfit: whyUnfit, health, slot: st.slot, row: self.row, col: self.col, pull: st.pull };
+    const mine = { role, room: site.room, fit, why_unfit: whyUnfit, health, slot: st.slot, row: self.row, col: self.col, pull: st.pull,
+      ...(disco ? { disco: true } : {}), ...(onDisco ? { away: 'disco', hold_until: now + site.disco.holdS * 1000 } : {}) };
     rows = rows.filter(r => r?.agent !== me).concat([{ ...mine, agent: me, at: now }]);
     const alloc = allocate(site, rows, { now });
     const slot = slotOf(alloc, me);
-    const changed = slot.slot !== st.slot;
+    const changed = slot.slot !== st.slot || onDisco !== !!st.onDisco;
+    if (onDisco !== !!st.onDisco) this.note(onDisco ? 'disco duty: sandstorm -- holding my seat and standing by to lift it' : 'disco duty over: back to shooting',
+      { site: site.name, seat: slot.slot, hold_s: site.disco.holdS, cast_from: site.disco.castSquare ? sq(site.disco.castSquare) : 'my station' });
+    st.onDisco = onDisco;
     st.slot = slot.slot; st.alloc = alloc;
+    if (alloc.disco_missing && (!this._needleDiscoSaid || now - this._needleDiscoSaid > 300_000)) {
+      this._needleDiscoSaid = now;
+      this.note('NEEDLE HAS NO DISCORDANCE CASTER: nobody here can lift a sandstorm', { site: site.name,
+        configured: site.disco.agents, present: alloc.disco, why: site.disco.agents.length ? 'none of site.disco.agents is at the needle' : 'site.disco.agents is empty' });
+    }
     if (changed || now - st.lastPublishAt > 2_000) {
       try { writePresence(site.name, me, { ...mine, slot: slot.slot }, { now }); st.lastPublishAt = now; }
       catch (e) { if (!this._needleWriteSaid) { this._needleWriteSaid = true; this.note('needle row not written', { why: e.message }); } }
@@ -189,6 +209,12 @@ export class NeedlePart {
     // THE STATION. A striker steps to its pull step while its front archer's pull is out (the operator: "the melee
     // striker can step forward/aside, and the bower in the front can step out ... before returning to their station
     // (and the melee striker to their station)").
+    if (slot.role === 'archer' && onDisco) {
+      const spot = site.disco.castSquare;
+      if (spot && !ON(self, spot)) return this.needleWalk(spot, 'to the disco cast square');
+      this.doing = 'disco duty: standing by to lift the sandstorm'; this.emptyPasses = 0;
+      return HANDLED;
+    }
     let station = slot.role === 'striker' ? site.striker.station : slot.station;
     if (slot.role === 'striker' && site.striker.pullStep && alloc.puller?.role === 'archer') {
       const pr = rows.find(r => r.agent === alloc.puller.agent)?.pull;
@@ -376,6 +402,7 @@ export class NeedlePart {
     const site = n ? (typeof n.site === 'object' ? n.site : this._needleSites?.get(n.site)?.site ?? null) : null;
     return { site: site?.name ?? (typeof p.site === 'string' ? p.site : null), room: site?.room ?? null, role: n?.role ?? p.role ?? null,
       slot: st?.slot ?? null, mode: st?.mode ?? null, money_losing: !!st?.alloc?.money_losing,
+      disco_duty: !!st?.onDisco, disco_present: st?.alloc?.disco ?? [], disco_missing: !!st?.alloc?.disco_missing, away: st?.alloc?.away ?? [],
       striker: st?.alloc?.striker ?? null, archers: (st?.alloc?.archers ?? []).map(a => ({ agent: a.agent, station: sq(a.station) })),
       puller: st?.alloc?.puller?.agent ?? null, reserve: st?.alloc?.reserve ?? [],
       quiet_s: st?.quietSince ? Math.round((Date.now() - st.quietSince) / 1000) : null,

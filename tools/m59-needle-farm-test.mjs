@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { readToolSource } from './autopilot/source.mjs';
 import { Autopilot, HANDLED } from './m59-autopilot.mjs';
 import { STRATEGY_FIELDS, validateStrategy } from './m59-strategy-schema.mjs';
-import { allocate, archerSlots, checkSite, chooseTarget, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
+import { allocate, archerSlots, chainVacancies, checkSite, chooseTarget, rotateChain, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
   normNeedle, normSite, parseSquare, pullDue, readPresence, roleReach, shillingsIn, slotOf, weaponReach, writePresence } from './m59-needle-farm.mjs';
 import { OF } from './m59-parse.mjs';
 
@@ -444,6 +444,128 @@ await ok('archers-only is said out loud as money-losing', async () => {
   assert.equal(a.needleStatus().money_losing, true);
 });
 
+// ------------------------------------------------------------------------- the rotation chain: courier -> striker -> archer
+// Operator 2026-11-05: Sweetums (t11) is the striker and takes the next free archer seat; the Hanla arrow courier (Kermit, t1)
+// becomes the striker; the next courier comes from courier_next. Never without a striker.
+const CH = { striker: 't11', courier: 't1', courierNext: ['t4'], pending: null, history: [] };
+const vac = [{ agent: 't3', why: 'reached 99' }];
+await ok('vacancies: off the roster, at stop_at, or away from the needle past seatVacantS', () => {
+  const mem = {};
+  const rows = [{ agent: 't3', present: true, usable: true, room: 2143, skill: 99, stopAt: 99 },
+    { agent: 't2', present: false }, { agent: 't10', present: true, usable: false, room: 2143, skill: 40, stopAt: 99 },
+    { agent: 't14', present: true, usable: true, room: 2144, skill: 40, stopAt: 99 }];
+  const a = chainVacancies({ archers: ['t3', 't2', 't10', 't14', 't15'], rows, rooms: [2143, 2144, 2101], absentSince: mem, now: NOW, seatVacantS: 300 });
+  assert.deepEqual(a.map(v => v.agent).sort(), ['t15', 't2', 't3'], 't10 dead 0 s and t14 in the clearing are not vacancies yet; t15 unread = off roster');
+  assert.ok(mem.t10 === NOW && mem.t14 === undefined);
+  const b = chainVacancies({ archers: ['t10'], rows, rooms: [2143], absentSince: mem, now: NOW + 301_000, seatVacantS: 300 });
+  assert.equal(b[0].agent, 't10'); assert.match(b[0].why, /not usable/);
+  chainVacancies({ archers: ['t10'], rows: [{ ...rows[2], usable: true }], rooms: [2143], absentSince: mem, now: NOW + 302_000 });
+  assert.equal(mem.t10, undefined, 'back at the needle: the clock resets');
+});
+await ok('chain: a free seat CALLS UP the courier as the next striker and takes the next courier from courier_next', () => {
+  const r = rotateChain(CH, { now: NOW, vacancies: vac, incoming: { agent: 't1', onLap: false } });
+  assert.deepEqual(r.actions, [{ kind: 'call_up', agent: 't1' }]);
+  assert.equal(r.chain.striker, 't11', 'the striker keeps the tip during the call-up');
+  assert.equal(r.chain.courier, 't4');
+  assert.deepEqual(r.chain.pending, { incoming: 't1', seat: 't3', why: 'reached 99', at: NOW });
+  assert.equal(r.hold, true, 'the seat is held for the striker');
+  assert.match(r.log[0], /called up/);
+  assert.equal(r.chain.history.at(-1).kind, 'call_up');
+});
+await ok('chain: the HANDOVER waits for the incoming striker to be in the room, fit, and between pulls', () => {
+  const pending = rotateChain(CH, { now: NOW, vacancies: vac, incoming: { agent: 't1' } }).chain;
+  for (const [inc, pulling, why] of [[{ agent: 't1', inRoom: false, fit: true }, false, /not in the needle/],
+    [{ agent: 't1', inRoom: true, fit: false }, false, /not fit/], [{ agent: 't1', inRoom: true, fit: true }, true, /pull/], [null, false, /not read/]]) {
+    const r = rotateChain(pending, { now: NOW + 1000, incoming: inc, pulling });
+    assert.deepEqual(r.actions, []); assert.equal(r.hold, true); assert.equal(r.chain.striker, 't11'); assert.match(r.log[0], why);
+  }
+});
+await ok('chain: the handover gives the striker the seat (FIRE when it knows no archery) and the tip to the courier', () => {
+  const pending = rotateChain(CH, { now: NOW, vacancies: vac, incoming: { agent: 't1' } }).chain;
+  const r = rotateChain(pending, { now: NOW + 60_000, incoming: { agent: 't1', inRoom: true, fit: true }, oldStriker: { agent: 't11', knowsArchery: false } });
+  assert.deepEqual(r.actions, [{ kind: 'to_archer', agent: 't11', skill: 'fire' }]);
+  assert.equal(r.chain.striker, 't1'); assert.equal(r.chain.pending, null); assert.equal(r.chain.courier, 't4');
+  assert.match(r.log[0], /FIRE/);
+  const r2 = rotateChain(pending, { now: NOW + 60_000, incoming: { agent: 't1', inRoom: true, fit: true }, oldStriker: { agent: 't11', knowsArchery: true } });
+  assert.equal(r2.actions[0].skill, 'archery');
+});
+await ok('chain: courier_next empty -- the courier job stops, said out loud; the next free seat promotes nobody', () => {
+  const r = rotateChain({ ...CH, courierNext: [] }, { now: NOW, vacancies: vac, incoming: { agent: 't1' } });
+  assert.equal(r.chain.courier, null);
+  assert.match(r.log[0], /NO NEXT COURIER/);
+  const done = rotateChain(r.chain, { now: NOW + 1, incoming: { agent: 't1', inRoom: true, fit: true } }).chain;
+  assert.equal(done.striker, 't1');
+  const again = rotateChain(done, { now: NOW + 2, vacancies: [{ agent: 't2', why: 'left the roster' }] });
+  assert.deepEqual(again.actions, []); assert.equal(again.hold, false, 'nothing held: the archer queue fills the seat');
+  assert.equal(again.chain.striker, 't1', 'the striker stays at the tip');
+  assert.match(again.log[0], /NO COURIER/);
+});
+await ok('chain: a courier on a lap holds the seat and is not called up mid-lap; a stuck handover times out', () => {
+  const r = rotateChain(CH, { now: NOW, vacancies: vac, incoming: { agent: 't1', onLap: true } });
+  assert.deepEqual(r.actions, []); assert.equal(r.hold, true); assert.equal(r.chain.courier, 't1');
+  const pending = rotateChain(CH, { now: NOW, vacancies: vac, incoming: { agent: 't1' } }).chain;
+  const t = rotateChain(pending, { now: NOW + 2701_000, incoming: { agent: 't1', inRoom: false, fit: true }, holdMaxS: 2700 });
+  assert.equal(t.hold, false); assert.equal(t.chain.pending, null); assert.equal(t.chain.striker, 't11');
+});
+await ok('NEVER WITHOUT A STRIKER: across random ticks the striker is never null and is replaced only by an incoming in the room and fit', () => {
+  let chain = { ...CH, courierNext: ['t4', 't6'] };
+  let seed = 7; const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  for (let i = 0; i < 2000; i++) {
+    const inc = { agent: chain.pending?.incoming ?? chain.courier, inRoom: rnd() < 0.5, fit: rnd() < 0.6, onLap: rnd() < 0.2 };
+    const before = chain.striker;
+    const r = rotateChain(chain, { now: NOW + i * 15_000, vacancies: rnd() < 0.3 ? [{ agent: 'tx', why: 'test' }] : [], incoming: inc,
+      oldStriker: { agent: before, knowsArchery: rnd() < 0.5 }, pulling: rnd() < 0.2 });
+    assert.ok(r.chain.striker, `tick ${i}: no striker`);
+    if (r.chain.striker !== before) {
+      assert.ok(inc.inRoom && inc.fit, `tick ${i}: tip handed to an incoming not in the room or not fit`);
+      assert.deepEqual(r.actions.map(a => a.kind), ['to_archer']);
+    }
+    for (const a of r.actions) if (a.kind === 'to_archer') assert.equal(a.agent, before, 'only the old striker goes to an archer seat');
+    chain = r.chain;
+  }
+});
+
+// ----------------------------------------------------------------------------------------------------- disco duty
+await ok('a HELD seat: an archer away on disco duty keeps its station while its row is stale, and is not the puller', () => {
+  const site = normSite({ ...SITE_RAW, disco: { agents: ['t9'], holdS: 120 } });
+  const rows = [row('t9', 'archer', { slot: 'archer:0', at: NOW - 60_000, hold_until: NOW + 60_000, away: 'disco' }),
+    row('t7', 'archer', { slot: 'archer:1' }), row('t3', 'archer'), row('t1', 'striker')];
+  const a = allocate(site, rows, { now: NOW });
+  assert.deepEqual(a.archers.map(x => [x.agent, x.index]), [['t9', 0], ['t7', 1], ['t3', 2]], 'nobody is given t9\'s seat');
+  assert.equal(a.puller.agent, 't7', 'the front archer is away: the next one pulls');
+  assert.deepEqual(a.away, ['t9']); assert.deepEqual(a.disco, ['t9']); assert.equal(a.disco_missing, false);
+  const lapsed = allocate(site, [{ ...rows[0], hold_until: NOW - 1 }, ...rows.slice(1)], { now: NOW });
+  assert.ok(!lapsed.archers.some(x => x.agent === 't9'), 'past hold_until the seat is free again');
+  assert.equal(lapsed.disco_missing, true, 'and the needle says it has no Discordance caster');
+  assert.equal(allocate(SITE, [row('t1', 'striker')], { now: NOW }).disco_missing, true, 'none configured is missing too');
+  assert.throws(() => normSite({ ...SITE_RAW, disco: { agents: ['t9'], spell: 'x' } }));
+});
+await ok('disco duty on the keeper: in a storm the disco archer stops shooting, holds its seat, and shoots again after', async () => {
+  reset();
+  const raw = { ...SITE_RAW, disco: { agents: ['t9'], holdS: 120 } };
+  const a = keeperAt('t9', 'archer', { self: W(34, 41), monsters: [M(52, 34, 43)] });
+  a.policy.needle = { site: raw, role: 'archer' };
+  a.s.client.enchantmentStatus = () => ({ entries: a._storm ? [{ type: 2, name: 'sandstorm' }] : [] });
+  const go = () => a.needlePass(ctxOf(a), [...a.s.client.room.objects.values()], a.needleHere(2143));
+  a._storm = true;
+  assert.equal(await go(), HANDLED);
+  assert.equal(fightCalls.length, 0, 'no shot in a storm (a sandstorm ruins shots anyway: player.kod WindsRuinShot)');
+  const mineRow = readPresence('test-needle').find(r => r.agent === 't9');
+  assert.equal(mineRow.away, 'disco'); assert.ok(mineRow.hold_until > Date.now() + 100_000);
+  assert.equal(a.needleStatus().disco_duty, true);
+  assert.ok(notes.some(x => /disco duty: sandstorm/.test(x.what)));
+  a._storm = false;
+  await go();
+  assert.equal(fightCalls.length, 1, 'storm lifted: back to shooting from the same seat');
+  assert.equal(a.needleStatus().slot, 'archer:0');
+});
+await ok('the needle says it out loud when no Discordance caster is there', async () => {
+  reset();
+  const s = keeperAt('t1', 'striker');
+  await s.needlePass(ctxOf(s), [], s.needleHere(2143));
+  assert.ok(notes.some(x => /NO DISCORDANCE CASTER/.test(x.what)));
+});
+
 // ------------------------------------------------------------------------------ survival is the keeper's, by shape
 await ok('survival stays above: needle code lives in passFarm, below the ladder, and never names a protected faculty', () => {
   const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
@@ -468,6 +590,8 @@ await ok('the shipped 2143 example site loads and is proved on the shipped map',
   assert.equal(archerSlots(site), 7);
   assert.deepEqual(site.roster.archers, ['t3', 't2', 't10', 't14', 't15', 't7', 't9']);
   assert.deepEqual(site.archers.stations[6], W(32, 43));
+  assert.deepEqual(site.roster.strikers, ['t11', 't1'], 'Sweetums strikes, Kermit is next');
+  assert.deepEqual(site.disco.agents, ['t9'], 'Camilla is on disco duty');
   let map;
   try { map = (await import('./m59-map.mjs')).loadMap(); } catch { console.log('   (no map on disk: geometry half skipped)'); return; }
   (await import('./m59-routes.mjs')).attachStepMasks(map);
