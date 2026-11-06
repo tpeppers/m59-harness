@@ -44,6 +44,7 @@ import { normSecondWindFarming } from './m59-second-wind.mjs';
 import { normNeedle } from './m59-needle-farm.mjs';
 import { normalizeGangUp } from './m59-gang-up.mjs';
 import { unrevealedWeaponMode } from './m59-unrevealed-weapons.mjs';
+import { normalizeMagicFor } from './m59-magic-for.mjs';
 
 // A name is also a file name, so it is a strict slug: no path, no dot-dot, no surprises.
 export const STRATEGY_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -185,6 +186,11 @@ export const STRATEGY_FIELDS = Object.freeze([
     normalize: bool('weapons.preferMagic') },
   { path: 'weapons.preferMundane', keys: ['preferMundaneWeapon'], faculty: 'work', arg: 'prefer_mundane_weapon',
     normalize: bool('weapons.preferMundane') },
+  // PER QUARRY (m59-magic-for.mjs): the weapon read as magic against a quarry whose name contains one of
+  // these, a mundane one (any family) against everything else. Overrides the two switches above once the
+  // first fight has decided. `weapons.magicFor: ['mollusk creature']` for the Great Ocean hunters.
+  { path: 'weapons.magicFor', keys: ['magicWeaponFor'], faculty: 'work', arg: 'magic_weapon_for',
+    normalize: v => normalizeMagicFor(v, 'weapons.magicFor') },
   { path: 'confine.rooms', keys: ['confineRooms'], faculty: 'movement', arg: 'confine_rooms',
     normalize: v => { if (v === null) return null;
       if (!Array.isArray(v) || !v.length) throw new Error('confine.rooms must be a non-empty list of room numbers or null');

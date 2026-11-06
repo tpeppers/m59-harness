@@ -665,6 +665,11 @@ through a nested shelter order.
 - `m59-prefer-mundane-test.mjs` (5): PREFER MUNDANE (`prefer_mundane_weapon`, `c._preferMundane`). The troll crew keeps a
   dedicated weapon for trolls and an undedicated twin for everything else; with the flag the mundane twin wins inside the
   family (never across it), prefer-magic is unchanged, and the keeper swaps a magic weapon in hand for its mundane twin.
+- `m59-magic-for-test.mjs` (14): MAGIC FOR (`magic_weapon_for`, strategy `weapons.magicFor`, `c._magicFor`). Through the
+  real `equipBest` and keeper hook: a listed quarry (mollusk) wields the weapon read as magic, any other (slime, fungus
+  beast) a mundane one of any family; no mundane carried keeps the magic one (an unread weapon is not "mundane"); no
+  magic carried keeps the mundane one; nothing unarms; one change per 10 s, the held change noted once; the timed
+  preferMagic swap stands aside once decided; key absent is the global switches exactly; schema and broker wiring.
 - `m59-icky-chalice-test.mjs` (43): `substrate/fleetscripts.example/icky-chalice.mjs`, the Icky Cave
   chalice errand. The kod facts it acts on are read back out of the kod (dispel illusion's 1 dragonfly
   eye / 1 uncut seraphym / 2 solagh and 20 mana, no target; cave2's one chalice at r23c11, the 30 s

@@ -2250,7 +2250,8 @@ export class Autopilot {
     session.healingWandTick = cancelled => this.useHealingWand(cancelled);
     session.activeSelfHealTick = trigger => this.activeSelfHealing(trigger);
     // Every equipBest on this session ranks with the book's magic readings (see syncMagicSet).
-    if (session) session.beforeEquip = (c) => this.syncMagicSet(c);
+    // The fight entry names its quarry (equipBest `quarry`), which is what `magicWeaponFor` decides on.
+    if (session) session.beforeEquip = (c, ctx = {}) => this.syncMagicSet(c, null, { quarry: ctx?.quarry ?? null });
     // THE SPARE LIST IS READ BY THE SESSION, because the attack veto and findCreature live there
     // and every swing reaches them (m59-spare.mjs). Read live, so a push or a farm strategy applies
     // on the next swing without a restart.
@@ -2480,6 +2481,10 @@ export class Autopilot {
       // THE OPPOSITE TIE-BREAK: a mundane twin over a magic one inside the family (`syncMagicSet`, the ranking in
       // m59-skills weaponRanking). For a crew that keeps its dedicated weapon for trolls only. Off by default.
       preferMundaneWeapon: false,
+      // PER QUARRY (m59-magic-for.mjs): creature name fragments that get the weapon READ as magic; every
+      // other quarry gets a mundane one, any family. Decided at fight entry, at most one change per 10 s,
+      // overriding the two switches above once decided. null: off, and the two switches alone decide.
+      magicWeaponFor: null,
       // KILL WHAT WE DO NOT WANT, TO KEEP THE ROOM PRODUCING WHAT WE DO. The spawn cap
       // is a room-wide total, so a creature we step over is a slot our prey cannot use.
       // Off makes the keeper ignore weak creatures and slowly suffocate its own hunting

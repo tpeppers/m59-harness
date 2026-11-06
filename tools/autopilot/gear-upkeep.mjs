@@ -8,17 +8,18 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 27 methods: noteReceivedGoods, heldBackIds, saveWeaponMagic, sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
+// 28 methods: noteReceivedGoods, heldBackIds, saveWeaponMagic, sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
 //   overfarmKeepIds, packWeapons, wieldedWeaponId, weaponMagicStatus, noteCurseSuspect,
 //   clearCurseSuspect, noteSwapOutcome, noteReagentRefusal, noteUncursed, sweepCursed,
 //   noteEnchantLapse, noteWeaponArrived, noteDedication, shedUnusedConjures, fieldSpareWeapons,
-//   fieldWeaponCap, capFieldWeapons, sweepWeaponMagic, syncMagicSet, applyMagicPreference
+//   fieldWeaponCap, capFieldWeapons, sweepWeaponMagic, syncMagicSet, magicForMode, applyMagicPreference
 import { clearConjureHoard } from '../m59-conjure-cleanup.mjs';
 import { spellCost } from '../m59-deskpractice.mjs';
 import { reconcile } from '../m59-loadout.mjs';
 import { shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { WeaponMagicBook, magicSwap } from '../m59-weapon-magic.mjs';
+import { normalizeMagicFor, decideMagicFor, MAGIC_FOR_GAP_MS } from '../m59-magic-for.mjs';
 import { CONJURABLE_WEAPONS, CURSE_SUSPECT_REFUSALS, swapWhyNot } from '../m59-autopilot.mjs';
 import { selfFacts, roomFacts } from '../m59-joint-facts.mjs';
 import { noteReceived, protectedReceived, arrivedFrom } from '../m59-received.mjs';
@@ -166,6 +167,8 @@ export class GearUpkeepPart {
     if (this._curseSuspect && inHand != null && inHand !== this._curseSuspect.id)
       this.clearCurseSuspect('the suspected weapon is no longer in hand');
     return { ...sum, prefer_magic: this.policy?.preferMagicWeapon === true,
+             magic_for: this.policy?.magicWeaponFor ?? null, magic_for_mode: this._magicForState ?? null,
+             magic_for_held: this._magicForHeld ?? 0,
              swapped_at: this._magicSwapAt ?? null, lapses: this._magicLapses ?? 0,
              curse_suspect: this._curseSuspect ?? null };
   }
@@ -589,9 +592,16 @@ export class GearUpkeepPart {
   // a conjured mundane long sword in Ukgoth with the enchanted twin in his pack, and the trolls
   // rule stood him down "not ready". Every fight entry calls this, so the equip inside the fight
   // always ranks with the book's answer.
-  syncMagicSet(c = this.s?.client, items = null) {
+  //
+  // AND PER QUARRY, when `magicWeaponFor` names some (m59-magic-for.mjs): the fight entry passes the
+  // quarry it chose (equipBest's `quarry`), the decision is 'magic' for a listed one and 'mundane' for
+  // anything else, and it then OVERRIDES the two global switches for the ranking. Rate-limited to one
+  // change per 10 s, noted when it changes. No quarry (every between-fights equip) keeps the last
+  // decision; no decision yet falls through to the global switches; no key is today exactly.
+  syncMagicSet(c = this.s?.client, items = null, { quarry = null } = {}) {
     if (!c) return null;
-    const on = this.policy?.preferMagicWeapon === true;
+    const forMode = this.magicForMode?.(quarry) ?? null;
+    const on = forMode ? forMode === 'magic' : this.policy?.preferMagicWeapon === true;
     const sum = this.weaponMagicBook().summary(items ?? this.packWeapons(c), this.wieldedWeaponId(c),
       undefined, skills.brokenSet(c));
     // WHAT WAS CONJURED, whatever the policy: the sale plan skips it (inventorySalePlan), because
@@ -600,10 +610,35 @@ export class GearUpkeepPart {
     // Read as NOT conjured: a remembered summon id that now names one of these is looted, not ours.
     c._notMadeIds = new Set(sum.weapons.filter(w => w.made === false).map(w => w.id));
     const mundane = !on && this.policy?.preferMundaneWeapon === true;
-    c._magicWeaponIds = on || mundane
+    const wantMundane = forMode ? forMode === 'mundane' : mundane;
+    c._magicWeaponIds = on || wantMundane
       ? new Set(sum.weapons.filter(w => w.bypasses_nonmagic === true).map(w => w.id)) : null;
-    c._preferMundane = mundane;
+    c._preferMundane = wantMundane;
+    c._magicFor = forMode;
     return sum;
+  }
+
+  // THE PER-QUARRY DECISION (`magicWeaponFor`), kept on the keeper so it survives a reconnect the way the
+  // book does. Returns 'magic' | 'mundane' | null. Silence (no list) clears any old decision.
+  magicForMode(quarry = null, now = Date.now()) {
+    let list = null;
+    try { list = normalizeMagicFor(this.policy?.magicWeaponFor ?? null, 'magicWeaponFor'); } catch { list = null; }
+    if (!list) { this._magicForState = null; return null; }
+    const d = decideMagicFor(this._magicForState ?? null, { list, quarry, now });
+    if (d.changed) {
+      const from = this._magicForState?.mode ?? null;
+      this._magicForState = d.state;
+      this.note?.('MAGIC FOR', { quarry, want: d.mode, from,
+        why: d.mode === 'magic'
+          ? `magic_weapon_for names this quarry (${list.join(', ')}): the dedicated weapon is for it`
+          : `magic_weapon_for does not name this quarry: a mundane weapon, the dedication is kept for ${list.join(', ')}` });
+    } else if (d.held && this._magicForHeldNoted !== this._magicForState?.at) {
+      this._magicForHeldNoted = this._magicForState?.at;
+      this._magicForHeld = (this._magicForHeld ?? 0) + 1;
+      this.note?.('MAGIC FOR HELD', { quarry, want: d.want, keeping: d.mode,
+        why: `the weapon kind changed less than ${MAGIC_FOR_GAP_MS / 1000}s ago; keeping the one in hand rather than thrash` });
+    }
+    return d.mode;
   }
 
   // THE ONE-SECOND HALF OF THE UKGOTH STRATEGY: keep the client's magic set current, and when the
@@ -613,6 +648,9 @@ export class GearUpkeepPart {
     const on = this.policy?.preferMagicWeapon === true;
     const sum = this.syncMagicSet(c, items);
     const due = this._magicSwapDue; this._magicSwapDue = false;
+    // A PER-QUARRY DECISION IS THE FIGHT ENTRY'S (magicWeaponFor): the next equipBest ranks with it, so a
+    // timed swap here would only argue with the last fight. Undecided -> the global switches, as before.
+    if (c?._magicFor) return null;
     // PREFER MUNDANE: a magic weapon in hand with a mundane same-name spare in the pack -> equipBest swaps (the
     // ranking's inverted tie-break chooses the spare). The dedicated one is kept for the troll rooms.
     if (!on && this.policy?.preferMundaneWeapon === true) {

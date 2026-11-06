@@ -699,6 +699,17 @@ export function weaponRanking(c, { priority = null, banned = null,
   // rooms the mundane twin wins the tie inside the family. Never the cross-family "magic first" rule below.
   const preferMundane = c._preferMundane === true && !!magic;
   const mundane = r => (magic?.has(r.o.id) ? 0 : 1) ^ (preferMundane ? 1 : 0);
+  // PER QUARRY, ACROSS FAMILIES (`magicWeaponFor`, c._magicFor, m59-magic-for.mjs): the keeper decides at
+  // fight entry whether this quarry gets the dedicated weapon ('magic') or anything else ('mundane'), and
+  // the wanted kind outranks everything below -- the family priority included, because a mollusk hunter's
+  // spare may be a hammer beside his dedicated axe. A RANKING, never a filter: with none of the wanted kind
+  // carried every row ties here and the ordinary order decides. An UNREAD weapon never counts as the
+  // mundane kind (it may be cursed), and the magic kind is only what the book has READ as magic.
+  // Unset (no key) is a constant 0 and changes nothing.
+  const forWant = c._magicFor === 'magic' || c._magicFor === 'mundane' ? c._magicFor : null;
+  const forKey = forWant === 'magic' ? (r => (magic?.has(r.o.id) ? 0 : 1))
+    : forWant === 'mundane' ? (r => (!magic?.has(r.o.id) && !r.unread ? 0 : 1))
+    : () => 0;
   // A STRATEGY'S WEAPON PREFERENCE (`c._preferWeapons`, set from a casting strategy's idleGear
   // `prefer_weapons`, m59-castrite.mjs): name patterns ranked first, in order. Null -- no strategy, or
   // one that does not say -- ranks exactly as before. It ranks after the magic-first rule, so an
@@ -717,13 +728,13 @@ export function weaponRanking(c, { priority = null, banned = null,
     // by its priority alone. Trolls resist a mundane blade by 80 (troll.kod:64-67): an enchanted long
     // sword in an axe trainee's hand beats its conjured axe outright. It was a tie-break inside the
     // family, and a hunter stood in the stage room holding an enchanted long sword he would not wield.
-    return rows.sort((a, b) => (magic && !preferMundane ? mundane(a) - mundane(b) : 0) || preferRank(a) - preferRank(b) || rank(a.name) - rank(b.name) ||
+    return rows.sort((a, b) => forKey(a) - forKey(b) || (magic && !preferMundane ? mundane(a) - mundane(b) : 0) || preferRank(a) - preferRank(b) || rank(a.name) - rank(b.name) ||
       mundane(a) - mundane(b) || a.unread - b.unread || b.base - a.base);
   }
   // Proficiency first — a weapon you are good with hits more often than a nominally
   // bigger one you are not. Unread abilities fall back to the crude name score rather
   // than sorting as zero, which would put the greatsword last on a fresh login.
-  return rows.sort((a, b) => preferRank(a) - preferRank(b) || (b.ability ?? -1) - (a.ability ?? -1) || mundane(a) - mundane(b) ||
+  return rows.sort((a, b) => forKey(a) - forKey(b) || preferRank(a) - preferRank(b) || (b.ability ?? -1) - (a.ability ?? -1) || mundane(a) - mundane(b) ||
     a.unread - b.unread || b.base - a.base);
 }
 
@@ -769,7 +780,8 @@ export const handsFullText = (t) => HANDS_FULL.test(t || '');
 
 export async function equipBest(s, { priority = null, banned = null, maxTries = 4,
                                      refresh = true, allowUnrevealed = false,
-                                     beforeMutation = null, shouldCancel = null } = {}) {
+                                     beforeMutation = null, shouldCancel = null,
+                                     quarry = null } = {}) {
   // THE OWNER MAY SAY THE HAND IS MEANT TO BE EMPTY. A keeper training a touch spell registers
   // `s.equipVeto`; a reason string refuses the equip before anything is read or sent. A hook that
   // throws does not veto: an unexplained refusal to arm is the dangerous direction.
@@ -792,7 +804,10 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
   // Without this, a keeper that had just reconnected ranked its conjured mundane twin level with
   // the enchanted one and kept it (Animal in Ukgoth, 2026-09-27). A hook that throws must not
   // stop anyone arming: an unranked equip is still better than none.
-  try { s.beforeEquip?.(c); } catch { /* rank with whatever the client already holds */ }
+  // `quarry` is the creature this equip is FOR, when the caller knows it (fight entry does): the hook
+  // decides per-quarry weapon magic from it (`magicWeaponFor`, m59-magic-for.mjs). Null leaves the
+  // owner's last decision standing, which is what every between-fights equip wants.
+  try { s.beforeEquip?.(c, { quarry }); } catch { /* rank with whatever the client already holds */ }
   // AND THE OWNER MAY SAY WHICH WEAPON, AND ONLY WHICH (`s.equipOnly`, Autopilot
   // trainingWeaponOnlyNow): a narrowing of the ranking, never a widening. A hook that throws
   // restricts nothing, for the same reason a throwing veto does not veto.
@@ -2863,7 +2878,7 @@ async function fightWithIntent(s, {
 
   let wielded = null;
   if (equip) {
-    const e = await equipBest(s, { priority: weaponPriority, banned: bannedWeapons });
+    const e = await equipBest(s, { priority: weaponPriority, banned: bannedWeapons, quarry: foeName });
     wielded = e.id ?? null;
     say('equipped', { wielding: e.wielding, verified: e.verified, skill: e.skill,
                       ability: e.ability, rejected: e.rejected, note: e.note });
@@ -3215,7 +3230,7 @@ async function fightWithIntent(s, {
     // use list verifies. Otherwise stop before another attack silently becomes a punch.
     if (weaponBroke) {
       if (equip) {
-        const again = await equipBest(s, { priority: weaponPriority, banned: bannedWeapons });
+        const again = await equipBest(s, { priority: weaponPriority, banned: bannedWeapons, quarry: foeName });
         const replacementVerified = again.verified === true && again.id != null;
         wielded = replacementVerified ? again.id : null;
         say(replacementVerified ? 're-armed' : 're-arm failed', {

@@ -37,6 +37,7 @@ import {movementRegionSpec} from './m59-movement-region.mjs';
 
 import{createDeliveryNoticeTool,receiveDeliveryNotice}from'./m59-delivery-notices.mjs';
 import { identifiedAs } from './m59-item-signature.mjs';
+import { normalizeMagicFor } from './m59-magic-for.mjs';
 import {exactDrop,executeExactDrop} from './m59-inventory-drop.mjs';
 import {declaredJumpMoveOptions,prepareDeclaredJump} from './m59-jump-takeoff.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
@@ -12712,6 +12713,12 @@ const TOOLS = [
           'the tie over one read as magic, and a magic weapon in hand is swapped for a same-name mundane spare. For a ' +
           'crew that keeps its enchanted weapon for trolls (prefer_magic_weapon true there) and the other for ' +
           'everything else. Ignored while prefer_magic_weapon is true. autopilot status reports policy.preferMundaneWeapon' },
+      magic_weapon_for: { type: 'array', items: { type: 'string' },
+        description: 'PER QUARRY: creature name fragments (case-insensitive substrings) that get the weapon READ as magic ' +
+          '(e.g. ["mollusk creature"]); every other quarry gets a mundane weapon of ANY family. Decided at fight entry, ' +
+          'at most one change per 10 s, and it overrides prefer_magic_weapon / prefer_mundane_weapon once decided. ' +
+          'A ranking, never a refusal: with none of the wanted kind carried the weapon in hand stays. [] turns it off. ' +
+          'autopilot status reports policy.magicWeaponFor and weapon_magic.magic_for_mode' },
       prefer_magic_weapon: { type: 'boolean',
         description: 'Between two weapons of the SAME priority rank, wield the one READ as ' +
                      'bypassing NONMAGIC (enchanted, born magic, nerudite) — and swap to it at once ' +
@@ -13896,6 +13903,8 @@ const TOOLS = [
         p.policy.preferMagicWeapon = a.prefer_magic_weapon === true;
       if (a.prefer_mundane_weapon !== undefined)
         p.policy.preferMundaneWeapon = a.prefer_mundane_weapon === true;
+      if (a.magic_weapon_for !== undefined)
+        p.policy.magicWeaponFor = normalizeMagicFor(a.magic_weapon_for, 'magic_weapon_for');
       // A PROHIBITION, NOT A RANKING. Lower-cased at the door because isBannedWeapon
       // compares that way, and an empty list stores null so "no ban" and "a ban that
       // matches nothing" cannot be confused downstream.

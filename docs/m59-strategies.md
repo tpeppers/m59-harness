@@ -105,6 +105,8 @@ export default {
 | `weapons.banned` | `bannedWeapons` | work | list of names, lower-cased |
 | `weapons.style` | `trainingStyle` | work | the five training styles |
 | `weapons.preferMagic` | `preferMagicWeapon` | work | boolean |
+| `weapons.preferMundane` | `preferMundaneWeapon` | work | boolean |
+| `weapons.magicFor` | `magicWeaponFor` | work | creature name fragments, lower-cased; `[]`/`null` is off -- see [Magic for](#magic-for-weaponsmagicfor-the-dedicated-weapon-for-these-quarries-only) |
 | `confine.rooms` | `confineRooms` | movement | room numbers -- the destination AND the road: a journey plans only through these (`confinementAvoid`; from outside them, the confined road home when one exists) |
 | `confine.station` | `assignedRoom` | movement | a room number |
 | `confine.roam` | `roam` | movement | boolean |
@@ -319,6 +321,40 @@ answers, by `spareBlockers` (strategy) / `spare_blockers` (tool), movement facul
 At most six lures per room per ten minutes, then it is the movement ladder's again. A provoking swing that
 kills is noted loudly (`SPARED BLOCKER DIED`, `tally.spared_killed`). `qor-lupogg-sewers` (example) is the
 first user; `m59-spare-blocker-test.mjs` (14, offline) pins it.
+
+### Magic for (`weapons.magicFor`): the dedicated weapon for THESE quarries only
+
+Operator, 2026-11-06, of the Great Ocean mollusk hunters (552/562): *"have them kill the slimes with other
+weapons (non-dedicated)" ... "Slimes or fungus, whatever else is on that map".* A Kraanan dedication lapses
+after 1-25 h and wears with use, so every swing at a frogman or slime spends it on a creature a plain weapon
+kills as well. `preferMagic` / `preferMundane` answer "which weapon" once for the whole day; this answers it
+per quarry:
+
+```js
+weapons: { priority: ['axe'], preferMagic: true, magicFor: ['mollusk creature'] },
+```
+
+- **At fight entry** (`skills.fight` -> `equipBest({ quarry })` -> the keeper's `beforeEquip` hook ->
+  `syncMagicSet` / `magicForMode`, `m59-magic-for.mjs`) the quarry's name is matched, case-insensitive
+  substring, against the list: listed -> `'magic'` (a weapon the weapon-magic book READ as
+  `bypasses_nonmagic`), anything else -> `'mundane'` (any weapon NOT read magic, **any family** -- a hammer
+  beside the dedicated axe counts). The swap happens before the first swing; the re-arm after a shatter
+  names the quarry too.
+- **The wanted kind outranks the family priority** (`weaponRanking`'s first key, `c._magicFor`), and inside
+  it the ordinary order decides (a mundane axe before a mundane hammer for an axe trainee).
+- **A ranking, never a refusal.** With none of the wanted kind carried every row ties and the weapon in hand
+  stays -- it cannot unarm a character or refuse a fight. Cursed, banned, broken and identified-magic-loot
+  filters are `weaponRanking`'s, untouched; an **unread** (grade 100) weapon never counts as the mundane kind.
+- **One change per 10 s.** A change asked for inside the window is HELD (`MAGIC FOR HELD`, once per window;
+  `weapon_magic.magic_for_held`), so a room with both kinds does not swap at every fight. A change is noted
+  `MAGIC FOR`.
+- **Between fights the decision stands**: an equip that names no quarry (fix-unarmed, a gift, `equip_best`)
+  ranks with the last decision, and the timed `applyMagicPreference` swap stands aside once one exists.
+  Before the first fight, `preferMagic` / `preferMundane` decide as before; after it, `magicFor` overrides them.
+- **Silence is today exactly**: no key (or `[]`/`null`) and nothing above runs. Broker: `magic_weapon_for`;
+  status: `policy.magicWeaponFor`, `weapon_magic.magic_for_mode`.
+
+`m59-magic-for-test.mjs` (14, offline) pins it through the real `equipBest` and keeper hook.
 
 ### Unidentified weapons (`lootUnrevealedWeapons`): a cursed one wields itself
 
