@@ -8,11 +8,11 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 31 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
+// 32 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
 //   bannedWeaponsNow, huntsTrolls, bareHandedByTraining, touchSpellNow, huntAreaHere,
 //   nearestHuntAreaSquare, huntPriorityOrder, huntPriorityStatus, gangUpPlayersHere, gangUpVerdict,
 //   gangUpBars, gangUpLapsedPull, gangUpFilter, gangUpStatus, patrolHere, patrolEngageFilter,
-//   patrolWalk, patrolStatus, applyFarmStrategy,
+//   patrolWalk, patrolStatus, applyFarmStrategy, secondWindFarming,
 //   farmStrategyHook, farmStrategyStatus, policyForOrders, farmStrategyPushEcho,
 //   farmStrategyGate, farmStrategyFarming, rereadWeapons
 import { spellCost } from '../m59-deskpractice.mjs';
@@ -27,7 +27,9 @@ import { SHORTFALL_TTL_MS, shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { FarmStrategyEngine } from '../m59-strategy-engine.mjs';
 import { touchSpellSpec } from '../m59-touchspell.mjs';
-import { MIN_FIGHT_VIGOR, reachableFightFloor, reagentTargetFor, restVigorCapOf, STARVED_FIGHT_VIGOR, STRATEGIES, VIGOR_CAP } from '../m59-autopilot.mjs';
+import { MIN_FIGHT_VIGOR, reachableFightFloor, reagentTargetFor, restVigorCapOf, SPAWN_FILE, STARVED_FIGHT_VIGOR, STRATEGIES, VIGOR_CAP } from '../m59-autopilot.mjs';
+import { secondWindVerdict } from '../m59-second-wind.mjs';
+import { loadSpawns } from '../m59-spawns.mjs';
 
 export class HuntSetupPart {
   // @part 1
@@ -88,7 +90,33 @@ export class HuntSetupPart {
   // This character's resting ceiling (Second Wind included), as a fraction of the bar. See restVigorCapOf.
   restVigorCap() { return restVigorCapOf(this.s?.client?.vitals?.()); }
 
+  // SECOND WIND FARMING (m59-second-wind.mjs): against prey far smaller than us, the skill is the larder. The verdict for
+  // this room, recomputed at most every 30 s or on a room change. Read by fightFloor (0 while active) and provision
+  // (no meals while active, unless `eat`). Survival, health resting and the meal before a journey are untouched.
+  secondWindFarming() {
+    const c = this.s?.client, room = this.s?.world?.room?.num ?? null, now = Date.now();
+    const memo = this._secondWind;
+    if (memo && memo.room === room && memo.policy === this.policy?.secondWindFarming && now - memo.at < 30_000) return memo.verdict;
+    const named = (c?.skills ?? []).some(s => /^second wind$/i.test(String(c?.rsc?.get?.(s?.nameRsc) ?? s?.name ?? '').trim()));
+    const ability = c?.abilityOf?.('second wind');
+    const knows = Number.isFinite(ability) ? ability > 0 : named;
+    let preyLevels = [];
+    try {
+      const table = loadSpawns(SPAWN_FILE)?.rooms?.[String(room)] ?? [];
+      preyLevels = table.filter(x => x?.huntable).map(x => x.level);
+    } catch { preyLevels = []; }
+    const verdict = { ...secondWindVerdict({ policy: this.policy?.secondWindFarming, farming: this.mode === 'farm',
+      knows, maxHealth: c?.vitals?.()?.health?.max, preyLevels }), ability: Number.isFinite(ability) ? ability : null };
+    if (verdict.active && !memo?.verdict?.active)
+      this.note('second wind farming: no meals, no vigor floor', { ...verdict,
+        how: 'fights down to the trigger at 25 vigor; the skill refills 40 + stamina/2 + ability and rolls to improve' });
+    this._secondWind = { room, policy: this.policy?.secondWindFarming, at: now, verdict };
+    return verdict;
+  }
+
   fightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {
+    // Second Wind is the vigor supply: a floor would stop the character above 25, the one place the skill pays.
+    if (this.secondWindFarming?.()?.active) return 0;
     if (this.poorFarmingActive()) return this.poorVigorFloor();
     const want = this.wantedFightFloor(plan);
     // An empty larder puts the floor out of reach — resting stops at 80 — so holding
@@ -509,11 +537,11 @@ export class HuntSetupPart {
 
   /** Quarry within the patrol's radius (and whatever we are already fighting or pulling). A choice to fight marks
    *  the loop for resuming at the nearest waypoint once the room is clear. */
-  patrolEngageFilter(found, self, patrol) {
-    const { kept, dropped } = engageFilter(found, self, patrol, [this.foeId, this.pendingPull?.target_id]);
+  patrolEngageFilter(found, self, patrol, walks = null) {
+    const { kept, dropped, off_foot } = engageFilter(found, self, patrol, [this.foeId, this.pendingPull?.target_id], walks);
     const st = (this._patrol ??= patrolState());
     if (kept.length) st.resume = true;
-    st.lastFilter = { at: Date.now(), engaged: kept.length, left_for_the_loop: dropped };
+    st.lastFilter = { at: Date.now(), engaged: kept.length, left_for_the_loop: dropped, ...(off_foot ? { far_on_foot: off_foot } : {}) };
     return kept;
   }
 

@@ -43,6 +43,7 @@ import * as buyers from './m59-buyers.mjs';
 import {readIntent,sessionIdentity,planInventory,saleBlocked} from './m59-inventory-intent.mjs';
 import { readFileSync } from 'node:fs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
+import { chaseCapable, chasePiece, walkPlan } from './m59-chase.mjs';
 import { isPvpOnly } from './m59-pvp-gear.mjs';
 import { floorSnapshot } from './m59-loot-filter.mjs';
 import { killDropItems } from './m59-killdrop.mjs';
@@ -2784,6 +2785,9 @@ async function fightWithIntent(s, {
   // A predicate over the OBJECT: true means "do not consider this one". The keeper passes
   // prey it has already failed to reach; see noteUnreachablePrey in m59-autopilot.mjs.
   avoid = null,
+  // CHASE ON FOOT (m59-chase.mjs): off unless the caller asks. The keeper passes policy.chaseOnFoot; every other
+  // caller (fleetscript, the broker's fight tool) keeps the approach it always had.
+  chase = false,
 } = {}) {
   const c = s.need();
   const log = [];
@@ -2898,12 +2902,61 @@ async function fightWithIntent(s, {
   const approachFailure=walk=>({ ...walk, fought:false, arrived:false, target:foeName,foe_id:foe.id,target_id:foe.id,log,
     note:'the combat approach returned control with its confirmed movement result; no fallback or attack was sent' });
   const localDistance=meBefore?Math.hypot(foe.col-meBefore.col,foe.row-meBefore.row):0;
-  const fineApproach=!holdPosition&&localDistance<=8&&typeof s.walkToMeleeRange==='function';
-  const spot = (holdPosition || foeNearby || fineApproach) ? null : s.world?.approachSquare?.(foe.col, foe.row);
+  // CHASE ON FOOT: WALK AS IF TO STAND ON TOP OF IT (m59-chase.mjs). Operator 2026-11-05, the Icky Cave: a quarry
+  // three squares off across a ledge is fifty steps away on foot, and the local approach below searches a box
+  // around the two points that cannot contain the stairs. So the walker's own planner is asked first, and when the
+  // walk is a DETOUR we walk one bounded piece of it toward the quarry's square instead -- at ANY straight distance,
+  // because going round usually means walking away first, and the old "too far to approach this pass" would hand
+  // the chase back after one piece -- and again, triggered by the rejection, when the local search runs out of
+  // budget or bounds. In reach after the piece: swing now. Not yet: `closing`, which the keeper counts as progress
+  // and continues next pass (finishChasePiece). Within `reach` we swing from where we stand whatever is between us:
+  // the server measures melee range on integer squares and nothing else (TargetWithinSightAndRange, player.kod).
+  // No step mask, no plan, a direct walk, or holding a wall: exactly the approach below, unchanged.
+  let chased=null;
+  const chasePlan=chase&&!holdPosition&&meBefore&&!meBefore.predicted&&chaseCapable(s.world?.geometry)
+    ?walkPlan(s.world.geometry,meBefore,foe):null;
+  const runChase=async plan=>{
+    const piece=await chasePiece(s,foe.id,{reach,plan,movementGeneration,controlToken});
+    say('chase',{...(piece.chase??{}),moved:!!piece.moved,steps:piece.steps??0,reason:piece.reason??null,in_reach:!!piece.in_reach});
+    return piece;
+  };
+  const chaseClosing=piece=>({fought:false,closing:true,moved:!!piece.moved,steps:piece.steps??0,target:foeName,
+    foe_id:foe.id,target_id:foe.id,reason:piece.moved?'closing on foot':(piece.reason??'the chase piece did not move'),
+    chase:piece.chase,position:c.self?{row:c.self.row,col:c.self.col}:null,log,
+    note:'walked one piece of the route toward the quarry; the next pass looks at the room again'});
+  // Past 8 squares as well, detour or not: without a wall to hold (no chasePlan when holding) the old answer,
+  // out_of_reach, always ended in closeOnQuarry walking the same plan one pass later.
+  if(chasePlan?.found&&localDistance>reach&&(chasePlan.detour||localDistance>8)){
+    const piece=await runChase(chasePlan);
+    if(approachStopped(piece.walk))return approachFailure(piece.walk);
+    if(!piece.in_reach)return chaseClosing(piece);
+    chased=piece;
+  }
+  const fineApproach=!chased&&!holdPosition&&localDistance<=8&&typeof s.walkToMeleeRange==='function';
+  const spot = (holdPosition || foeNearby || fineApproach || chased) ? null : s.world?.approachSquare?.(foe.col, foe.row);
   if(fineApproach){
     const walk=await s.walkToMeleeRange(foe.id,{reach,movementGeneration,controlToken});
     say('melee_approach',{arrived:walk.arrived,steps:walk.steps,reason:walk.reason,position:walk.position});
-    if(!walk.arrived)return approachFailure(walk);
+    if(!walk.arrived){
+      // THE REJECTION IS THE TRIGGER -- when the local search was too SMALL. planBodyDetour fails three ways: past its
+      // local bounds, out of time or nodes, or "no clear local body route" after searching its whole box. Only the
+      // first is about the room, so only it hands over to the walker's plan. The other two, on a route the plan calls
+      // direct (a detour was already chased above), are BODIES: a crowd is what exhausts the 100 ms budget, and a
+      // CPU-loaded keeper exhausts it on the same crowd (measured: the Cragged body-blocked case flipped to a chase
+      // whenever the offline suites shared the cores). Walking the geometry plan into a body wall is the grind this
+      // branch exists to refuse: report it blocked, send nothing, choose another quarry -- as before.
+      const undecided=/exceeds local bounds/.test(String(walk.detour_reason??''));
+      if(!walk.approach_blocked||!undecided||!chasePlan?.found)return approachFailure(walk);
+      const piece=await runChase(null);
+      if(approachStopped(piece.walk))return approachFailure(piece.walk);
+      if(!piece.in_reach){
+        if(piece.moved)return chaseClosing(piece);
+        return {...approachFailure(walk),chase:piece.chase};
+      }
+      chased=piece;
+    }
+  } else if (chased) {
+    // The chase put us in reach: face and swing below.
   } else if (spot && spot.steps > 0) {
     // CAP THE APPROACH: walking more than 8 grid steps (or 12 raw cells)
     // to close on a mob blocks the broker for 2-40s (coarse vs fine grid).

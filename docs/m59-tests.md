@@ -338,17 +338,42 @@ through a nested shelter order.
   A pass naming another room lets nothing out, and a cancel, the next journey, a different start room or
   two minutes ends it. See docs/m59-boundary.md.
 
-- `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
+- `m59-spawnreach-test.mjs` (7): `plGenerators` parse as [row, col]; the shipped table holds the cave's thirteen;
+  on a toy room home, a trap you can enter and not leave, and a region with its own exit (never a fault); strongly
+  connected components; on the real cave every spawn point is at home and no trap is left, and with the declared
+  points masked back to centres the trap reappears and its proposals VERIFY, r35c46 letting the region out.
+
+- `m59-second-wind-test.mjs` (8): OFF by default (no key, even Scooter in the cave, keeps the old floor and meals) and
+  `icky-cave-patrol` turns it and `chaseOnFoot` on and validates; `second_wind_farming`'s normal form and refusals; the verdict (120 health against a
+  level-50 worst spawn is 2.4, on; stronger prey, no skill, not farming, off, or an unknown room: off; `on` overrides
+  the ratio; `eat` keeps meals); and on a fake keeper in the cave, `fightFloor()` is 0 and `provision()` eats nothing,
+  while without the skill the floor is the old one.
+
+- `m59-chase-test.mjs` (16): OFF by default (`fight()` without `chase` is the old local approach; the keeper orders,
+  fights and closes on foot only under `policy.chaseOnFoot === true`, which defaults false). Chase on foot (`m59-chase.mjs`) on the real Icky Cave map. The operator's r35c45 -> r35c58
+  is a detour whose every step short of the quarry replays on the mover, and one piece is `pieceSteps` long;
+  r35c41 -> r34c39 (2.2 squares through the wall) is a detour, never "in range"; r35c48 plans out since its declared stand points,
+  and never east up the cliff; `orderByWalk` puts the near-on-foot quarry first, no route last (never dropped), keeps the input order
+  with no mask, and stops at its budget; `known: false` for no mask, no position, a floorless goal or a throwing
+  planner; the cache expires and is bounded. Then `fight()` under real collision in the socketless harness: a spider
+  across the wall is CHASED one piece closer on foot with no swing, a direct one is still the local approach and hit,
+  holding a wall never chases, and only a local refusal for BOUNDS hands over to the plan (budget or an exhausted
+  box is a crowd, and sends nothing); `finishChasePiece` keeps the quarry, abandons after two idle pieces or
+  `chaseMaxPieces`, and contact resets the count.
+
+- `m59-patrol-farm-test.mjs` (23): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy
   default is null and every keeper helper answers the old way without it (and in another room). The state machine:
   nearest waypoint first, arrival advances in loop order and counts laps, `arriveWithin` counts as arrived, after a
   fight the loop resumes at the NEAREST waypoint unless the one it had is within `resumeSlack` (forward, not back), an
   unreachable waypoint is skipped and recorded, nothing reachable is `stuck`. The radius keeps quarry within
-  `engageWithin` plus whatever we are fighting. The walk aims at the plan's `legSteps`-th square, never the whole leg;
+  `engageWithin` plus whatever we are fighting, and `engageWalk` drops what is far ON FOOT or has no walk (unless within
+  two squares) while an unknown walk keeps the old radius. The walk aims at the plan's `legSteps`-th square, never the whole leg;
   a movement lease and a hurt body on a wall stop it. `replayOnMover` refuses an undeclared 2-square step and passes a
   declared jump. On the shipped map every leg of the operator's Icky Cave loop plans, replays on the mover and has a
   baked route, and r50c34 -> r23c53 goes over the declared r36c46 -> r34c46. Source pins: the radius sits after gang-up
-  and before the ranking, the walk after the hunt-area return and before the wall vigil. **It should fail the day the
+  and before the ranking with the walk order between them, the walk after the hunt-area return and before the wall
+  vigil, and a deferred quarry walks the loop rather than waiting. **It should fail the day the
   loop's pocket leg goes missing from the bake again.**
 
 - `m59-human-kills-test.mjs` (15): a person's kills, counted from the gate proxy. "You killed ..." is a kill, and so

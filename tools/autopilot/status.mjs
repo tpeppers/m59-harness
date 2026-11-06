@@ -303,6 +303,8 @@ export class StatusPart {
       // between fights, so a character that engages tired stays tired. `below_want`
       // over `engagements` is the honest score; `starved_passes` says the reason is
       // an empty pack rather than a bad threshold.
+      // SECOND WIND FARMING (m59-second-wind.mjs): whether the skill is this character's larder here, and why.
+      second_wind: (() => { try { return this.secondWindFarming?.() ?? null; } catch { return null; } })(),
       vigor: this.vigor.engagements || this.vigor.waited ? {
         floor_now: this.fightFloor(), want: WANT_FIGHT_VIGOR,
         engagements: this.vigor.engagements,

@@ -112,7 +112,9 @@ export default {
 | `practice` | `practiceSpells` | work | `normalizePractice`, problems refused |
 | `huntArea` | `huntArea` | work | `normHuntArea`: `{ room, squares: [[row, col], ...] }` — in that room only quarry on a listed square is chosen, and an idle farmer walks back onto the area (`m59-hunt-area-test.mjs`) |
 | `gangUp` | `gangUp` | work | `normalizeGangUp`: `{ '<creature>': { min, radius } }` (defaults `min: 2`, `radius: 4`) — a listed creature is quarry only while `min - 1` other fleet-mates stand within `radius` squares of IT; see [Gang up](#gang-up-gangup-a-creature-fought-only-two-on-one) (`m59-gang-up-test.mjs`) |
-| `patrol` | `patrol` | work | `normPatrol` (`m59-patrol-farm.mjs`): `{ room, loop: [{ row, col }, ...], engageWithin?, arriveWithin?, legSteps?, resumeSlack? }` — in that room a farmer with nothing in reach walks the loop instead of holding a wall; see [Patrol](#patrol-patrol-walk-the-spawn-points-in-a-loop) (`m59-patrol-farm-test.mjs`) |
+| `patrol` | `patrol` | work | `normPatrol` (`m59-patrol-farm.mjs`): `{ room, loop: [{ row, col }, ...], engageWithin?, engageWalk?, arriveWithin?, legSteps?, resumeSlack? }` — in that room a farmer with nothing in reach walks the loop instead of holding a wall; see [Patrol](#patrol-patrol-walk-the-spawn-points-in-a-loop) (`m59-patrol-farm-test.mjs`) |
+| `chaseOnFoot` | `chaseOnFoot` | work | boolean, default off: rank quarry by steps on foot and walk the route to one round a ledge; see [chase on foot](m59-combat.md#chase-on-foot--walk-as-if-to-stand-on-the-quarry) (`m59-chase-test.mjs`) |
+| `secondWind` | `secondWindFarming` | work | `'off'` (default), `'auto'`, `'on'`, `{ mode, prey_ratio, eat }`: against weak prey, no vigor floor and no meals; see [docs/m59-policy.md](m59-policy.md) (`m59-second-wind-test.mjs`) |
 
 **A GUARD ZONE OVERRIDES IT FOR ONE CHARACTER.** `autopilot action=start guard_zone={ room, from: {row, col}, to: {row, col} }` (or `{ room, squares }`) is an operator order to one character, stored as `policy.guardZone` (`normGuardZone`, which keeps the drawn `rect`). In its own room it is the area `huntAreaHere` uses, in place of the strategy file's `huntArea`; `guard_zone: null` hands the room back to the file. The field command's room map draws one by dragging a rectangle (operator 2026-10-16).
 
@@ -407,10 +409,14 @@ errand or an operator asks for, not farming, and cooperative combat / the buddy 
 patrol changes passFarm at two seams and nowhere else:
 
 - **Which quarry.** After confinement, the avoid set, the hunt area and gang-up, quarry farther than `engageWithin`
-  squares (Euclidean) is dropped, except whatever we are already fighting or pulling. The rest is left for the loop to
-  meet. The ranking, `huntPriority`, the wall a fight opens from, the pull and the fight then run exactly as before.
+  squares (Euclidean) is dropped, and so is quarry farther than `engageWalk` steps **on foot** (default twice
+  `engageWithin`; [chase on foot](m59-combat.md#chase-on-foot--walk-as-if-to-stand-on-the-quarry)), except whatever we
+  are already fighting or pulling, and anything already within two squares. The rest is left for the loop to meet. In
+  the Icky Cave a third of the quarry within 8 squares is round a ledge -- r32c54 -> r32c57 is three squares and 55
+  steps -- and the straight radius alone engaged it, failed the approach and waited. The ranking, `huntPriority`, the wall a fight opens from, the pull and the fight then run exactly as before.
 - **Nothing to do.** Where passFarm would hold a wall and wait for something to come (the vigil), a patrol walks one
-  piece of the loop: `legSteps` squares of the walker's own plan (`geometry.path`, replayed on `moverStepLands` with
+  piece of the loop -- and so does a pass whose only quarry is briefly deferred, rather than standing "waiting" for it
+  (Zoot, r35c40, 2026-11-05): `legSteps` squares of the walker's own plan (`geometry.path`, replayed on `moverStepLands` with
   declared jumps exempt, which is the bake's rule), then the pass ends and the room is looked at again. A leg the mover
   would refuse is never sent (walkTo would otherwise fall back to a collision-free plan); its waypoint is skipped for
   that lap, as is one whose walk moves nothing three times running. A hurt body goes through `leaveHold`'s gate (it

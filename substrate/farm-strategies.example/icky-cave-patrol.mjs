@@ -41,4 +41,10 @@ export default {
   },
   // A patrol that kills nothing is a walk. Escalate rather than circle for ever (docs/m59-strategies.md).
   floor: { kills: 4, minutes: 30 },
+  // THE STAGED ROLLOUT (operator 2026-11-05): both are off fleet-wide and on here first. Widen them to other farms once
+  // this one's kills/30m are in -- the operator's own solo run here was 85.
+  //   chaseOnFoot  rank quarry by steps on foot and walk the route to one round a ledge (m59-chase.mjs)
+  //   secondWind   against prey this weak, Second Wind is the larder: no vigor floor, no meals (m59-second-wind.mjs)
+  chaseOnFoot: true,
+  secondWind: 'auto',
 };

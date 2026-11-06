@@ -317,6 +317,40 @@ remapped. It was not closed by reaching significance: it compared two ways of tr
 where it stands, which neither arm addressed while the control arm paid for the asking by
 walking hurt characters straight past the only free healing on the road.
 
+## SECOND WIND IS THE LARDER AGAINST WEAK PREY — `second_wind_farming`
+
+```bash
+node tools/m59-second-wind-test.mjs     # 8, offline
+```
+
+Operator, 2026-11-05: characters far stronger than their prey, with Second Wind, should not eat -- "just have second wind
+keep giving them vigor back (and a chance for an improve!)". Second Wind (secwind.kod) fires on any exertion below 25
+vigor, adds 40 + stamina/2 + ability, rolls a 50% chance to improve, and for its 5-10 minutes pins resting at 10 and
+REFUSES food. So a meal holds vigor above the only place the skill pays, and a fight floor (Scooter's was 95, with three
+edible mushrooms) idles the character: 60% of a 20-minute window resting or eating, 2026-11-05.
+
+| value | meaning |
+|---|---|
+| `"off"` (default) | the old floor and the old meals -- until a farm strategy says `secondWind` |
+| `"auto"` | on for a FARMER that knows Second Wind, in a room whose worst huntable spawn is at most 1/`prey_ratio` (2) of its max health |
+| `"on"` / `true` | on whenever it knows Second Wind and is farming |
+| `false` | the same as `"off"` |
+| `{ mode, prey_ratio, eat }` | no `mode` means `"auto"`; `eat: true` keeps the meals and still drops the floor |
+
+**A STAGED ROLLOUT.** Off fleet-wide; `icky-cave-patrol` turns it on (`secondWind: 'auto'`) beside `chaseOnFoot`, and it
+is widened to other farm strategies once the cave's kills/30m are in (the operator's own solo run there: 85).
+
+On: `fightFloor()` is 0 and `provision()` eats nothing. Untouched: survival and its 1-second ladder, health resting,
+`ORDINARY_VIGOR_FLOOR` (20 -- below the trigger, so a fighting character triggers first), and the meal before a
+journey. Why the ratio, and why the WORST spawn rather than the hunted one: health regenerates about 2.6x slower at 10
+vigor than at 100 (player.kod CalculateHealthTime), and the fleet has died at 101.8 per thousand observations at or
+below 85 vigor against 4.4 at 86-120 -- mostly against prey its own size. Scooter (120) and Zoot (122) against the Icky
+Cave's level-50 spider are 2.4. `autopilot status` reports the verdict as `second_wind`.
+
+Expected rhythm per trigger: about four minutes of fighting on the refill, then, if vigor reaches 20 while the skill is
+still running, a sit until it ends (resting cannot help before then). `ordinaryVigorFloor` is the per-character key
+that shortens the sit.
+
 ## THE PVP RETURN DELAY — `pvp_return_delay_ms`
 
 The operator's order, 2026-09-30: *"set it so that there's a 30m PVP delay on returning to any

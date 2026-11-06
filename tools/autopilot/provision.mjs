@@ -17,6 +17,16 @@ export class ProvisionPart {
 
   async provision(plan, v) {
     const p = this.policy;
+    // SECOND WIND FARMING (m59-second-wind.mjs): against weak prey the skill is the larder, and a meal holds vigor above
+    // the 25 it triggers at -- while it runs the server refuses food anyway. No meals unless the policy says `eat`.
+    const sw = this.secondWindFarming?.();
+    if (sw?.active && !sw.eat) {
+      if (!this._swNoMealNoted || Date.now() - this._swNoMealNoted > 300_000) {
+        this._swNoMealNoted = Date.now();
+        this.note('not eating: second wind is the vigor supply here', { vigor: v?.vigor?.value ?? null, why: sw.why });
+      }
+      return null;
+    }
     const floor = this.fightFloor(plan);
     // Declared here, at the top, on purpose: it used to sit thirty lines down and a note
     // above it read it inside the temporal dead zone, which aborted the keeper pass with

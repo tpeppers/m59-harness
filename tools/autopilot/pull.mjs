@@ -8,12 +8,13 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 24 methods: pull, farmBuffContext, farmBuffAsk, farmBuffPass, castSelfSpell, pullFocusId,
+// 25 methods: pull, farmBuffContext, farmBuffAsk, farmBuffPass, castSelfSpell, pullFocusId,
 //   closestPullable, closeOnQuarry, breakOut, pullFollowWaitMs, pullTargetCooling, deferPullTarget,
-//   combatApproachCooling, deferBlockedCombatApproach, finishFailedCombatApproach, pendingPullWait,
+//   combatApproachCooling, deferBlockedCombatApproach, finishFailedCombatApproach, finishChasePiece, pendingPullWait,
 //   switchFromStalledPull, pullDidNotConvert, pullAttemptFailed, pullConverted, huntRoomCheck,
 //   yieldCheck, equipCheck, equippedNames
 import { closeIfHealed, mayLogoff, noteLogoff } from '../m59-healing-session.mjs';
+import { chaseCapable, chasePiece, walkPlan } from '../m59-chase.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
 import { equipYield, reconcile } from '../m59-loadout.mjs';
@@ -364,28 +365,53 @@ export class PullPart {
     const foe = c.room.objects.get(want.id);
     if (!foe) return { closed: false, why: 'it is not in the room any more' };
     const name = c.rsc.get(foe.nameRsc);
-    const approach = s.world?.approachSquare?.(foe.col, foe.row);
-    if (!approach) {
-      // The geometric answer, and the definitive one: there is no square adjacent to it that
-      // this map says we can stand on. Nothing about the next pass will change that.
-      this.noteUnreachablePrey(s.world?.room?.num ?? null, foe.col, foe.row);
-      this.note('ignoring prey we cannot walk to', {
-        target: name, at: `r${foe.row}c${foe.col}`,
-        why: 'no square beside it that this map says we can stand on',
-        how: 'remembered by SQUARE for a few minutes, so a respawn in the same corner is ' +
-             'skipped too and the next pass picks something reachable instead' });
-      // AND THE RETURN, WHICH IS THE ONLY LINE HERE THAT DOES ANYTHING. Everything above it
-      // is bookkeeping; without this the branch falls through to `approach.col` on a null
-      // `approach` and throws, in precisely the case the branch was added to handle. It was
-      // dropped by an edit that added the note ABOVE the return and replaced it rather than
-      // preceding it — a class of mistake no reviewer catches by reading the new lines,
-      // because the new lines are all correct.
-      return { closed: false, target: name, why: 'no square beside it that we can reach' };
+    // CHASE ON FOOT FIRST (m59-chase.mjs). The old walk below aims at ONE square beside the quarry, chosen without
+    // asking whether a body holds it or which side of a ledge it is on -- Deep in the Jungle (2143), prod 2026-11-05:
+    // 371 "could not close on the quarry: object_blocked" in a room of twenty fleet-mates. A chase walks the
+    // walker's own plan toward the quarry's square, a bounded piece at a time, and lets the next pass look again.
+    // Only when the plan exists: no mask, no route or a floorless goal keep the old walk, unchanged.
+    let out = null, went = null;
+    const geo = s.world?.geometry;
+    if (this.policy?.chaseOnFoot === true && chaseCapable(geo) && c.self && !c.self.predicted) {
+      const plan = walkPlan(geo, c.self, foe);
+      if (plan.found) {
+        this.doing = 'fighting';
+        const piece = await chasePiece(s, foe.id, { reach: PLAYER_REACH, plan, pieceSteps: 20 });
+        this.movedAt = Date.now();
+        if (piece.moved || piece.beside) {
+          this.note('closing on the quarry on foot', {
+            target: name, ...piece.chase, steps: piece.steps, arrived: piece.arrived, in_reach: !!piece.in_reach,
+            why: 'walking the planned route toward the square it stands on; the next pass looks at the room again' });
+          return { closed: true, target: name, steps: piece.steps, chase: piece.chase };
+        }
+        out = piece.walk ?? { arrived: false, reason: piece.reason ?? 'the chase piece did not move' };
+      }
     }
-    this.doing = 'fighting';
-    const out = await s.walkTo(approach.col, approach.row, { maxSteps: approach.steps + 8 })
-                       .catch(e => ({ arrived: false, reason: e.message }));
-    this.movedAt = Date.now();
+    if (!out) {
+      const approach = s.world?.approachSquare?.(foe.col, foe.row);
+      if (!approach) {
+        // The geometric answer, and the definitive one: there is no square adjacent to it that
+        // this map says we can stand on. Nothing about the next pass will change that.
+        this.noteUnreachablePrey(s.world?.room?.num ?? null, foe.col, foe.row);
+        this.note('ignoring prey we cannot walk to', {
+          target: name, at: `r${foe.row}c${foe.col}`,
+          why: 'no square beside it that this map says we can stand on',
+          how: 'remembered by SQUARE for a few minutes, so a respawn in the same corner is ' +
+               'skipped too and the next pass picks something reachable instead' });
+        // AND THE RETURN, WHICH IS THE ONLY LINE HERE THAT DOES ANYTHING. Everything above it
+        // is bookkeeping; without this the branch falls through to `approach.col` on a null
+        // `approach` and throws, in precisely the case the branch was added to handle. It was
+        // dropped by an edit that added the note ABOVE the return and replaced it rather than
+        // preceding it — a class of mistake no reviewer catches by reading the new lines,
+        // because the new lines are all correct.
+        return { closed: false, target: name, why: 'no square beside it that we can reach' };
+      }
+      this.doing = 'fighting';
+      out = await s.walkTo(approach.col, approach.row, { maxSteps: approach.steps + 8 })
+                   .catch(e => ({ arrived: false, reason: e.message }));
+      this.movedAt = Date.now();
+      went = approach.steps;
+    }
     if (!out.arrived) {
       // TERMINAL_MOVEMENT_REASONS propagate rather than loop — a heading no other heading
       // can fix is reported, not retried, which is what stops a bad route being learned.
@@ -421,9 +447,9 @@ export class PullPart {
       return { closed: false, target: name, why: out.reason || 'could not get to it' };
     }
     this.note('closed on the quarry', {
-      target: name, went: approach.steps,
+      target: name, went,
       why: 'safe spots are off, so there is no wall to fetch it to — the fight happens here' });
-    return { closed: true, target: name, steps: approach.steps };
+    return { closed: true, target: name, steps: went };
   }
 
   // LEAVING A SAFE SPOT WITH A CROWD ON IT.
@@ -533,6 +559,44 @@ export class PullPart {
       return true;
     }
     return false;
+  }
+
+  // ONE PIECE OF A CHASE ON FOOT (fight() -> m59-chase.mjs chasePiece): walked toward the quarry, not yet in reach.
+  //
+  // A piece that moved is progress, and the quarry stays ours (`foeId`), so rankQuarries prefers it next pass and
+  // the patrol keeps it whatever its distance -- the chase carries on rather than re-choosing every second. Two
+  // bounds, because a chase is the one walk here with no destination of its own: two pieces in a row that moved
+  // nothing, or more than `chaseMaxPieces` (12, about 140 steps) without contact, defer the quarry for the usual
+  // pull cooldown and choose another. The deferral is by TIME, not by position, because a chased monster always
+  // moves and a position-keyed one would reopen on its next step.
+  finishChasePiece(result) {
+    if(!result?.closing)return false;
+    const room=this.s.world?.room?.num??null,id=result.foe_id??result.target_id??null;
+    const same=this._chase&&this._chase.id===id&&this._chase.room===room;
+    const st=same?this._chase:(this._chase={id,room,pieces:0,idle:0,since:Date.now()});
+    // Contact since the last piece (a swing that reached passFarm's fight accounting) starts the count again:
+    // the bound is on chasing WITHOUT contact, not on a long fight with a quarry that keeps stepping back.
+    if(same&&(this.swungAt??0)>(st.lastAt??st.since)){st.pieces=0;st.idle=0;}
+    st.pieces++;st.lastAt=Date.now();st.last={at:st.lastAt,moved:!!result.moved,...(result.chase??{})};
+    this.foeId=id;this.doing='closing';
+    if(result.moved){this.movedAt=Date.now();st.idle=0;}else st.idle++;
+    const maxPieces=Math.max(2,Number(this.policy?.chaseMaxPieces??12));
+    if(st.idle>=2||st.pieces>maxPieces){
+      const record=this.deferPullTarget(room,id,st.idle>=2?`chase did not move: ${result.reason??'no reason given'}`:`chased ${st.pieces} pieces without contact`);
+      if(record)record.combat_approach=true;
+      if(this.foeId===id)this.foeId=null;
+      if(!this.pendingPull)releaseQuarry(this.s.name);
+      this.note('chase abandoned - choosing another quarry',{target:result.target,target_id:id,pieces:st.pieces,idle:st.idle,
+        chase:result.chase,reason:result.reason,until:record?.until,
+        why:st.idle>=2?'two pieces in a row moved nothing; walking the same plan again is a loop'
+                      :'a chase this long without contact is following something we will not catch'});
+      this._chase=null;
+      this.noProgress(`chase abandoned: ${st.idle>=2?'did not move':'too long without contact'}`);
+      return true;
+    }
+    if(result.moved)this.progress(`closing on ${result.target??'the quarry'} on foot`);
+    else this.noProgress(`chase piece did not move: ${result.reason??'no reason given'}`);
+    return true;
   }
 
   // A deadline alone cannot distinguish a slow follower from a monster fighting somebody

@@ -221,6 +221,62 @@ punch-line and unknown-state triggers and the same rate limit; `touch_spell.timi
 `touch_spell.last_target_check` say what was decided. `touchRefreshDue` in
 `m59-touchspell.mjs` is the whole rule.
 
+## Chase on foot — walk as if to stand on the quarry
+
+```bash
+node tools/m59-chase.mjs plan --room 27 --from r35c45 --to r35c58   # one plan, drawn
+node tools/m59-chase.mjs census --room 27                          # how often "near" is far on foot
+node tools/m59-chase-test.mjs                                      # 16, offline
+```
+
+**A straight line is not a walk.** Choosing, filtering and approaching quarry all used straight distance, and the local
+approach (`walkToMeleeRange`) searches a box around the two points widened by four squares for 100 ms. Pairs of
+standable squares at most 8 apart that need a walk longer than straight+3, and those whose walk leaves that box:
+
+| room | detour | leaves the box | no walk |
+|---|---|---|---|
+| 27 Icky Cave | 35% | 29% | 1% |
+| 2144 Trading Post | 9% | 8% | 7% |
+| 2143 Deep in the Jungle | 5% | 4% | 0% |
+
+So in the cave a third of what the patrol engaged could not be approached: `combat_approach_blocked`, a 30 s deferral,
+and "waiting" once everything in reach was deferred. The operator's order, 2026-11-05: *move as if trying to literally
+stand atop the target, engaging as soon as it is in weapon range* -- including the long way round to the stairs.
+
+**OFF UNLESS A FARM STRATEGY TURNS IT ON** (`chaseOnFoot: true`, policy `chaseOnFoot`, broker `chase_on_foot`). Off is
+the old behaviour exactly; `fight()` takes `chase` and every other caller leaves it false. The rollout is staged:
+`icky-cave-patrol` first, other farms once its kills/30m are in.
+
+`m59-chase.mjs` asks the walker's own planner (`RoomGeometry.path`, A* on the baked step mask with declared jumps --
+the plan `walkTo` will walk, so the two cannot disagree; p50 0.02 ms, p99 ~3 ms) and is used in four places:
+
+- **Order** (`passFarm`, `orderByWalk`): quarry ranked by steps on foot, the nearest 8 planned within 20 ms from a
+  per-keeper cache. No walk goes LAST, never away -- "no route" is a fact about the bake, and the fine search can
+  still find ground the mask does not model.
+- **Patrol radius** (`engageWalk`): see [docs/m59-strategies.md](m59-strategies.md#patrol-patrol-walk-the-spawn-points-in-a-loop).
+- **Approach** (`fight()`): when the plan is a DETOUR, or the quarry is past 8 squares, walk one 12-step piece of it
+  toward the quarry's square (stopping one short; you cannot stand on a body) and return `closing`, which
+  `finishChasePiece` counts as progress and continues next pass. Also when `walkToMeleeRange` gives up because the quarry is past its
+  local BOUNDS. **Not** when it searched its whole box, or ran out of its 100 ms, with bodies in the way on a direct
+  route -- a crowd is what exhausts that budget, and a CPU-loaded keeper exhausts it on the same crowd: walking the
+  geometry plan into a body wall is a grind, so that stays "blocked, choose another" as before. Two pieces that move nothing,
+  or `chaseMaxPieces` (12) without contact, defer the quarry by time.
+- **Close-on** (`closeOnQuarry`, no wall): a 20-step piece of the plan instead of a walk to one fixed square beside the
+  quarry -- the square that was occupied in 371 `object_blocked` stalls in 2143 on 2026-11-05.
+
+**In weapon range, swing -- whatever is between.** `TargetWithinSightAndRange` (player.kod) measures melee range on
+integer squares (slash 2, thrust 3) and checks facing, not line of sight; line of sight only gates skill advancement
+(one swing in 25 counts without it). So a quarry within `reach` across a ledge is hit from where we stand.
+
+**A pocket is named, not escaped.** When a strict plan from the body expands only a handful of squares, `walkPlan`
+answers `found: false, pocket: true` and the old behaviour stands -- it never plans out through the goal exemption,
+which in the socketless harness burned a 900-packet budget. The cave's r35c48 was such a pocket and turned out to be
+five stand points on a ledge edge, now declared ([docs/m59-routing.md](m59-routing.md), `m59-spawnreach.mjs`); the
+east side really is a 1152-unit climb (three times `MAX_STEP_HEIGHT`, the operator's "only east-to-west"), so a chase
+from the trench to r35c58 goes the long way round.
+
+No step mask, no position, a floorless goal or holding a wall: every helper answers `known: false` and nothing changes.
+
 ## Which quarry first — `hunt_priority`
 
 `hunt` is a SET; `hunt_priority` is an ORDER over it, opt-in and null by default

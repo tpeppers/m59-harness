@@ -1117,6 +1117,26 @@ r88.5–r89.0 between the wall's end cap and the room's south boundary, passable
 body only at r88.75 (±8 units). No square-centre step can thread it; r88c20 and r88c21 now
 stand on that line, and 62,58 -> 80,15 goes round through r88 in 47 steps.
 
+**Finding them is a tool now: `m59-spawnreach.mjs`.** The Icky Cave's "trench" (27, r35c46-r35c48) was the same
+shape the other way round: the ledge edge (wall 1032) runs along y = 35328, the centre line of row 35, so every centre
+in that run stood on the edge and was pinned west and north, while the operator's client walked out of those squares a
+dozen times in one evening along their south half. The tool reads every room's `plGenerators` from the kod
+(`--extract`, cached in `substrate/m59-generators.json`), finds the room's home (the strongly connected region
+holding most exits), and reports each spawn point that is off it and every TRAP region (reachable, no way back) -- a
+region holding its own exit is another part of the room and is not counted. For each problem square it tries walk-log
+positions (`--walks <dir> --walk-room <objId>:<room>`) and a 9x9 lattice as the stand point, re-traces every step
+with `_traceMoverStep`, keeps the point that opens the most steps out, applies a region's points together and calls
+the region VERIFIED only if it then joins home both ways. `--room <n> --write` records verified points here, with
+the evidence in `why`; then `m59-routebake.mjs --rooms <n>` AND `m59-doorbake.mjs --room <n> --risk --write`:
+**routebake drops the room's door-state variants**, and room 27 lost its Dispel Illusion state (the west exit to 2500)
+that way until doorbake put it back -- four suites caught it. The first sweep: 60 of 111 spawn rooms have a spawn
+point off home or a trap region; the Ko'catan jungle rooms carry most of the fixable traps (2121 20 of 20, 2125 13 of
+13, 2113 9 of 11, 2122 8 of 8). Only room 27 has been written. `m59-spawnreach-test.mjs` (7) pins it.
+
+**A `no_floor` spawn point is not a stand-point fault.** The five orc-cave rooms (2501-2508) put most of their
+generators on squares this map calls solid, as written and with row and col swapped; their `.roo` and kod disagree
+about the grid, and nothing here fixes that.
+
 Measured over all 264 rooms against v6: 10,856 of 2,358,606 steps go (-0.46%, 155 rooms). From
 the rooms' arrival points, reachable squares fall 249,239 -> 247,354, and a body-radius flood on
 a 128-unit lattice from the same arrivals walks into **none** of the 1,410 interior squares

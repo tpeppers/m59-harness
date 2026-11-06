@@ -182,6 +182,66 @@
       },
       "why": "Temple of Qor bridge (see r14c14): on the bridge, 256 client units inside its east edge.",
       "observed_by": "traceFineMoveClient + leafAtClient, 2026-10-31"
+    },
+    {
+      "roo": "cave2.roo",
+      "room": 27,
+      "row": 35,
+      "col": 46,
+      "fine": {
+        "x": 46608,
+        "y": 35792
+      },
+      "why": "A Deep, Dark, Spooky, Icky Cave: trap region of 5 square(s), entered by r34c46->r35c46, r35c45->r35c46, r36c45->r35c46, r36c46->r35c46, r36c46->r36c47, r37c46->r36c47. The centre stand point opened 0 step(s) out of the region and 8 in all; this point opens 1 out and 9 in all (new: r35c45), and a real client stood on it. With the region's points applied together the region joins the room's home both ways.",
+      "observed_by": "m59-spawnreach.mjs proposal, _traceMoverStep verified, 2026-11-06 (walk-log position)"
+    },
+    {
+      "roo": "cave2.roo",
+      "room": 27,
+      "row": 36,
+      "col": 47,
+      "fine": {
+        "x": 48112,
+        "y": 36096
+      },
+      "why": "A Deep, Dark, Spooky, Icky Cave: trap region of 5 square(s), entered by r34c46->r35c46, r35c45->r35c46, r36c45->r35c46, r36c46->r35c46, r36c46->r36c47, r37c46->r36c47. The centre stand point opened 0 step(s) out of the region and 10 in all; this point opens 0 out and 11 in all (new: none), and a real client stood on it. With the region's points applied together the region joins the room's home both ways.",
+      "observed_by": "m59-spawnreach.mjs proposal, _traceMoverStep verified, 2026-11-06 (walk-log position)"
+    },
+    {
+      "roo": "cave2.roo",
+      "room": 27,
+      "row": 35,
+      "col": 48,
+      "fine": {
+        "x": 48336,
+        "y": 35456
+      },
+      "why": "A Deep, Dark, Spooky, Icky Cave: trap region of 5 square(s), entered by r34c46->r35c46, r35c45->r35c46, r36c45->r35c46, r36c46->r35c46, r36c46->r36c47, r37c46->r36c47. The centre stand point opened 0 step(s) out of the region and 7 in all; this point opens 0 out and 8 in all (new: r36c48), and a real client stood on it. With the region's points applied together the region joins the room's home both ways.",
+      "observed_by": "m59-spawnreach.mjs proposal, _traceMoverStep verified, 2026-11-06 (walk-log position)"
+    },
+    {
+      "roo": "cave2.roo",
+      "room": 27,
+      "row": 36,
+      "col": 48,
+      "fine": {
+        "x": 48185,
+        "y": 35897
+      },
+      "why": "A Deep, Dark, Spooky, Icky Cave: trap region of 5 square(s), entered by r34c46->r35c46, r35c45->r35c46, r36c45->r35c46, r36c46->r35c46, r36c46->r36c47, r37c46->r36c47. The centre stand point opened 0 step(s) out of the region and 4 in all; this point opens 0 out and 6 in all (new: r36c47). With the region's points applied together the region joins the room's home both ways.",
+      "observed_by": "m59-spawnreach.mjs proposal, _traceMoverStep verified, 2026-11-06"
+    },
+    {
+      "roo": "cave2.roo",
+      "room": 27,
+      "row": 35,
+      "col": 47,
+      "fine": {
+        "x": 47388,
+        "y": 35556
+      },
+      "why": "A Deep, Dark, Spooky, Icky Cave: trap region of 5 square(s), entered by r34c46->r35c46, r35c45->r35c46, r36c45->r35c46, r36c46->r35c46, r36c46->r36c47, r37c46->r36c47. The centre stand point opened 0 step(s) out of the region and 8 in all; this point opens 0 out and 10 in all (new: r35c46). With the region's points applied together the region joins the room's home both ways.",
+      "observed_by": "m59-spawnreach.mjs proposal, _traceMoverStep verified, 2026-11-06"
     }
   ]
 }

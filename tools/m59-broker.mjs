@@ -192,6 +192,7 @@ import * as uptime from './m59-uptime.mjs';
 import { survivalOffConflict, survivalOffLeaseMs, accepts, refusal } from './m59-hazards.mjs';
 import { requiresVerdict, factsFromStatus, requestFor, resetFloor } from './m59-strategy-gate.mjs';
 import { normalizeLootEject, normalizeTradeGoods } from './m59-loot-eject.mjs';
+import { normSecondWindFarming } from './m59-second-wind.mjs';
 import { normalizePurseLease } from './m59-purse-lease.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
@@ -12570,6 +12571,12 @@ const TOOLS = [
         'PASSES (m59-kocatan-gate.mjs): the last step of an island town trip, and the first answer to a gate refusal, sells ' +
         'plain loot at the smithy, vaults the rest, and drops what neither takes (a conjured weapon). Never a worn piece, ' +
         'never a bribe. Default true; false keeps only the old sell-then-vault refusal ladder' },
+      chase_on_foot: { type: 'boolean', description: 'CHASE ON FOOT (m59-chase.mjs): rank quarry by steps on foot and walk the ' +
+        'route to a quarry round a ledge or past local range. Default false; a farm strategy (chaseOnFoot) turns it on' },
+      second_wind_farming: { description: 'SECOND WIND FARMING (m59-second-wind.mjs): "off" (default), "auto", "on"/true, "off"/false, or ' +
+        '{ mode, prey_ratio, eat }. Auto: a farmer that knows Second Wind, in a room whose worst huntable prey is at most ' +
+        '1/prey_ratio (default 2) of its max health, keeps NO vigor floor and eats NOTHING -- it fights down to 25 vigor, where ' +
+        'the skill adds 40 + stamina/2 + ability and rolls to improve. eat: true keeps the meals. Survival is untouched' },
       lock_no_combat: { type: 'boolean', description: 'THE NO-COMBAT LOCK, a lockdown that accepts ANY NO_COMBAT room (every ' +
         'inn, shop, bank and hall): the keeper locks the character (assigned_room and confine_rooms) to the no-combat room ' +
         'it stands in, re-deciding on every pass, so a character a person leaves in another inn stays THERE; outside a ' +
@@ -13659,6 +13666,11 @@ const TOOLS = [
       }
       if (a.kocatan_gate_clear !== undefined) p.policy.kocatanGateClear = a.kocatan_gate_clear !== false;
       if (a.lock_no_combat !== undefined) p.policy.lockNoCombat = a.lock_no_combat === true;
+      if (a.chase_on_foot !== undefined) p.policy.chaseOnFoot = a.chase_on_foot === true;
+      if (a.second_wind_farming !== undefined) {
+        try { normSecondWindFarming(a.second_wind_farming); p.policy.secondWindFarming = a.second_wind_farming; }
+        catch (e) { return { started: false, reason: `second_wind_farming refused: ${e.message}`, note: 'nothing was changed' }; }
+      }
       if (a.loot_eject !== undefined) {
         try { p.policy.lootEject = normalizeLootEject(a.loot_eject); }
         catch (e) { return { started: false, reason: `loot_eject refused: ${e.message}`, note: 'nothing was changed' }; }

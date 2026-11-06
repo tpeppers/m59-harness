@@ -40,6 +40,11 @@ export const PATROL_DEFAULTS = Object.freeze({
   // Quarry farther than this many squares from the body is left for the loop to meet. Without a radius a
   // patrol would be ordinary farming: the keeper sees the whole room and would cross it for any creature.
   engageWithin: 8,
+  // AND WITHIN THIS MANY STEPS ON FOOT (m59-chase.mjs). A straight line is not a walk: in the Icky Cave a third
+  // of everything within 8 squares is round a ledge, r32c54 -> r32c57 is three squares and 55 steps, and the
+  // patrol used to engage it, fail to approach, and wait. Twice `engageWithin` when a strategy sets only that.
+  // Only consulted where the room has a baked step mask; elsewhere the straight radius answers alone.
+  engageWalk: 16,
   // A waypoint is reached within this many squares (Chebyshev), so a body nudged by a crowd still advances.
   arriveWithin: 1,
   // Steps walked per pass before the pass returns and the room is looked at again: a patrol is a walk that
@@ -50,10 +55,10 @@ export const PATROL_DEFAULTS = Object.freeze({
   resumeSlack: 3,
 });
 
-const LIMITS = { engageWithin: [1, 40], arriveWithin: [0, 4], legSteps: [4, 120], resumeSlack: [0, 20] };
+const LIMITS = { engageWithin: [1, 40], engageWalk: [1, 120], arriveWithin: [0, 4], legSteps: [4, 120], resumeSlack: [0, 20] };
 
 /**
- * The strategy field's normal form: `{ room, loop: [{row, col}, ...], engageWithin?, arriveWithin?, legSteps?,
+ * The strategy field's normal form: `{ room, loop: [{row, col}, ...], engageWithin?, engageWalk?, arriveWithin?, legSteps?,
  * resumeSlack? }` -> the same with every option filled in, or null. Squares are NAMED: a bare `[row, col]` is
  * refused, because docs/m59-coordinates.md forbids new two-element coordinate tuples and the operator's own
  * loop was ambiguous until he confirmed which number was the row.
@@ -87,6 +92,7 @@ export function normPatrol(v) {
     if (typeof v[k] === 'boolean' || !Number.isFinite(n) || n < lo || n > hi) throw new Error(`patrol.${k} must be a number from ${lo} to ${hi}`);
     out[k] = n;
   }
+  if (v.engageWalk === undefined || v.engageWalk === null) out.engageWalk = Math.min(LIMITS.engageWalk[1], 2 * out.engageWithin);
   return out;
 }
 
@@ -173,11 +179,26 @@ export function patrolNext(patrol, state, self, reachable = () => true) {
  * every other filter in passFarm (confinement, avoid, hunt area, gang-up) and before the ranking, so it only
  * ever narrows the choice those made.
  */
-export function engageFilter(found, self, patrol, keepIds = []) {
+export function engageFilter(found, self, patrol, keepIds = [], walks = null) {
   if (!patrol || !self || !Array.isArray(found)) return { kept: found, dropped: 0 };
   const keep = new Set(keepIds.filter(x => x != null));
-  const kept = found.filter(o => keep.has(o.id) || euclid(o, self) <= patrol.engageWithin);
-  return { kept, dropped: found.length - kept.length };
+  const engageWalk = patrol.engageWalk ?? 2 * patrol.engageWithin;
+  let offFoot = 0;
+  // `walks` is m59-chase.mjs orderByWalk's Map(id -> plan). No entry, or `known: false`, is the old
+  // straight-line answer. A walk longer than engageWalk, or no walk the mover can take, is left for the loop --
+  // unless it is already within 2 squares (the server's slash range, measured on integer squares by
+  // TargetWithinSightAndRange, player.kod), where the swing lands whatever is between us.
+  const near = o => {
+    if (euclid(o, self) > patrol.engageWithin) return false;
+    const w = walks?.get?.(o.id);
+    if (!w || !w.known) return true;
+    if (w.found && w.length <= engageWalk) return true;
+    if (euclid(o, self) <= 2) return true;
+    offFoot++;
+    return false;
+  };
+  const kept = found.filter(o => keep.has(o.id) || near(o));
+  return { kept, dropped: found.length - kept.length, off_foot: offFoot };
 }
 
 // ------------------------------------------------------------------------------------------------------------

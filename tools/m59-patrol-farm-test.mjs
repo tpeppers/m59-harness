@@ -174,12 +174,45 @@ await ok('every leg of the Icky Cave loop plans AND replays on the mover; the po
 await ok('passFarm: the radius after gang-up and before the ranking; the walk after the hunt area, before the vigil', () => {
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = s => { const i = src.indexOf(s); assert.ok(i >= 0, s); return i; };
-  const gang = at('found = this.gangUpFilter(found);'), radius = at('found = this.patrolEngageFilter(found, c.self, patrol)');
+  const gang = at('found = this.gangUpFilter(found);'), radius = at('found = this.patrolEngageFilter(found, c.self, patrol, quarryWalks)');
+  // m59-chase.mjs: the walk order is computed after the filters and handed to the radius, which asks it.
+  const ordered = at('const ow = orderByWalk(found, s.world?.geometry, c.self,');
   const rank = at('found = rankQuarries(this.s.name');
-  assert.ok(gang < radius && radius < rank);
-  const area = at("this.doing = 'returning to the hunt area';"), walk = at('await this.patrolWalk(ctx, patrol)');
+  assert.ok(gang < ordered && ordered < radius && radius < rank);
+  const area = at("this.doing = 'returning to the hunt area';");
+  const walk = at('if (!found.length && patrol && await this.patrolWalk(ctx, patrol)) return HANDLED;');
   const vigil = at("'holding the spot and waiting for something to come to us'");
   assert.ok(area < walk && walk < vigil);
+});
+
+await ok('a patrol walks on rather than waiting for a deferred quarry (Zoot, r35c40, 2026-11-05)', () => {
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const at = s => { const i = src.indexOf(s); assert.ok(i >= 0, s); return i; };
+  const cooling = at('if (!found.length && coolingTargets.length) {');
+  const walk = at('if (patrol && await this.patrolWalk(ctx, patrol)) return HANDLED;');
+  const wait = src.indexOf("this.doing = 'waiting';", cooling);
+  assert.ok(cooling < walk && walk < wait, 'inside the cooling branch, before it waits');
+});
+
+await ok('engageWalk: near on foot is engaged, far on foot or no walk is left for the loop, unknown is the old radius', () => {
+  const P = normPatrol({ ...ICKY });
+  assert.equal(P.engageWalk, 16);
+  assert.equal(normPatrol({ ...ICKY, engageWithin: 5 }).engageWalk, 10, 'twice the radius when only the radius is set');
+  assert.equal(normPatrol({ ...ICKY, engageWithin: 5, engageWalk: 30 }).engageWalk, 30);
+  const self = W(35, 41);
+  const found = [{ id: 1, ...W(34, 39) }, { id: 2, ...W(35, 45) }, { id: 3, ...W(33, 41) }, { id: 4, ...W(36, 42) }, { id: 5, ...W(30, 41) }];
+  const walks = new Map([
+    [1, { known: true, found: true, length: 32 }],          // 2.2 squares, round the wall: the loop meets it
+    [2, { known: true, found: true, length: 4 }],           // near on foot
+    [3, { known: true, found: false }],                     // no walk, 2 squares: within swinging range
+    // 4: not planned -> the straight radius alone
+    [5, { known: false }],                                  // the planner cannot say -> the straight radius alone
+  ]);
+  const { kept, off_foot } = engageFilter(found, self, P, [], walks);
+  assert.deepEqual(kept.map(o => o.id), [2, 3, 4, 5]);
+  assert.equal(off_foot, 1);
+  assert.deepEqual(engageFilter(found, self, P, [1], walks).kept.map(o => o.id), [1, 2, 3, 4, 5], 'the quarry we are chasing is kept');
+  assert.deepEqual(engageFilter(found, self, P).kept.map(o => o.id), [1, 2, 3, 4, 5], 'no walks: the old answer');
 });
 
 await ok('a patrol never pulls to a wall: in a patrol room the held wall is let go and the quarry is closed on (Scooter 2026-11-05)', () => {

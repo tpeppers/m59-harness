@@ -1,0 +1,6147 @@
+{
+ "format": "m59-generators/1",
+ "note": "plGenerators, [row, col], per room, read from the kod by tools/m59-spawnreach.mjs --extract",
+ "rooms": {
+  "4": {
+   "cls": "Forest4",
+   "declared_by": "Forest4",
+   "file": "kod/object/active/holder/room/monsroom/forest4.kod",
+   "generators": [
+    {
+     "row": 29,
+     "col": 13
+    },
+    {
+     "row": 8,
+     "col": 15
+    },
+    {
+     "row": 20,
+     "col": 23
+    },
+    {
+     "row": 26,
+     "col": 22
+    },
+    {
+     "row": 17,
+     "col": 45
+    },
+    {
+     "row": 46,
+     "col": 33
+    },
+    {
+     "row": 51,
+     "col": 38
+    },
+    {
+     "row": 53,
+     "col": 48
+    },
+    {
+     "row": 42,
+     "col": 16
+    }
+   ]
+  },
+  "6": {
+   "cls": "Forest5",
+   "declared_by": "Forest5",
+   "file": "kod/object/active/holder/room/monsroom/objroom/forest5.kod",
+   "generators": [
+    {
+     "row": 42,
+     "col": 26
+    },
+    {
+     "row": 31,
+     "col": 17
+    },
+    {
+     "row": 29,
+     "col": 23
+    },
+    {
+     "row": 19,
+     "col": 17
+    },
+    {
+     "row": 20,
+     "col": 25
+    },
+    {
+     "row": 25,
+     "col": 33
+    },
+    {
+     "row": 39,
+     "col": 41
+    },
+    {
+     "row": 16,
+     "col": 35
+    },
+    {
+     "row": 22,
+     "col": 45
+    },
+    {
+     "row": 17,
+     "col": 48
+    }
+   ]
+  },
+  "26": {
+   "cls": "Forest2",
+   "declared_by": "Forest2",
+   "file": "kod/object/active/holder/room/monsroom/forest2.kod",
+   "generators": [
+    {
+     "row": 22,
+     "col": 13
+    },
+    {
+     "row": 23,
+     "col": 29
+    },
+    {
+     "row": 43,
+     "col": 45
+    },
+    {
+     "row": 52,
+     "col": 47
+    },
+    {
+     "row": 41,
+     "col": 30
+    },
+    {
+     "row": 20,
+     "col": 32
+    },
+    {
+     "row": 28,
+     "col": 51
+    },
+    {
+     "row": 26,
+     "col": 56
+    },
+    {
+     "row": 43,
+     "col": 19
+    }
+   ]
+  },
+  "27": {
+   "cls": "Cave2",
+   "declared_by": "Cave2",
+   "file": "kod/object/active/holder/room/monsroom/objroom/cave2.kod",
+   "generators": [
+    {
+     "row": 51,
+     "col": 14
+    },
+    {
+     "row": 50,
+     "col": 34
+    },
+    {
+     "row": 18,
+     "col": 50
+    },
+    {
+     "row": 27,
+     "col": 47
+    },
+    {
+     "row": 23,
+     "col": 39
+    },
+    {
+     "row": 19,
+     "col": 30
+    },
+    {
+     "row": 25,
+     "col": 26
+    },
+    {
+     "row": 25,
+     "col": 33
+    },
+    {
+     "row": 32,
+     "col": 35
+    },
+    {
+     "row": 31,
+     "col": 31
+    },
+    {
+     "row": 35,
+     "col": 58
+    },
+    {
+     "row": 15,
+     "col": 43
+    },
+    {
+     "row": 16,
+     "col": 56
+    }
+   ]
+  },
+  "28": {
+   "cls": "Forest3",
+   "declared_by": "Forest3",
+   "file": "kod/object/active/holder/room/monsroom/forest3.kod",
+   "generators": [
+    {
+     "row": 11,
+     "col": 7
+    },
+    {
+     "row": 14,
+     "col": 13
+    },
+    {
+     "row": 10,
+     "col": 23
+    },
+    {
+     "row": 5,
+     "col": 32
+    },
+    {
+     "row": 19,
+     "col": 20
+    },
+    {
+     "row": 25,
+     "col": 30
+    },
+    {
+     "row": 35,
+     "col": 35
+    },
+    {
+     "row": 37,
+     "col": 25
+    },
+    {
+     "row": 44,
+     "col": 23
+    },
+    {
+     "row": 20,
+     "col": 32
+    },
+    {
+     "row": 25,
+     "col": 8
+    }
+   ]
+  },
+  "32": {
+   "cls": "Canyon1",
+   "declared_by": "Canyon1",
+   "file": "kod/object/active/holder/room/monsroom/objroom/canyon1.kod",
+   "generators": [
+    {
+     "row": 51,
+     "col": 20
+    },
+    {
+     "row": 39,
+     "col": 28
+    },
+    {
+     "row": 34,
+     "col": 19
+    },
+    {
+     "row": 24,
+     "col": 12
+    },
+    {
+     "row": 26,
+     "col": 23
+    },
+    {
+     "row": 18,
+     "col": 13
+    },
+    {
+     "row": 7,
+     "col": 6
+    },
+    {
+     "row": 18,
+     "col": 31
+    },
+    {
+     "row": 17,
+     "col": 36
+    },
+    {
+     "row": 31,
+     "col": 35
+    },
+    {
+     "row": 30,
+     "col": 34
+    },
+    {
+     "row": 33,
+     "col": 26
+    },
+    {
+     "row": 26,
+     "col": 25
+    }
+   ]
+  },
+  "35": {
+   "cls": "SpiderNest1",
+   "declared_by": "SpiderNest1",
+   "file": "kod/object/active/holder/room/monsroom/nest1.kod",
+   "generators": [
+    {
+     "row": 8,
+     "col": 22
+    },
+    {
+     "row": 27,
+     "col": 22
+    },
+    {
+     "row": 22,
+     "col": 19
+    },
+    {
+     "row": 19,
+     "col": 20
+    },
+    {
+     "row": 31,
+     "col": 15
+    },
+    {
+     "row": 36,
+     "col": 11
+    },
+    {
+     "row": 30,
+     "col": 2
+    },
+    {
+     "row": 35,
+     "col": 19
+    },
+    {
+     "row": 19,
+     "col": 25
+    },
+    {
+     "row": 15,
+     "col": 24
+    },
+    {
+     "row": 24,
+     "col": 8
+    },
+    {
+     "row": 23,
+     "col": 2
+    },
+    {
+     "row": 4,
+     "col": 13
+    },
+    {
+     "row": 15,
+     "col": 16
+    },
+    {
+     "row": 2,
+     "col": 12
+    },
+    {
+     "row": 13,
+     "col": 5
+    },
+    {
+     "row": 9,
+     "col": 15
+    },
+    {
+     "row": 5,
+     "col": 11
+    },
+    {
+     "row": 17,
+     "col": 5
+    },
+    {
+     "row": 20,
+     "col": 8
+    },
+    {
+     "row": 28,
+     "col": 12
+    },
+    {
+     "row": 35,
+     "col": 16
+    },
+    {
+     "row": 25,
+     "col": 24
+    },
+    {
+     "row": 31,
+     "col": 10
+    },
+    {
+     "row": 34,
+     "col": 7
+    },
+    {
+     "row": 4,
+     "col": 23
+    }
+   ]
+  },
+  "38": {
+   "cls": "CASTLE1",
+   "declared_by": "CASTLE1",
+   "file": "kod/object/active/holder/room/monsroom/objroom/castle1.kod",
+   "generators": [
+    {
+     "row": 13,
+     "col": 3
+    },
+    {
+     "row": 14,
+     "col": 7
+    },
+    {
+     "row": 12,
+     "col": 12
+    },
+    {
+     "row": 13,
+     "col": 8
+    },
+    {
+     "row": 14,
+     "col": 24
+    },
+    {
+     "row": 12,
+     "col": 27
+    },
+    {
+     "row": 13,
+     "col": 30
+    },
+    {
+     "row": 12,
+     "col": 37
+    },
+    {
+     "row": 19,
+     "col": 40
+    },
+    {
+     "row": 15,
+     "col": 44
+    },
+    {
+     "row": 6,
+     "col": 3
+    },
+    {
+     "row": 7,
+     "col": 32
+    }
+   ]
+  },
+  "39": {
+   "cls": "Castle1B",
+   "declared_by": "Castle1B",
+   "file": "kod/object/active/holder/room/monsroom/castle1b.kod",
+   "generators": [
+    {
+     "row": 6,
+     "col": 8
+    },
+    {
+     "row": 6,
+     "col": 16
+    },
+    {
+     "row": 6,
+     "col": 22
+    },
+    {
+     "row": 6,
+     "col": 29
+    },
+    {
+     "row": 6,
+     "col": 36
+    },
+    {
+     "row": 6,
+     "col": 42
+    },
+    {
+     "row": 10,
+     "col": 31
+    },
+    {
+     "row": 10,
+     "col": 38
+    },
+    {
+     "row": 10,
+     "col": 42
+    },
+    {
+     "row": 10,
+     "col": 20
+    },
+    {
+     "row": 10,
+     "col": 14
+    },
+    {
+     "row": 10,
+     "col": 8
+    }
+   ]
+  },
+  "40": {
+   "cls": "Throne1",
+   "declared_by": "Throne1",
+   "file": "kod/object/active/holder/room/monsroom/throne1.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 3
+    },
+    {
+     "row": 9,
+     "col": 2
+    },
+    {
+     "row": 13,
+     "col": 3
+    },
+    {
+     "row": 5,
+     "col": 9
+    },
+    {
+     "row": 9,
+     "col": 10
+    },
+    {
+     "row": 13,
+     "col": 9
+    }
+   ]
+  },
+  "45": {
+   "cls": "Badland1",
+   "declared_by": "Badland1",
+   "file": "kod/object/active/holder/room/monsroom/badland1.kod",
+   "generators": [
+    {
+     "row": 22,
+     "col": 24
+    },
+    {
+     "row": 61,
+     "col": 20
+    },
+    {
+     "row": 47,
+     "col": 68
+    },
+    {
+     "row": 15,
+     "col": 37
+    },
+    {
+     "row": 12,
+     "col": 61
+    },
+    {
+     "row": 31,
+     "col": 52
+    },
+    {
+     "row": 64,
+     "col": 46
+    },
+    {
+     "row": 33,
+     "col": 34
+    },
+    {
+     "row": 35,
+     "col": 18
+    }
+   ]
+  },
+  "47": {
+   "cls": "Canyon2",
+   "declared_by": "Canyon2",
+   "file": "kod/object/active/holder/room/monsroom/objroom/canyon2.kod",
+   "generators": [
+    {
+     "row": 9,
+     "col": 50
+    },
+    {
+     "row": 11,
+     "col": 30
+    },
+    {
+     "row": 6,
+     "col": 22
+    },
+    {
+     "row": 24,
+     "col": 31
+    },
+    {
+     "row": 25,
+     "col": 50
+    },
+    {
+     "row": 30,
+     "col": 53
+    },
+    {
+     "row": 52,
+     "col": 53
+    },
+    {
+     "row": 36,
+     "col": 59
+    },
+    {
+     "row": 50,
+     "col": 36
+    },
+    {
+     "row": 42,
+     "col": 15
+    },
+    {
+     "row": 52,
+     "col": 8
+    },
+    {
+     "row": 60,
+     "col": 37
+    },
+    {
+     "row": 62,
+     "col": 43
+    },
+    {
+     "row": 32,
+     "col": 12
+    },
+    {
+     "row": 10,
+     "col": 10
+    }
+   ]
+  },
+  "70": {
+   "cls": "TosGraveyard",
+   "declared_by": "TosGraveyard",
+   "file": "kod/object/active/holder/room/monsroom/tosgrave.kod",
+   "generators": [
+    {
+     "row": 9,
+     "col": 31
+    },
+    {
+     "row": 7,
+     "col": 24
+    },
+    {
+     "row": 6,
+     "col": 7
+    },
+    {
+     "row": 12,
+     "col": 6
+    },
+    {
+     "row": 20,
+     "col": 27
+    },
+    {
+     "row": 23,
+     "col": 16
+    },
+    {
+     "row": 23,
+     "col": 7
+    },
+    {
+     "row": 16,
+     "col": 14
+    }
+   ]
+  },
+  "71": {
+   "cls": "TosCrypt",
+   "declared_by": "TosCrypt",
+   "file": "kod/object/active/holder/room/monsroom/toscrypt.kod",
+   "generators": [
+    {
+     "row": 11,
+     "col": 7
+    },
+    {
+     "row": 11,
+     "col": 11
+    },
+    {
+     "row": 15,
+     "col": 7
+    },
+    {
+     "row": 15,
+     "col": 11
+    },
+    {
+     "row": 19,
+     "col": 7
+    },
+    {
+     "row": 19,
+     "col": 11
+    }
+   ]
+  },
+  "108": {
+   "cls": "BarlSewer",
+   "declared_by": "BarlSewer",
+   "file": "kod/object/active/holder/room/monsroom/barlsew.kod",
+   "generators": [
+    {
+     "row": 14,
+     "col": 39
+    },
+    {
+     "row": 8,
+     "col": 45
+    },
+    {
+     "row": 15,
+     "col": 44
+    },
+    {
+     "row": 15,
+     "col": 35
+    },
+    {
+     "row": 19,
+     "col": 23
+    },
+    {
+     "row": 25,
+     "col": 32
+    },
+    {
+     "row": 31,
+     "col": 38
+    },
+    {
+     "row": 29,
+     "col": 42
+    },
+    {
+     "row": 43,
+     "col": 44
+    },
+    {
+     "row": 51,
+     "col": 43
+    },
+    {
+     "row": 54,
+     "col": 40
+    },
+    {
+     "row": 58,
+     "col": 33
+    },
+    {
+     "row": 48,
+     "col": 33
+    },
+    {
+     "row": 69,
+     "col": 23
+    },
+    {
+     "row": 62,
+     "col": 8
+    }
+   ]
+  },
+  "111": {
+   "cls": "BarlSewer2",
+   "declared_by": "BarlSewer2",
+   "file": "kod/object/active/holder/room/monsroom/barlsew2.kod",
+   "generators": [
+    {
+     "row": 4,
+     "col": 32
+    },
+    {
+     "row": 13,
+     "col": 8
+    },
+    {
+     "row": 11,
+     "col": 27
+    },
+    {
+     "row": 21,
+     "col": 21
+    },
+    {
+     "row": 23,
+     "col": 12
+    },
+    {
+     "row": 40,
+     "col": 10
+    },
+    {
+     "row": 47,
+     "col": 14
+    },
+    {
+     "row": 47,
+     "col": 5
+    },
+    {
+     "row": 40,
+     "col": 26
+    },
+    {
+     "row": 27,
+     "col": 32
+    },
+    {
+     "row": 17,
+     "col": 33
+    },
+    {
+     "row": 6,
+     "col": 46
+    },
+    {
+     "row": 12,
+     "col": 52
+    },
+    {
+     "row": 22,
+     "col": 56
+    },
+    {
+     "row": 17,
+     "col": 41
+    },
+    {
+     "row": 42,
+     "col": 46
+    },
+    {
+     "row": 31,
+     "col": 40
+    },
+    {
+     "row": 45,
+     "col": 36
+    }
+   ]
+  },
+  "112": {
+   "cls": "BarlSewer3",
+   "declared_by": "BarlSewer3",
+   "file": "kod/object/active/holder/room/monsroom/barlsew3.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 17
+    },
+    {
+     "row": 5,
+     "col": 8
+    },
+    {
+     "row": 22,
+     "col": 20
+    },
+    {
+     "row": 44,
+     "col": 9
+    },
+    {
+     "row": 25,
+     "col": 13
+    },
+    {
+     "row": 21,
+     "col": 6
+    },
+    {
+     "row": 35,
+     "col": 3
+    },
+    {
+     "row": 41,
+     "col": 26
+    },
+    {
+     "row": 43,
+     "col": 39
+    },
+    {
+     "row": 35,
+     "col": 42
+    },
+    {
+     "row": 17,
+     "col": 29
+    },
+    {
+     "row": 8,
+     "col": 30
+    },
+    {
+     "row": 4,
+     "col": 40
+    },
+    {
+     "row": 11,
+     "col": 43
+    },
+    {
+     "row": 22,
+     "col": 39
+    },
+    {
+     "row": 30,
+     "col": 30
+    }
+   ]
+  },
+  "377": {
+   "cls": "JasSewer1",
+   "declared_by": "JasSewer1",
+   "file": "kod/object/active/holder/room/monsroom/jassew1.kod",
+   "generators": [
+    {
+     "row": 32,
+     "col": 14
+    },
+    {
+     "row": 32,
+     "col": 23
+    },
+    {
+     "row": 23,
+     "col": 26
+    },
+    {
+     "row": 30,
+     "col": 29
+    },
+    {
+     "row": 16,
+     "col": 21
+    },
+    {
+     "row": 6,
+     "col": 18
+    },
+    {
+     "row": 9,
+     "col": 33
+    },
+    {
+     "row": 16,
+     "col": 8
+    },
+    {
+     "row": 17,
+     "col": 35
+    },
+    {
+     "row": 28,
+     "col": 39
+    },
+    {
+     "row": 36,
+     "col": 31
+    },
+    {
+     "row": 42,
+     "col": 31
+    },
+    {
+     "row": 42,
+     "col": 31
+    },
+    {
+     "row": 44,
+     "col": 16
+    },
+    {
+     "row": 33,
+     "col": 45
+    },
+    {
+     "row": 38,
+     "col": 46
+    },
+    {
+     "row": 21,
+     "col": 16
+    },
+    {
+     "row": 26,
+     "col": 20
+    }
+   ]
+  },
+  "378": {
+   "cls": "JasSewer2",
+   "declared_by": "JasSewer2",
+   "file": "kod/object/active/holder/room/monsroom/jassew2.kod",
+   "generators": [
+    {
+     "row": 10,
+     "col": 14
+    },
+    {
+     "row": 10,
+     "col": 19
+    },
+    {
+     "row": 10,
+     "col": 29
+    },
+    {
+     "row": 5,
+     "col": 36
+    },
+    {
+     "row": 19,
+     "col": 24
+    },
+    {
+     "row": 27,
+     "col": 28
+    },
+    {
+     "row": 34,
+     "col": 26
+    },
+    {
+     "row": 27,
+     "col": 15
+    },
+    {
+     "row": 19,
+     "col": 10
+    },
+    {
+     "row": 37,
+     "col": 6
+    },
+    {
+     "row": 41,
+     "col": 14
+    },
+    {
+     "row": 43,
+     "col": 24
+    },
+    {
+     "row": 41,
+     "col": 37
+    },
+    {
+     "row": 38,
+     "col": 50
+    },
+    {
+     "row": 25,
+     "col": 48
+    },
+    {
+     "row": 15,
+     "col": 43
+    }
+   ]
+  },
+  "379": {
+   "cls": "JasSewer3",
+   "declared_by": "JasSewer3",
+   "file": "kod/object/active/holder/room/monsroom/jassew3.kod",
+   "generators": [
+    {
+     "row": 45,
+     "col": 8
+    },
+    {
+     "row": 61,
+     "col": 4
+    },
+    {
+     "row": 45,
+     "col": 20
+    },
+    {
+     "row": 52,
+     "col": 11
+    },
+    {
+     "row": 45,
+     "col": 32
+    },
+    {
+     "row": 55,
+     "col": 24
+    },
+    {
+     "row": 45,
+     "col": 40
+    },
+    {
+     "row": 36,
+     "col": 7
+    },
+    {
+     "row": 30,
+     "col": 3
+    },
+    {
+     "row": 15,
+     "col": 7
+    },
+    {
+     "row": 20,
+     "col": 32
+    },
+    {
+     "row": 11,
+     "col": 30
+    },
+    {
+     "row": 7,
+     "col": 34
+    },
+    {
+     "row": 10,
+     "col": 43
+    },
+    {
+     "row": 23,
+     "col": 43
+    },
+    {
+     "row": 30,
+     "col": 40
+    },
+    {
+     "row": 28,
+     "col": 36
+    },
+    {
+     "row": 33,
+     "col": 28
+    },
+    {
+     "row": 9,
+     "col": 20
+    },
+    {
+     "row": 19,
+     "col": 20
+    },
+    {
+     "row": 8,
+     "col": 5
+    },
+    {
+     "row": 29,
+     "col": 20
+    }
+   ]
+  },
+  "380": {
+   "cls": "SewerKingLair",
+   "declared_by": "SewerKingLair",
+   "file": "kod/object/active/holder/room/monsroom/bossroom/sewking.kod",
+   "generators": [
+    {
+     "row": 19,
+     "col": 19
+    },
+    {
+     "row": 23,
+     "col": 44
+    },
+    {
+     "row": 23,
+     "col": 31
+    }
+   ]
+  },
+  "511": {
+   "cls": "OutdoorsA1",
+   "declared_by": "OutdoorsA1",
+   "file": "kod/object/active/holder/room/monsroom/feyforst/a1.kod",
+   "generators": [
+    {
+     "row": 11,
+     "col": 32
+    },
+    {
+     "row": 16,
+     "col": 15
+    },
+    {
+     "row": 22,
+     "col": 6
+    },
+    {
+     "row": 30,
+     "col": 6
+    },
+    {
+     "row": 30,
+     "col": 18
+    },
+    {
+     "row": 25,
+     "col": 32
+    },
+    {
+     "row": 39,
+     "col": 13
+    },
+    {
+     "row": 45,
+     "col": 23
+    },
+    {
+     "row": 45,
+     "col": 28
+    },
+    {
+     "row": 37,
+     "col": 37
+    },
+    {
+     "row": 36,
+     "col": 42
+    },
+    {
+     "row": 20,
+     "col": 42
+    },
+    {
+     "row": 25,
+     "col": 42
+    }
+   ]
+  },
+  "515": {
+   "cls": "OutdoorsA5",
+   "declared_by": "OutdoorsA5",
+   "file": "kod/object/active/holder/room/monsroom/a5.kod",
+   "generators": [
+    {
+     "row": 38,
+     "col": 39
+    },
+    {
+     "row": 41,
+     "col": 29
+    },
+    {
+     "row": 44,
+     "col": 7
+    },
+    {
+     "row": 42,
+     "col": 20
+    },
+    {
+     "row": 28,
+     "col": 40
+    },
+    {
+     "row": 13,
+     "col": 44
+    },
+    {
+     "row": 11,
+     "col": 45
+    },
+    {
+     "row": 12,
+     "col": 33
+    },
+    {
+     "row": 19,
+     "col": 14
+    },
+    {
+     "row": 20,
+     "col": 19
+    },
+    {
+     "row": 21,
+     "col": 2
+    },
+    {
+     "row": 30,
+     "col": 17
+    },
+    {
+     "row": 20,
+     "col": 7
+    },
+    {
+     "row": 14,
+     "col": 7
+    },
+    {
+     "row": 2,
+     "col": 7
+    }
+   ]
+  },
+  "516": {
+   "cls": "OutdoorsA6",
+   "declared_by": "OutdoorsA6",
+   "file": "kod/object/active/holder/room/monsroom/a6.kod",
+   "generators": [
+    {
+     "row": 20,
+     "col": 15
+    },
+    {
+     "row": 26,
+     "col": 7
+    },
+    {
+     "row": 28,
+     "col": 26
+    },
+    {
+     "row": 29,
+     "col": 43
+    },
+    {
+     "row": 14,
+     "col": 38
+    },
+    {
+     "row": 17,
+     "col": 49
+    },
+    {
+     "row": 7,
+     "col": 27
+    },
+    {
+     "row": 14,
+     "col": 13
+    },
+    {
+     "row": 12,
+     "col": 4
+    },
+    {
+     "row": 29,
+     "col": 18
+    },
+    {
+     "row": 3,
+     "col": 40
+    },
+    {
+     "row": 6,
+     "col": 46
+    },
+    {
+     "row": 3,
+     "col": 28
+    },
+    {
+     "row": 1,
+     "col": 23
+    }
+   ]
+  },
+  "521": {
+   "cls": "OutdoorsB1",
+   "declared_by": "OutdoorsB1",
+   "file": "kod/object/active/holder/room/monsroom/feyforst/b1.kod",
+   "generators": [
+    {
+     "row": 8,
+     "col": 36
+    },
+    {
+     "row": 11,
+     "col": 41
+    },
+    {
+     "row": 9,
+     "col": 17
+    },
+    {
+     "row": 8,
+     "col": 10
+    },
+    {
+     "row": 10,
+     "col": 2
+    },
+    {
+     "row": 20,
+     "col": 13
+    },
+    {
+     "row": 28,
+     "col": 23
+    },
+    {
+     "row": 17,
+     "col": 28
+    },
+    {
+     "row": 28,
+     "col": 34
+    },
+    {
+     "row": 35,
+     "col": 26
+    },
+    {
+     "row": 37,
+     "col": 10
+    },
+    {
+     "row": 28,
+     "col": 46
+    },
+    {
+     "row": 42,
+     "col": 33
+    },
+    {
+     "row": 43,
+     "col": 43
+    },
+    {
+     "row": 10,
+     "col": 23
+    }
+   ]
+  },
+  "522": {
+   "cls": "OutdoorsB2",
+   "declared_by": "OutdoorsB2",
+   "file": "kod/object/active/holder/room/monsroom/feyforst/b2.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 10
+    },
+    {
+     "row": 5,
+     "col": 16
+    },
+    {
+     "row": 25,
+     "col": 24
+    },
+    {
+     "row": 12,
+     "col": 27
+    },
+    {
+     "row": 14,
+     "col": 40
+    },
+    {
+     "row": 14,
+     "col": 13
+    },
+    {
+     "row": 25,
+     "col": 9
+    },
+    {
+     "row": 38,
+     "col": 19
+    },
+    {
+     "row": 40,
+     "col": 26
+    },
+    {
+     "row": 38,
+     "col": 33
+    },
+    {
+     "row": 24,
+     "col": 48
+    },
+    {
+     "row": 31,
+     "col": 40
+    },
+    {
+     "row": 38,
+     "col": 50
+    },
+    {
+     "row": 47,
+     "col": 28
+    }
+   ]
+  },
+  "526": {
+   "cls": "OutdoorsB6",
+   "declared_by": "OutdoorsB6",
+   "file": "kod/object/active/holder/room/monsroom/objroom/b6.kod",
+   "generators": [
+    {
+     "row": 12,
+     "col": 3
+    },
+    {
+     "row": 16,
+     "col": 7
+    },
+    {
+     "row": 9,
+     "col": 15
+    },
+    {
+     "row": 14,
+     "col": 25
+    },
+    {
+     "row": 10,
+     "col": 36
+    },
+    {
+     "row": 6,
+     "col": 34
+    },
+    {
+     "row": 24,
+     "col": 44
+    },
+    {
+     "row": 28,
+     "col": 40
+    },
+    {
+     "row": 26,
+     "col": 22
+    },
+    {
+     "row": 21,
+     "col": 11
+    },
+    {
+     "row": 43,
+     "col": 7
+    },
+    {
+     "row": 41,
+     "col": 25
+    },
+    {
+     "row": 38,
+     "col": 40
+    }
+   ]
+  },
+  "531": {
+   "cls": "OutdoorsC1",
+   "declared_by": "OutdoorsC1",
+   "file": "kod/object/active/holder/room/monsroom/feyforst/c1.kod",
+   "generators": [
+    {
+     "row": 14,
+     "col": 11
+    },
+    {
+     "row": 22,
+     "col": 13
+    },
+    {
+     "row": 20,
+     "col": 22
+    },
+    {
+     "row": 8,
+     "col": 33
+    },
+    {
+     "row": 18,
+     "col": 37
+    },
+    {
+     "row": 26,
+     "col": 49
+    },
+    {
+     "row": 24,
+     "col": 54
+    },
+    {
+     "row": 17,
+     "col": 59
+    },
+    {
+     "row": 10,
+     "col": 70
+    },
+    {
+     "row": 15,
+     "col": 72
+    },
+    {
+     "row": 4,
+     "col": 17
+    },
+    {
+     "row": 10,
+     "col": 51
+    }
+   ]
+  },
+  "532": {
+   "cls": "OutdoorsC2",
+   "declared_by": "OutdoorsC2",
+   "file": "kod/object/active/holder/room/monsroom/feyforst/c2.kod",
+   "generators": [
+    {
+     "row": 24,
+     "col": 17
+    },
+    {
+     "row": 21,
+     "col": 39
+    },
+    {
+     "row": 26,
+     "col": 22
+    },
+    {
+     "row": 28,
+     "col": 39
+    },
+    {
+     "row": 24,
+     "col": 18
+    },
+    {
+     "row": 21,
+     "col": 40
+    },
+    {
+     "row": 26,
+     "col": 23
+    },
+    {
+     "row": 28,
+     "col": 40
+    },
+    {
+     "row": 23,
+     "col": 17
+    },
+    {
+     "row": 20,
+     "col": 39
+    },
+    {
+     "row": 25,
+     "col": 22
+    },
+    {
+     "row": 27,
+     "col": 39
+    },
+    {
+     "row": 23,
+     "col": 16
+    },
+    {
+     "row": 20,
+     "col": 38
+    },
+    {
+     "row": 25,
+     "col": 21
+    },
+    {
+     "row": 27,
+     "col": 38
+    }
+   ]
+  },
+  "533": {
+   "cls": "OutdoorsC3",
+   "declared_by": "OutdoorsC3",
+   "file": "kod/object/active/holder/room/monsroom/feyforst/c3.kod",
+   "generators": [
+    {
+     "row": 3,
+     "col": 32
+    },
+    {
+     "row": 9,
+     "col": 18
+    },
+    {
+     "row": 24,
+     "col": 33
+    },
+    {
+     "row": 21,
+     "col": 30
+    },
+    {
+     "row": 27,
+     "col": 47
+    },
+    {
+     "row": 10,
+     "col": 47
+    },
+    {
+     "row": 27,
+     "col": 46
+    },
+    {
+     "row": 11,
+     "col": 47
+    },
+    {
+     "row": 30,
+     "col": 10
+    },
+    {
+     "row": 14,
+     "col": 12
+    },
+    {
+     "row": 30,
+     "col": 27
+    },
+    {
+     "row": 19,
+     "col": 21
+    },
+    {
+     "row": 16,
+     "col": 39
+    },
+    {
+     "row": 34,
+     "col": 30
+    },
+    {
+     "row": 21,
+     "col": 54
+    }
+   ]
+  },
+  "534": {
+   "cls": "OutdoorsC4",
+   "declared_by": "OutdoorsC4",
+   "file": "kod/object/active/holder/room/monsroom/c4.kod",
+   "generators": [
+    {
+     "row": 37,
+     "col": 14
+    },
+    {
+     "row": 26,
+     "col": 33
+    },
+    {
+     "row": 6,
+     "col": 50
+    },
+    {
+     "row": 15,
+     "col": 51
+    },
+    {
+     "row": 19,
+     "col": 45
+    },
+    {
+     "row": 24,
+     "col": 45
+    },
+    {
+     "row": 16,
+     "col": 36
+    },
+    {
+     "row": 20,
+     "col": 25
+    },
+    {
+     "row": 23,
+     "col": 25
+    },
+    {
+     "row": 29,
+     "col": 24
+    },
+    {
+     "row": 29,
+     "col": 17
+    },
+    {
+     "row": 33,
+     "col": 20
+    },
+    {
+     "row": 41,
+     "col": 27
+    },
+    {
+     "row": 36,
+     "col": 42
+    },
+    {
+     "row": 39,
+     "col": 40
+    }
+   ]
+  },
+  "535": {
+   "cls": "OutdoorsC5",
+   "declared_by": "OutdoorsC5",
+   "file": "kod/object/active/holder/room/monsroom/objroom/c5.kod",
+   "generators": [
+    {
+     "row": 13,
+     "col": 12
+    },
+    {
+     "row": 17,
+     "col": 24
+    },
+    {
+     "row": 25,
+     "col": 8
+    },
+    {
+     "row": 25,
+     "col": 19
+    },
+    {
+     "row": 26,
+     "col": 29
+    },
+    {
+     "row": 25,
+     "col": 39
+    },
+    {
+     "row": 39,
+     "col": 10
+    },
+    {
+     "row": 39,
+     "col": 23
+    },
+    {
+     "row": 47,
+     "col": 35
+    },
+    {
+     "row": 53,
+     "col": 24
+    }
+   ]
+  },
+  "536": {
+   "cls": "OutdoorsC6",
+   "declared_by": "OutdoorsC6",
+   "file": "kod/object/active/holder/room/monsroom/c6.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 7
+    },
+    {
+     "row": 10,
+     "col": 27
+    },
+    {
+     "row": 14,
+     "col": 46
+    },
+    {
+     "row": 17,
+     "col": 11
+    },
+    {
+     "row": 22,
+     "col": 17
+    },
+    {
+     "row": 27,
+     "col": 25
+    },
+    {
+     "row": 33,
+     "col": 30
+    },
+    {
+     "row": 26,
+     "col": 29
+    },
+    {
+     "row": 30,
+     "col": 47
+    },
+    {
+     "row": 36,
+     "col": 38
+    },
+    {
+     "row": 44,
+     "col": 27
+    },
+    {
+     "row": 40,
+     "col": 17
+    },
+    {
+     "row": 27,
+     "col": 13
+    },
+    {
+     "row": 30,
+     "col": 5
+    },
+    {
+     "row": 35,
+     "col": 8
+    },
+    {
+     "row": 44,
+     "col": 5
+    }
+   ]
+  },
+  "537": {
+   "cls": "OutdoorsC7",
+   "declared_by": "OutdoorsC7",
+   "file": "kod/object/active/holder/room/monsroom/objroom/c7.kod",
+   "generators": [
+    {
+     "row": 3,
+     "col": 11
+    },
+    {
+     "row": 5,
+     "col": 35
+    },
+    {
+     "row": 13,
+     "col": 10
+    },
+    {
+     "row": 14,
+     "col": 22
+    },
+    {
+     "row": 19,
+     "col": 7
+    },
+    {
+     "row": 24,
+     "col": 11
+    },
+    {
+     "row": 17,
+     "col": 18
+    },
+    {
+     "row": 24,
+     "col": 24
+    },
+    {
+     "row": 18,
+     "col": 35
+    },
+    {
+     "row": 19,
+     "col": 42
+    },
+    {
+     "row": 23,
+     "col": 35
+    },
+    {
+     "row": 39,
+     "col": 9
+    },
+    {
+     "row": 45,
+     "col": 11
+    },
+    {
+     "row": 40,
+     "col": 17
+    },
+    {
+     "row": 34,
+     "col": 28
+    },
+    {
+     "row": 41,
+     "col": 27
+    },
+    {
+     "row": 38,
+     "col": 34
+    },
+    {
+     "row": 37,
+     "col": 46
+    }
+   ]
+  },
+  "541": {
+   "cls": "OutdoorsD1",
+   "declared_by": "OutdoorsD1",
+   "file": "kod/object/active/holder/room/monsroom/feyforst/d1.kod",
+   "generators": [
+    {
+     "row": 13,
+     "col": 35
+    },
+    {
+     "row": 19,
+     "col": 41
+    },
+    {
+     "row": 24,
+     "col": 26
+    },
+    {
+     "row": 22,
+     "col": 15
+    },
+    {
+     "row": 44,
+     "col": 11
+    },
+    {
+     "row": 41,
+     "col": 21
+    },
+    {
+     "row": 40,
+     "col": 30
+    },
+    {
+     "row": 33,
+     "col": 20
+    },
+    {
+     "row": 24,
+     "col": 40
+    },
+    {
+     "row": 29,
+     "col": 44
+    },
+    {
+     "row": 5,
+     "col": 15
+    },
+    {
+     "row": 10,
+     "col": 20
+    },
+    {
+     "row": 14,
+     "col": 11
+    },
+    {
+     "row": 33,
+     "col": 30
+    },
+    {
+     "row": 40,
+     "col": 40
+    }
+   ]
+  },
+  "542": {
+   "cls": "OutdoorsD2",
+   "declared_by": "OutdoorsD2",
+   "file": "kod/object/active/holder/room/monsroom/feyforst/d2.kod",
+   "generators": [
+    {
+     "row": 34,
+     "col": 32
+    },
+    {
+     "row": 35,
+     "col": 42
+    },
+    {
+     "row": 8,
+     "col": 31
+    },
+    {
+     "row": 10,
+     "col": 24
+    },
+    {
+     "row": 22,
+     "col": 9
+    },
+    {
+     "row": 30,
+     "col": 10
+    },
+    {
+     "row": 5,
+     "col": 9
+    },
+    {
+     "row": 38,
+     "col": 21
+    },
+    {
+     "row": 23,
+     "col": 28
+    },
+    {
+     "row": 45,
+     "col": 31
+    },
+    {
+     "row": 38,
+     "col": 16
+    },
+    {
+     "row": 17,
+     "col": 46
+    }
+   ]
+  },
+  "544": {
+   "cls": "OutdoorsD4",
+   "declared_by": "OutdoorsD4",
+   "file": "kod/object/active/holder/room/monsroom/d4.kod",
+   "generators": [
+    {
+     "row": 13,
+     "col": 14
+    },
+    {
+     "row": 12,
+     "col": 29
+    },
+    {
+     "row": 12,
+     "col": 48
+    },
+    {
+     "row": 26,
+     "col": 23
+    },
+    {
+     "row": 22,
+     "col": 40
+    },
+    {
+     "row": 32,
+     "col": 11
+    },
+    {
+     "row": 30,
+     "col": 32
+    },
+    {
+     "row": 29,
+     "col": 48
+    },
+    {
+     "row": 30,
+     "col": 66
+    },
+    {
+     "row": 45,
+     "col": 21
+    },
+    {
+     "row": 40,
+     "col": 35
+    },
+    {
+     "row": 40,
+     "col": 49
+    },
+    {
+     "row": 44,
+     "col": 60
+    },
+    {
+     "row": 53,
+     "col": 10
+    },
+    {
+     "row": 55,
+     "col": 20
+    },
+    {
+     "row": 53,
+     "col": 36
+    },
+    {
+     "row": 54,
+     "col": 50
+    },
+    {
+     "row": 55,
+     "col": 71
+    },
+    {
+     "row": 65,
+     "col": 54
+    },
+    {
+     "row": 69,
+     "col": 31
+    }
+   ]
+  },
+  "545": {
+   "cls": "OutdoorsD5",
+   "declared_by": "OutdoorsD5",
+   "file": "kod/object/active/holder/room/monsroom/d5.kod",
+   "generators": [
+    {
+     "row": 8,
+     "col": 10
+    },
+    {
+     "row": 5,
+     "col": 39
+    },
+    {
+     "row": 6,
+     "col": 59
+    },
+    {
+     "row": 25,
+     "col": 9
+    },
+    {
+     "row": 18,
+     "col": 24
+    },
+    {
+     "row": 26,
+     "col": 35
+    },
+    {
+     "row": 16,
+     "col": 45
+    },
+    {
+     "row": 16,
+     "col": 62
+    },
+    {
+     "row": 20,
+     "col": 76
+    },
+    {
+     "row": 12,
+     "col": 94
+    },
+    {
+     "row": 40,
+     "col": 89
+    },
+    {
+     "row": 46,
+     "col": 74
+    },
+    {
+     "row": 41,
+     "col": 57
+    },
+    {
+     "row": 46,
+     "col": 34
+    },
+    {
+     "row": 43,
+     "col": 19
+    }
+   ]
+  },
+  "546": {
+   "cls": "OutdoorsD6",
+   "declared_by": "OutdoorsD6",
+   "file": "kod/object/active/holder/room/monsroom/d6.kod",
+   "generators": [
+    {
+     "row": 8,
+     "col": 4
+    },
+    {
+     "row": 15,
+     "col": 11
+    },
+    {
+     "row": 24,
+     "col": 5
+    },
+    {
+     "row": 27,
+     "col": 13
+    },
+    {
+     "row": 36,
+     "col": 9
+    },
+    {
+     "row": 5,
+     "col": 14
+    },
+    {
+     "row": 9,
+     "col": 22
+    },
+    {
+     "row": 6,
+     "col": 30
+    },
+    {
+     "row": 19,
+     "col": 19
+    },
+    {
+     "row": 17,
+     "col": 35
+    },
+    {
+     "row": 24,
+     "col": 32
+    },
+    {
+     "row": 30,
+     "col": 29
+    },
+    {
+     "row": 37,
+     "col": 36
+    },
+    {
+     "row": 39,
+     "col": 21
+    },
+    {
+     "row": 44,
+     "col": 26
+    }
+   ]
+  },
+  "547": {
+   "cls": "OutdoorsD7",
+   "declared_by": "OutdoorsD7",
+   "file": "kod/object/active/holder/room/monsroom/d7.kod",
+   "generators": [
+    {
+     "row": 6,
+     "col": 5
+    },
+    {
+     "row": 13,
+     "col": 7
+    },
+    {
+     "row": 17,
+     "col": 12
+    },
+    {
+     "row": 33,
+     "col": 10
+    },
+    {
+     "row": 42,
+     "col": 14
+    },
+    {
+     "row": 45,
+     "col": 8
+    },
+    {
+     "row": 41,
+     "col": 23
+    },
+    {
+     "row": 40,
+     "col": 39
+    },
+    {
+     "row": 6,
+     "col": 21
+    },
+    {
+     "row": 11,
+     "col": 27
+    },
+    {
+     "row": 17,
+     "col": 25
+    },
+    {
+     "row": 16,
+     "col": 31
+    },
+    {
+     "row": 27,
+     "col": 21
+    },
+    {
+     "row": 32,
+     "col": 32
+    },
+    {
+     "row": 28,
+     "col": 35
+    },
+    {
+     "row": 10,
+     "col": 36
+    },
+    {
+     "row": 6,
+     "col": 42
+    },
+    {
+     "row": 26,
+     "col": 46
+    },
+    {
+     "row": 20,
+     "col": 44
+    },
+    {
+     "row": 6,
+     "col": 42
+    }
+   ]
+  },
+  "552": {
+   "cls": "OutdoorsE2",
+   "declared_by": "OutdoorsE2",
+   "file": "kod/object/active/holder/room/monsroom/e2.kod",
+   "generators": [
+    {
+     "row": 40,
+     "col": 6
+    },
+    {
+     "row": 45,
+     "col": 13
+    },
+    {
+     "row": 58,
+     "col": 28
+    },
+    {
+     "row": 34,
+     "col": 34
+    },
+    {
+     "row": 32,
+     "col": 53
+    },
+    {
+     "row": 53,
+     "col": 50
+    },
+    {
+     "row": 40,
+     "col": 67
+    },
+    {
+     "row": 14,
+     "col": 66
+    },
+    {
+     "row": 15,
+     "col": 46
+    },
+    {
+     "row": 4,
+     "col": 68
+    }
+   ]
+  },
+  "554": {
+   "cls": "OutdoorsE4",
+   "declared_by": "OutdoorsE4",
+   "file": "kod/object/active/holder/room/monsroom/e4.kod",
+   "generators": [
+    {
+     "row": 6,
+     "col": 20
+    },
+    {
+     "row": 10,
+     "col": 24
+    },
+    {
+     "row": 17,
+     "col": 44
+    },
+    {
+     "row": 15,
+     "col": 35
+    },
+    {
+     "row": 14,
+     "col": 11
+    },
+    {
+     "row": 18,
+     "col": 7
+    },
+    {
+     "row": 28,
+     "col": 6
+    },
+    {
+     "row": 31,
+     "col": 15
+    },
+    {
+     "row": 26,
+     "col": 17
+    },
+    {
+     "row": 41,
+     "col": 14
+    }
+   ]
+  },
+  "556": {
+   "cls": "OutdoorsE6",
+   "declared_by": "OutdoorsE6",
+   "file": "kod/object/active/holder/room/monsroom/objroom/e6.kod",
+   "generators": [
+    {
+     "row": 7,
+     "col": 59
+    },
+    {
+     "row": 10,
+     "col": 46
+    },
+    {
+     "row": 21,
+     "col": 48
+    },
+    {
+     "row": 29,
+     "col": 52
+    },
+    {
+     "row": 34,
+     "col": 59
+    },
+    {
+     "row": 13,
+     "col": 34
+    },
+    {
+     "row": 18,
+     "col": 39
+    },
+    {
+     "row": 36,
+     "col": 41
+    },
+    {
+     "row": 39,
+     "col": 42
+    },
+    {
+     "row": 47,
+     "col": 42
+    },
+    {
+     "row": 15,
+     "col": 29
+    },
+    {
+     "row": 20,
+     "col": 27
+    },
+    {
+     "row": 21,
+     "col": 20
+    },
+    {
+     "row": 18,
+     "col": 8
+    },
+    {
+     "row": 21,
+     "col": 7
+    },
+    {
+     "row": 31,
+     "col": 27
+    },
+    {
+     "row": 32,
+     "col": 6
+    },
+    {
+     "row": 39,
+     "col": 22
+    },
+    {
+     "row": 47,
+     "col": 28
+    },
+    {
+     "row": 44,
+     "col": 36
+    }
+   ]
+  },
+  "557": {
+   "cls": "OutdoorsE7",
+   "declared_by": "OutdoorsE7",
+   "file": "kod/object/active/holder/room/monsroom/e7.kod",
+   "generators": [
+    {
+     "row": 15,
+     "col": 7
+    },
+    {
+     "row": 22,
+     "col": 12
+    },
+    {
+     "row": 28,
+     "col": 8
+    },
+    {
+     "row": 22,
+     "col": 19
+    },
+    {
+     "row": 7,
+     "col": 21
+    },
+    {
+     "row": 10,
+     "col": 31
+    },
+    {
+     "row": 15,
+     "col": 28
+    },
+    {
+     "row": 3,
+     "col": 40
+    },
+    {
+     "row": 19,
+     "col": 42
+    },
+    {
+     "row": 29,
+     "col": 47
+    },
+    {
+     "row": 24,
+     "col": 40
+    },
+    {
+     "row": 34,
+     "col": 38
+    },
+    {
+     "row": 30,
+     "col": 19
+    },
+    {
+     "row": 37,
+     "col": 18
+    },
+    {
+     "row": 40,
+     "col": 11
+    }
+   ]
+  },
+  "562": {
+   "cls": "OutdoorsF2",
+   "declared_by": "OutdoorsF2",
+   "file": "kod/object/active/holder/room/monsroom/f2.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 6
+    },
+    {
+     "row": 19,
+     "col": 7
+    },
+    {
+     "row": 15,
+     "col": 27
+    },
+    {
+     "row": 20,
+     "col": 31
+    },
+    {
+     "row": 6,
+     "col": 37
+    },
+    {
+     "row": 12,
+     "col": 46
+    },
+    {
+     "row": 11,
+     "col": 68
+    },
+    {
+     "row": 10,
+     "col": 81
+    },
+    {
+     "row": 6,
+     "col": 91
+    },
+    {
+     "row": 19,
+     "col": 89
+    }
+   ]
+  },
+  "563": {
+   "cls": "OutdoorsF3",
+   "declared_by": "OutdoorsF3",
+   "file": "kod/object/active/holder/room/monsroom/f3.kod",
+   "generators": [
+    {
+     "row": 4,
+     "col": 72
+    },
+    {
+     "row": 15,
+     "col": 42
+    },
+    {
+     "row": 14,
+     "col": 72
+    },
+    {
+     "row": 19,
+     "col": 67
+    },
+    {
+     "row": 17,
+     "col": 53
+    },
+    {
+     "row": 19,
+     "col": 35
+    },
+    {
+     "row": 30,
+     "col": 48
+    },
+    {
+     "row": 31,
+     "col": 33
+    },
+    {
+     "row": 15,
+     "col": 3
+    },
+    {
+     "row": 30,
+     "col": 71
+    }
+   ]
+  },
+  "564": {
+   "cls": "OutdoorsF4",
+   "declared_by": "OutdoorsF4",
+   "file": "kod/object/active/holder/room/monsroom/f4.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 16
+    },
+    {
+     "row": 9,
+     "col": 6
+    },
+    {
+     "row": 13,
+     "col": 26
+    },
+    {
+     "row": 10,
+     "col": 41
+    },
+    {
+     "row": 19,
+     "col": 11
+    },
+    {
+     "row": 22,
+     "col": 37
+    },
+    {
+     "row": 37,
+     "col": 11
+    },
+    {
+     "row": 42,
+     "col": 22
+    },
+    {
+     "row": 35,
+     "col": 30
+    },
+    {
+     "row": 33,
+     "col": 42
+    }
+   ]
+  },
+  "566": {
+   "cls": "OutdoorsF6",
+   "declared_by": "OutdoorsF6",
+   "file": "kod/object/active/holder/room/monsroom/f6.kod",
+   "generators": [
+    {
+     "row": 3,
+     "col": 48
+    },
+    {
+     "row": 13,
+     "col": 45
+    },
+    {
+     "row": 17,
+     "col": 48
+    },
+    {
+     "row": 26,
+     "col": 45
+    },
+    {
+     "row": 27,
+     "col": 40
+    },
+    {
+     "row": 19,
+     "col": 25
+    },
+    {
+     "row": 6,
+     "col": 31
+    },
+    {
+     "row": 5,
+     "col": 22
+    },
+    {
+     "row": 16,
+     "col": 7
+    },
+    {
+     "row": 17,
+     "col": 8
+    },
+    {
+     "row": 28,
+     "col": 9
+    },
+    {
+     "row": 42,
+     "col": 12
+    },
+    {
+     "row": 46,
+     "col": 3
+    },
+    {
+     "row": 15,
+     "col": 39
+    },
+    {
+     "row": 25,
+     "col": 32
+    },
+    {
+     "row": 17,
+     "col": 30
+    },
+    {
+     "row": 45,
+     "col": 35
+    },
+    {
+     "row": 36,
+     "col": 31
+    },
+    {
+     "row": 36,
+     "col": 11
+    },
+    {
+     "row": 26,
+     "col": 17
+    },
+    {
+     "row": 23,
+     "col": 32
+    }
+   ]
+  },
+  "567": {
+   "cls": "OutdoorsF7",
+   "declared_by": "OutdoorsF7",
+   "file": "kod/object/active/holder/room/monsroom/f7.kod",
+   "generators": [
+    {
+     "row": 9,
+     "col": 32
+    },
+    {
+     "row": 24,
+     "col": 39
+    },
+    {
+     "row": 20,
+     "col": 35
+    },
+    {
+     "row": 34,
+     "col": 10
+    },
+    {
+     "row": 31,
+     "col": 24
+    },
+    {
+     "row": 39,
+     "col": 26
+    },
+    {
+     "row": 35,
+     "col": 38
+    },
+    {
+     "row": 38,
+     "col": 40
+    },
+    {
+     "row": 43,
+     "col": 21
+    },
+    {
+     "row": 45,
+     "col": 32
+    },
+    {
+     "row": 30,
+     "col": 5
+    },
+    {
+     "row": 45,
+     "col": 15
+    },
+    {
+     "row": 20,
+     "col": 26
+    },
+    {
+     "row": 16,
+     "col": 46
+    },
+    {
+     "row": 15,
+     "col": 15
+    }
+   ]
+  },
+  "568": {
+   "cls": "OutdoorsF8",
+   "declared_by": "OutdoorsF8",
+   "file": "kod/object/active/holder/room/monsroom/f8.kod",
+   "generators": [
+    {
+     "row": 6,
+     "col": 11
+    },
+    {
+     "row": 10,
+     "col": 22
+    },
+    {
+     "row": 6,
+     "col": 36
+    },
+    {
+     "row": 14,
+     "col": 42
+    },
+    {
+     "row": 23,
+     "col": 39
+    },
+    {
+     "row": 22,
+     "col": 19
+    },
+    {
+     "row": 25,
+     "col": 10
+    },
+    {
+     "row": 39,
+     "col": 12
+    },
+    {
+     "row": 39,
+     "col": 26
+    },
+    {
+     "row": 19,
+     "col": 28
+    }
+   ]
+  },
+  "574": {
+   "cls": "OutdoorsG4",
+   "declared_by": "OutdoorsG4",
+   "file": "kod/object/active/holder/room/monsroom/g4.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 42
+    },
+    {
+     "row": 15,
+     "col": 16
+    },
+    {
+     "row": 22,
+     "col": 7
+    },
+    {
+     "row": 21,
+     "col": 44
+    },
+    {
+     "row": 30,
+     "col": 43
+    },
+    {
+     "row": 47,
+     "col": 47
+    },
+    {
+     "row": 45,
+     "col": 33
+    },
+    {
+     "row": 35,
+     "col": 32
+    },
+    {
+     "row": 46,
+     "col": 11
+    },
+    {
+     "row": 38,
+     "col": 6
+    }
+   ]
+  },
+  "575": {
+   "cls": "OutdoorsG5",
+   "declared_by": "OutdoorsG5",
+   "file": "kod/object/active/holder/room/monsroom/g5.kod",
+   "generators": [
+    {
+     "row": 30,
+     "col": 14
+    },
+    {
+     "row": 30,
+     "col": 26
+    },
+    {
+     "row": 23,
+     "col": 32
+    },
+    {
+     "row": 33,
+     "col": 31
+    },
+    {
+     "row": 33,
+     "col": 37
+    },
+    {
+     "row": 30,
+     "col": 44
+    },
+    {
+     "row": 36,
+     "col": 23
+    },
+    {
+     "row": 38,
+     "col": 16
+    },
+    {
+     "row": 45,
+     "col": 19
+    },
+    {
+     "row": 47,
+     "col": 22
+    }
+   ]
+  },
+  "576": {
+   "cls": "OutdoorsG6",
+   "declared_by": "OutdoorsG6",
+   "file": "kod/object/active/holder/room/monsroom/g6.kod",
+   "generators": [
+    {
+     "row": 9,
+     "col": 62
+    },
+    {
+     "row": 18,
+     "col": 77
+    },
+    {
+     "row": 29,
+     "col": 65
+    },
+    {
+     "row": 38,
+     "col": 76
+    },
+    {
+     "row": 48,
+     "col": 65
+    },
+    {
+     "row": 104,
+     "col": 30
+    },
+    {
+     "row": 119,
+     "col": 42
+    },
+    {
+     "row": 110,
+     "col": 22
+    }
+   ]
+  },
+  "578": {
+   "cls": "OutdoorsG8",
+   "declared_by": "OutdoorsG8",
+   "file": "kod/object/active/holder/room/monsroom/g8.kod",
+   "generators": [
+    {
+     "row": 4,
+     "col": 14
+    },
+    {
+     "row": 16,
+     "col": 13
+    },
+    {
+     "row": 18,
+     "col": 8
+    },
+    {
+     "row": 27,
+     "col": 14
+    },
+    {
+     "row": 34,
+     "col": 6
+    },
+    {
+     "row": 26,
+     "col": 23
+    },
+    {
+     "row": 37,
+     "col": 17
+    },
+    {
+     "row": 22,
+     "col": 38
+    },
+    {
+     "row": 14,
+     "col": 31
+    },
+    {
+     "row": 11,
+     "col": 46
+    },
+    {
+     "row": 29,
+     "col": 42
+    },
+    {
+     "row": 27,
+     "col": 37
+    },
+    {
+     "row": 37,
+     "col": 39
+    },
+    {
+     "row": 32,
+     "col": 33
+    },
+    {
+     "row": 42,
+     "col": 27
+    },
+    {
+     "row": 46,
+     "col": 18
+    },
+    {
+     "row": 44,
+     "col": 47
+    },
+    {
+     "row": 27,
+     "col": 24
+    },
+    {
+     "row": 12,
+     "col": 18
+    },
+    {
+     "row": 21,
+     "col": 18
+    }
+   ]
+  },
+  "579": {
+   "cls": "OutdoorsG9",
+   "declared_by": "OutdoorsG9",
+   "file": "kod/object/active/holder/room/monsroom/g9.kod",
+   "generators": [
+    {
+     "row": 10,
+     "col": 44
+    },
+    {
+     "row": 25,
+     "col": 47
+    },
+    {
+     "row": 29,
+     "col": 58
+    },
+    {
+     "row": 22,
+     "col": 63
+    },
+    {
+     "row": 14,
+     "col": 68
+    },
+    {
+     "row": 19,
+     "col": 6
+    },
+    {
+     "row": 25,
+     "col": 11
+    },
+    {
+     "row": 35,
+     "col": 12
+    },
+    {
+     "row": 35,
+     "col": 23
+    },
+    {
+     "row": 18,
+     "col": 20
+    },
+    {
+     "row": 9,
+     "col": 18
+    },
+    {
+     "row": 13,
+     "col": 24
+    },
+    {
+     "row": 8,
+     "col": 31
+    },
+    {
+     "row": 24,
+     "col": 28
+    },
+    {
+     "row": 14,
+     "col": 38
+    },
+    {
+     "row": 30,
+     "col": 35
+    },
+    {
+     "row": 44,
+     "col": 39
+    },
+    {
+     "row": 44,
+     "col": 49
+    },
+    {
+     "row": 44,
+     "col": 61
+    }
+   ]
+  },
+  "583": {
+   "cls": "OutdoorsH3",
+   "declared_by": "OutdoorsH3",
+   "file": "kod/object/active/holder/room/monsroom/h3.kod",
+   "generators": [
+    {
+     "row": 14,
+     "col": 4
+    },
+    {
+     "row": 17,
+     "col": 26
+    },
+    {
+     "row": 19,
+     "col": 8
+    },
+    {
+     "row": 35,
+     "col": 7
+    },
+    {
+     "row": 41,
+     "col": 9
+    },
+    {
+     "row": 31,
+     "col": 22
+    },
+    {
+     "row": 29,
+     "col": 38
+    },
+    {
+     "row": 38,
+     "col": 24
+    },
+    {
+     "row": 36,
+     "col": 37
+    },
+    {
+     "row": 42,
+     "col": 42
+    }
+   ]
+  },
+  "584": {
+   "cls": "OutdoorsH4",
+   "declared_by": "OutdoorsH4",
+   "file": "kod/object/active/holder/room/monsroom/objroom/h4.kod",
+   "generators": [
+    {
+     "row": 11,
+     "col": 31
+    },
+    {
+     "row": 12,
+     "col": 21
+    },
+    {
+     "row": 22,
+     "col": 26
+    },
+    {
+     "row": 23,
+     "col": 17
+    },
+    {
+     "row": 26,
+     "col": 4
+    },
+    {
+     "row": 31,
+     "col": 22
+    },
+    {
+     "row": 35,
+     "col": 14
+    },
+    {
+     "row": 40,
+     "col": 5
+    },
+    {
+     "row": 40,
+     "col": 24
+    },
+    {
+     "row": 35,
+     "col": 36
+    }
+   ]
+  },
+  "585": {
+   "cls": "OutdoorsH5",
+   "declared_by": "OutdoorsH5",
+   "file": "kod/object/active/holder/room/monsroom/h5.kod",
+   "generators": [
+    {
+     "row": 19,
+     "col": 7
+    },
+    {
+     "row": 22,
+     "col": 14
+    },
+    {
+     "row": 27,
+     "col": 25
+    },
+    {
+     "row": 25,
+     "col": 36
+    },
+    {
+     "row": 38,
+     "col": 34
+    },
+    {
+     "row": 46,
+     "col": 26
+    },
+    {
+     "row": 36,
+     "col": 17
+    },
+    {
+     "row": 35,
+     "col": 8
+    }
+   ]
+  },
+  "586": {
+   "cls": "OutdoorsH6",
+   "declared_by": "OutdoorsH6",
+   "file": "kod/object/active/holder/room/monsroom/h6.kod",
+   "generators": [
+    {
+     "row": 8,
+     "col": 8
+    },
+    {
+     "row": 9,
+     "col": 14
+    },
+    {
+     "row": 5,
+     "col": 25
+    },
+    {
+     "row": 10,
+     "col": 30
+    },
+    {
+     "row": 18,
+     "col": 18
+    },
+    {
+     "row": 25,
+     "col": 19
+    },
+    {
+     "row": 20,
+     "col": 3
+    },
+    {
+     "row": 25,
+     "col": 9
+    },
+    {
+     "row": 42,
+     "col": 5
+    },
+    {
+     "row": 45,
+     "col": 12
+    },
+    {
+     "row": 41,
+     "col": 22
+    },
+    {
+     "row": 35,
+     "col": 30
+    },
+    {
+     "row": 47,
+     "col": 34
+    }
+   ]
+  },
+  "587": {
+   "cls": "OutdoorsH7",
+   "declared_by": "OutdoorsH7",
+   "file": "kod/object/active/holder/room/monsroom/h7.kod",
+   "generators": [
+    {
+     "row": 9,
+     "col": 6
+    },
+    {
+     "row": 10,
+     "col": 18
+    },
+    {
+     "row": 7,
+     "col": 39
+    },
+    {
+     "row": 4,
+     "col": 58
+    },
+    {
+     "row": 12,
+     "col": 62
+    },
+    {
+     "row": 22,
+     "col": 3
+    },
+    {
+     "row": 21,
+     "col": 16
+    },
+    {
+     "row": 22,
+     "col": 32
+    },
+    {
+     "row": 31,
+     "col": 33
+    },
+    {
+     "row": 36,
+     "col": 40
+    },
+    {
+     "row": 32,
+     "col": 23
+    },
+    {
+     "row": 50,
+     "col": 17
+    },
+    {
+     "row": 51,
+     "col": 49
+    },
+    {
+     "row": 24,
+     "col": 61
+    },
+    {
+     "row": 38,
+     "col": 60
+    },
+    {
+     "row": 39,
+     "col": 53
+    },
+    {
+     "row": 48,
+     "col": 60
+    }
+   ]
+  },
+  "589": {
+   "cls": "OutdoorsH9",
+   "declared_by": "OutdoorsH9",
+   "file": "kod/object/active/holder/room/monsroom/objroom/h9.kod",
+   "generators": [
+    {
+     "row": 4,
+     "col": 7
+    },
+    {
+     "row": 11,
+     "col": 22
+    },
+    {
+     "row": 15,
+     "col": 28
+    },
+    {
+     "row": 19,
+     "col": 41
+    },
+    {
+     "row": 32,
+     "col": 37
+    },
+    {
+     "row": 24,
+     "col": 30
+    },
+    {
+     "row": 21,
+     "col": 21
+    },
+    {
+     "row": 20,
+     "col": 14
+    },
+    {
+     "row": 9,
+     "col": 13
+    },
+    {
+     "row": 15,
+     "col": 9
+    },
+    {
+     "row": 30,
+     "col": 13
+    },
+    {
+     "row": 30,
+     "col": 19
+    },
+    {
+     "row": 36,
+     "col": 18
+    },
+    {
+     "row": 40,
+     "col": 28
+    },
+    {
+     "row": 46,
+     "col": 13
+    }
+   ]
+  },
+  "593": {
+   "cls": "OutdoorsI3",
+   "declared_by": "OutdoorsI3",
+   "file": "kod/object/active/holder/room/monsroom/i3.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 33
+    },
+    {
+     "row": 5,
+     "col": 41
+    },
+    {
+     "row": 11,
+     "col": 52
+    },
+    {
+     "row": 13,
+     "col": 32
+    },
+    {
+     "row": 14,
+     "col": 23
+    },
+    {
+     "row": 11,
+     "col": 6
+    },
+    {
+     "row": 21,
+     "col": 5
+    },
+    {
+     "row": 25,
+     "col": 14
+    },
+    {
+     "row": 23,
+     "col": 36
+    }
+   ]
+  },
+  "596": {
+   "cls": "OutdoorsI6",
+   "declared_by": "OutdoorsI6",
+   "file": "kod/object/active/holder/room/monsroom/i6.kod",
+   "generators": [
+    {
+     "row": 8,
+     "col": 9
+    },
+    {
+     "row": 11,
+     "col": 24
+    },
+    {
+     "row": 19,
+     "col": 10
+    },
+    {
+     "row": 26,
+     "col": 21
+    },
+    {
+     "row": 33,
+     "col": 7
+    },
+    {
+     "row": 36,
+     "col": 16
+    },
+    {
+     "row": 35,
+     "col": 26
+    },
+    {
+     "row": 41,
+     "col": 6
+    },
+    {
+     "row": 43,
+     "col": 20
+    },
+    {
+     "row": 46,
+     "col": 35
+    },
+    {
+     "row": 38,
+     "col": 43
+    },
+    {
+     "row": 29,
+     "col": 43
+    },
+    {
+     "row": 20,
+     "col": 33
+    },
+    {
+     "row": 9,
+     "col": 35
+    },
+    {
+     "row": 16,
+     "col": 48
+    }
+   ]
+  },
+  "597": {
+   "cls": "OutdoorsI7",
+   "declared_by": "OutdoorsI7",
+   "file": "kod/object/active/holder/room/monsroom/i7.kod",
+   "generators": [
+    {
+     "row": 9,
+     "col": 8
+    },
+    {
+     "row": 4,
+     "col": 19
+    },
+    {
+     "row": 18,
+     "col": 9
+    },
+    {
+     "row": 18,
+     "col": 4
+    },
+    {
+     "row": 20,
+     "col": 19
+    },
+    {
+     "row": 7,
+     "col": 25
+    },
+    {
+     "row": 5,
+     "col": 39
+    },
+    {
+     "row": 26,
+     "col": 31
+    },
+    {
+     "row": 35,
+     "col": 35
+    },
+    {
+     "row": 40,
+     "col": 30
+    },
+    {
+     "row": 32,
+     "col": 19
+    },
+    {
+     "row": 40,
+     "col": 14
+    },
+    {
+     "row": 41,
+     "col": 43
+    },
+    {
+     "row": 44,
+     "col": 47
+    },
+    {
+     "row": 33,
+     "col": 51
+    }
+   ]
+  },
+  "598": {
+   "cls": "OutdoorsI8",
+   "declared_by": "OutdoorsI8",
+   "file": "kod/object/active/holder/room/monsroom/i8.kod",
+   "generators": [
+    {
+     "row": 3,
+     "col": 3
+    },
+    {
+     "row": 7,
+     "col": 7
+    },
+    {
+     "row": 19,
+     "col": 12
+    },
+    {
+     "row": 22,
+     "col": 19
+    },
+    {
+     "row": 20,
+     "col": 27
+    },
+    {
+     "row": 16,
+     "col": 35
+    },
+    {
+     "row": 26,
+     "col": 34
+    },
+    {
+     "row": 30,
+     "col": 39
+    },
+    {
+     "row": 30,
+     "col": 14
+    },
+    {
+     "row": 36,
+     "col": 20
+    },
+    {
+     "row": 38,
+     "col": 29
+    },
+    {
+     "row": 48,
+     "col": 25
+    },
+    {
+     "row": 54,
+     "col": 27
+    },
+    {
+     "row": 50,
+     "col": 35
+    }
+   ]
+  },
+  "599": {
+   "cls": "OutdoorsI9",
+   "declared_by": "OutdoorsI9",
+   "file": "kod/object/active/holder/room/monsroom/i9.kod",
+   "generators": [
+    {
+     "row": 9,
+     "col": 50
+    },
+    {
+     "row": 11,
+     "col": 30
+    },
+    {
+     "row": 6,
+     "col": 22
+    },
+    {
+     "row": 24,
+     "col": 31
+    },
+    {
+     "row": 25,
+     "col": 50
+    },
+    {
+     "row": 30,
+     "col": 53
+    },
+    {
+     "row": 52,
+     "col": 53
+    },
+    {
+     "row": 36,
+     "col": 59
+    },
+    {
+     "row": 50,
+     "col": 36
+    },
+    {
+     "row": 42,
+     "col": 15
+    },
+    {
+     "row": 52,
+     "col": 8
+    },
+    {
+     "row": 60,
+     "col": 37
+    },
+    {
+     "row": 62,
+     "col": 43
+    },
+    {
+     "row": 32,
+     "col": 12
+    },
+    {
+     "row": 10,
+     "col": 10
+    }
+   ]
+  },
+  "603": {
+   "cls": "OutdoorsJ3",
+   "declared_by": "OutdoorsJ3",
+   "file": "kod/object/active/holder/room/monsroom/j3.kod",
+   "generators": [
+    {
+     "row": 21,
+     "col": 17
+    },
+    {
+     "row": 30,
+     "col": 15
+    },
+    {
+     "row": 10,
+     "col": 16
+    },
+    {
+     "row": 17,
+     "col": 7
+    }
+   ]
+  },
+  "615": {
+   "cls": "OutdoorsK5",
+   "declared_by": "OutdoorsK5",
+   "file": "kod/object/active/holder/room/monsroom/objroom/k5.kod",
+   "generators": [
+    {
+     "row": 10,
+     "col": 15
+    },
+    {
+     "row": 19,
+     "col": 12
+    },
+    {
+     "row": 23,
+     "col": 23
+    },
+    {
+     "row": 4,
+     "col": 24
+    },
+    {
+     "row": 8,
+     "col": 50
+    },
+    {
+     "row": 11,
+     "col": 30
+    },
+    {
+     "row": 25,
+     "col": 37
+    },
+    {
+     "row": 37,
+     "col": 28
+    },
+    {
+     "row": 36,
+     "col": 43
+    },
+    {
+     "row": 41,
+     "col": 48
+    },
+    {
+     "row": 49,
+     "col": 34
+    },
+    {
+     "row": 45,
+     "col": 22
+    },
+    {
+     "row": 14,
+     "col": 41
+    },
+    {
+     "row": 19,
+     "col": 30
+    },
+    {
+     "row": 28,
+     "col": 50
+    },
+    {
+     "row": 39,
+     "col": 37
+    }
+   ]
+  },
+  "750": {
+   "cls": "IceCave1",
+   "declared_by": "IceCave1",
+   "file": "kod/object/active/holder/room/monsroom/objroom/icecave1.kod",
+   "generators": [
+    {
+     "row": 23,
+     "col": 5
+    },
+    {
+     "row": 8,
+     "col": 6
+    },
+    {
+     "row": 13,
+     "col": 20
+    },
+    {
+     "row": 6,
+     "col": 25
+    },
+    {
+     "row": 20,
+     "col": 20
+    },
+    {
+     "row": 8,
+     "col": 38
+    },
+    {
+     "row": 23,
+     "col": 40
+    },
+    {
+     "row": 20,
+     "col": 43
+    },
+    {
+     "row": 41,
+     "col": 44
+    },
+    {
+     "row": 46,
+     "col": 37
+    },
+    {
+     "row": 45,
+     "col": 29
+    },
+    {
+     "row": 35,
+     "col": 26
+    },
+    {
+     "row": 31,
+     "col": 25
+    },
+    {
+     "row": 25,
+     "col": 9
+    },
+    {
+     "row": 23,
+     "col": 7
+    },
+    {
+     "row": 25,
+     "col": 6
+    }
+   ]
+  },
+  "827": {
+   "cls": "Necropolis2",
+   "declared_by": "Necropolis2",
+   "file": "kod/object/active/holder/room/monsroom/necarea2.kod",
+   "generators": [
+    {
+     "row": 22,
+     "col": 31
+    },
+    {
+     "row": 2,
+     "col": 16
+    },
+    {
+     "row": 17,
+     "col": 35
+    },
+    {
+     "row": 20,
+     "col": 27
+    }
+   ]
+  },
+  "828": {
+   "cls": "Necropolis3",
+   "declared_by": "Necropolis3",
+   "file": "kod/object/active/holder/room/monsroom/necarea3.kod",
+   "generators": [
+    {
+     "row": 9,
+     "col": 15
+    },
+    {
+     "row": 14,
+     "col": 24
+    },
+    {
+     "row": 22,
+     "col": 20
+    },
+    {
+     "row": 17,
+     "col": 15
+    },
+    {
+     "row": 8,
+     "col": 19
+    },
+    {
+     "row": 14,
+     "col": 30
+    },
+    {
+     "row": 15,
+     "col": 28
+    }
+   ]
+  },
+  "829": {
+   "cls": "Necropolis4",
+   "declared_by": "Necropolis4",
+   "file": "kod/object/active/holder/room/monsroom/necarea4.kod",
+   "generators": [
+    {
+     "row": 12,
+     "col": 22
+    },
+    {
+     "row": 11,
+     "col": 46
+    },
+    {
+     "row": 11,
+     "col": 34
+    },
+    {
+     "row": 17,
+     "col": 41
+    },
+    {
+     "row": 8,
+     "col": 17
+    },
+    {
+     "row": 11,
+     "col": 13
+    }
+   ]
+  },
+  "830": {
+   "cls": "Necropolis5",
+   "declared_by": "Necropolis5",
+   "file": "kod/object/active/holder/room/monsroom/necarea5.kod",
+   "generators": [
+    {
+     "row": 8,
+     "col": 18
+    },
+    {
+     "row": 15,
+     "col": 18
+    },
+    {
+     "row": 15,
+     "col": 32
+    },
+    {
+     "row": 8,
+     "col": 31
+    }
+   ]
+  },
+  "831": {
+   "cls": "Necropolis3a",
+   "declared_by": "Necropolis3a",
+   "file": "kod/object/active/holder/room/monsroom/necare3a.kod",
+   "generators": [
+    {
+     "row": 4,
+     "col": 6
+    },
+    {
+     "row": 5,
+     "col": 7
+    }
+   ]
+  },
+  "832": {
+   "cls": "Necropolis3b",
+   "declared_by": "Necropolis3b",
+   "file": "kod/object/active/holder/room/monsroom/necare3b.kod",
+   "generators": [
+    {
+     "row": 4,
+     "col": 6
+    },
+    {
+     "row": 6,
+     "col": 4
+    },
+    {
+     "row": 1,
+     "col": 7
+    }
+   ]
+  },
+  "1006": {
+   "cls": "Guest6",
+   "declared_by": "Guest6",
+   "file": "kod/object/active/holder/room/monsroom/guest6.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 21
+    },
+    {
+     "row": 5,
+     "col": 36
+    },
+    {
+     "row": 9,
+     "col": 28
+    },
+    {
+     "row": 17,
+     "col": 35
+    },
+    {
+     "row": 21,
+     "col": 23
+    },
+    {
+     "row": 25,
+     "col": 11
+    },
+    {
+     "row": 29,
+     "col": 18
+    },
+    {
+     "row": 37,
+     "col": 35
+    },
+    {
+     "row": 38,
+     "col": 19
+    }
+   ]
+  },
+  "1016": {
+   "cls": "Newb6",
+   "declared_by": "Guest6",
+   "file": "kod/object/active/holder/room/monsroom/guest6.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 21
+    },
+    {
+     "row": 5,
+     "col": 36
+    },
+    {
+     "row": 9,
+     "col": 28
+    },
+    {
+     "row": 17,
+     "col": 35
+    },
+    {
+     "row": 21,
+     "col": 23
+    },
+    {
+     "row": 25,
+     "col": 11
+    },
+    {
+     "row": 29,
+     "col": 18
+    },
+    {
+     "row": 37,
+     "col": 35
+    },
+    {
+     "row": 38,
+     "col": 19
+    }
+   ]
+  },
+  "2010": {
+   "cls": "KocatanSewer1",
+   "declared_by": "KocatanSewer1",
+   "file": "kod/object/active/holder/room/monsroom/kocsew1.kod",
+   "generators": [
+    {
+     "row": 33,
+     "col": 7
+    },
+    {
+     "row": 42,
+     "col": 5
+    }
+   ]
+  },
+  "2012": {
+   "cls": "KocatanSewer2",
+   "declared_by": "KocatanSewer2",
+   "file": "kod/object/active/holder/room/monsroom/kocsew2.kod",
+   "generators": [
+    {
+     "row": 4,
+     "col": 16
+    },
+    {
+     "row": 15,
+     "col": 37
+    },
+    {
+     "row": 32,
+     "col": 32
+    },
+    {
+     "row": 32,
+     "col": 36
+    },
+    {
+     "row": 36,
+     "col": 34
+    },
+    {
+     "row": 52,
+     "col": 33
+    }
+   ]
+  },
+  "2111": {
+   "cls": "OutdoorsKA1",
+   "declared_by": "OutdoorsKA1",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/ka1.kod",
+   "generators": [
+    {
+     "row": 27,
+     "col": 48
+    },
+    {
+     "row": 14,
+     "col": 37
+    },
+    {
+     "row": 14,
+     "col": 25
+    },
+    {
+     "row": 19,
+     "col": 34
+    },
+    {
+     "row": 11,
+     "col": 31
+    },
+    {
+     "row": 23,
+     "col": 27
+    },
+    {
+     "row": 31,
+     "col": 48
+    },
+    {
+     "row": 13,
+     "col": 48
+    },
+    {
+     "row": 16,
+     "col": 44
+    },
+    {
+     "row": 36,
+     "col": 34
+    },
+    {
+     "row": 43,
+     "col": 47
+    },
+    {
+     "row": 10,
+     "col": 11
+    },
+    {
+     "row": 58,
+     "col": 16
+    }
+   ]
+  },
+  "2112": {
+   "cls": "OutdoorsKA2",
+   "declared_by": "OutdoorsKA2",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/ka2.kod",
+   "generators": [
+    {
+     "row": 14,
+     "col": 7
+    },
+    {
+     "row": 21,
+     "col": 7
+    },
+    {
+     "row": 29,
+     "col": 31
+    },
+    {
+     "row": 13,
+     "col": 45
+    },
+    {
+     "row": 35,
+     "col": 11
+    },
+    {
+     "row": 35,
+     "col": 47
+    },
+    {
+     "row": 51,
+     "col": 45
+    },
+    {
+     "row": 46,
+     "col": 29
+    },
+    {
+     "row": 17,
+     "col": 33
+    }
+   ]
+  },
+  "2113": {
+   "cls": "OutdoorsKA3",
+   "declared_by": "OutdoorsKA3",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/ka3.kod",
+   "generators": [
+    {
+     "row": 65,
+     "col": 20
+    },
+    {
+     "row": 7,
+     "col": 34
+    },
+    {
+     "row": 60,
+     "col": 61
+    }
+   ]
+  },
+  "2114": {
+   "cls": "OutdoorsKA4",
+   "declared_by": "OutdoorsKA4",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/ka4.kod",
+   "generators": [
+    {
+     "row": 4,
+     "col": 45
+    },
+    {
+     "row": 7,
+     "col": 12
+    },
+    {
+     "row": 13,
+     "col": 7
+    },
+    {
+     "row": 21,
+     "col": 15
+    },
+    {
+     "row": 39,
+     "col": 41
+    },
+    {
+     "row": 43,
+     "col": 22
+    }
+   ]
+  },
+  "2115": {
+   "cls": "OutdoorsKA5",
+   "declared_by": "OutdoorsKA5",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/ka5.kod",
+   "generators": [
+    {
+     "row": 6,
+     "col": 48
+    },
+    {
+     "row": 23,
+     "col": 41
+    },
+    {
+     "row": 9,
+     "col": 6
+    }
+   ]
+  },
+  "2121": {
+   "cls": "OutdoorsKB1",
+   "declared_by": "OutdoorsKB1",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kb1.kod",
+   "generators": [
+    {
+     "row": 13,
+     "col": 23
+    },
+    {
+     "row": 21,
+     "col": 14
+    },
+    {
+     "row": 21,
+     "col": 36
+    }
+   ]
+  },
+  "2122": {
+   "cls": "OutdoorsKB2",
+   "declared_by": "OutdoorsKB2",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kb2.kod",
+   "generators": [
+    {
+     "row": 43,
+     "col": 22
+    },
+    {
+     "row": 39,
+     "col": 25
+    },
+    {
+     "row": 49,
+     "col": 40
+    },
+    {
+     "row": 59,
+     "col": 24
+    },
+    {
+     "row": 20,
+     "col": 25
+    },
+    {
+     "row": 38,
+     "col": 48
+    }
+   ]
+  },
+  "2123": {
+   "cls": "OutdoorsKB3",
+   "declared_by": "OutdoorsKB3",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kb3.kod",
+   "generators": [
+    {
+     "row": 14,
+     "col": 8
+    },
+    {
+     "row": 15,
+     "col": 23
+    },
+    {
+     "row": 17,
+     "col": 44
+    },
+    {
+     "row": 29,
+     "col": 47
+    },
+    {
+     "row": 36,
+     "col": 24
+    },
+    {
+     "row": 36,
+     "col": 16
+    },
+    {
+     "row": 27,
+     "col": 24
+    }
+   ]
+  },
+  "2124": {
+   "cls": "OutdoorsKB4",
+   "declared_by": "OutdoorsKB4",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kb4.kod",
+   "generators": [
+    {
+     "row": 16,
+     "col": 7
+    },
+    {
+     "row": 9,
+     "col": 13
+    },
+    {
+     "row": 40,
+     "col": 39
+    },
+    {
+     "row": 29,
+     "col": 44
+    },
+    {
+     "row": 13,
+     "col": 37
+    },
+    {
+     "row": 11,
+     "col": 23
+    },
+    {
+     "row": 46,
+     "col": 17
+    },
+    {
+     "row": 30,
+     "col": 24
+    }
+   ]
+  },
+  "2125": {
+   "cls": "OutdoorsKB5",
+   "declared_by": "OutdoorsKB5",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kb5.kod",
+   "generators": [
+    {
+     "row": 34,
+     "col": 27
+    },
+    {
+     "row": 37,
+     "col": 13
+    },
+    {
+     "row": 18,
+     "col": 23
+    },
+    {
+     "row": 25,
+     "col": 29
+    },
+    {
+     "row": 18,
+     "col": 8
+    }
+   ]
+  },
+  "2131": {
+   "cls": "OutdoorsKC1",
+   "declared_by": "OutdoorsKC1",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kc1.kod",
+   "generators": [
+    {
+     "row": 30,
+     "col": 23
+    },
+    {
+     "row": 20,
+     "col": 22
+    },
+    {
+     "row": 17,
+     "col": 53
+    },
+    {
+     "row": 22,
+     "col": 53
+    }
+   ]
+  },
+  "2132": {
+   "cls": "OutdoorsKC2",
+   "declared_by": "OutdoorsKC2",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kc2.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 14
+    },
+    {
+     "row": 37,
+     "col": 7
+    },
+    {
+     "row": 25,
+     "col": 12
+    },
+    {
+     "row": 22,
+     "col": 41
+    },
+    {
+     "row": 44,
+     "col": 38
+    },
+    {
+     "row": 44,
+     "col": 38
+    },
+    {
+     "row": 4,
+     "col": 42
+    },
+    {
+     "row": 18,
+     "col": 27
+    }
+   ]
+  },
+  "2133": {
+   "cls": "OutdoorsKC3",
+   "declared_by": "OutdoorsKC3",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kc3.kod",
+   "generators": [
+    {
+     "row": 14,
+     "col": 54
+    },
+    {
+     "row": 18,
+     "col": 27
+    },
+    {
+     "row": 53,
+     "col": 39
+    },
+    {
+     "row": 46,
+     "col": 23
+    },
+    {
+     "row": 30,
+     "col": 32
+    },
+    {
+     "row": 33,
+     "col": 37
+    },
+    {
+     "row": 40,
+     "col": 37
+    },
+    {
+     "row": 34,
+     "col": 27
+    },
+    {
+     "row": 25,
+     "col": 28
+    }
+   ]
+  },
+  "2134": {
+   "cls": "OutdoorsKC4",
+   "declared_by": "OutdoorsKC4",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kc4.kod",
+   "generators": [
+    {
+     "row": 35,
+     "col": 12
+    },
+    {
+     "row": 47,
+     "col": 7
+    },
+    {
+     "row": 51,
+     "col": 24
+    },
+    {
+     "row": 26,
+     "col": 38
+    },
+    {
+     "row": 18,
+     "col": 23
+    },
+    {
+     "row": 24,
+     "col": 9
+    }
+   ]
+  },
+  "2141": {
+   "cls": "OutdoorsKD1",
+   "declared_by": "OutdoorsKD1",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kd1.kod",
+   "generators": [
+    {
+     "row": 16,
+     "col": 48
+    },
+    {
+     "row": 24,
+     "col": 50
+    },
+    {
+     "row": 33,
+     "col": 51
+    },
+    {
+     "row": 42,
+     "col": 33
+    },
+    {
+     "row": 14,
+     "col": 29
+    }
+   ]
+  },
+  "2142": {
+   "cls": "OutdoorsKD2",
+   "declared_by": "OutdoorsKD2",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kd2.kod",
+   "generators": [
+    {
+     "row": 28,
+     "col": 14
+    },
+    {
+     "row": 41,
+     "col": 30
+    },
+    {
+     "row": 26,
+     "col": 37
+    },
+    {
+     "row": 6,
+     "col": 41
+    },
+    {
+     "row": 24,
+     "col": 53
+    },
+    {
+     "row": 18,
+     "col": 47
+    }
+   ]
+  },
+  "2143": {
+   "cls": "OutdoorsKD3",
+   "declared_by": "OutdoorsKD3",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kd3.kod",
+   "generators": [
+    {
+     "row": 29,
+     "col": 22
+    },
+    {
+     "row": 41,
+     "col": 26
+    },
+    {
+     "row": 39,
+     "col": 12
+    },
+    {
+     "row": 23,
+     "col": 32
+    },
+    {
+     "row": 30,
+     "col": 45
+    },
+    {
+     "row": 11,
+     "col": 34
+    }
+   ]
+  },
+  "2144": {
+   "cls": "OutdoorsKD4",
+   "declared_by": "OutdoorsKD4",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/kd4.kod",
+   "generators": [
+    {
+     "row": 16,
+     "col": 21
+    },
+    {
+     "row": 14,
+     "col": 36
+    },
+    {
+     "row": 13,
+     "col": 58
+    },
+    {
+     "row": 50,
+     "col": 45
+    },
+    {
+     "row": 43,
+     "col": 17
+    }
+   ]
+  },
+  "2152": {
+   "cls": "OutdoorsKE2",
+   "declared_by": "OutdoorsKE2",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/ke2.kod",
+   "generators": [
+    {
+     "row": 13,
+     "col": 8
+    },
+    {
+     "row": 21,
+     "col": 34
+    },
+    {
+     "row": 26,
+     "col": 55
+    },
+    {
+     "row": 48,
+     "col": 13
+    },
+    {
+     "row": 56,
+     "col": 43
+    },
+    {
+     "row": 47,
+     "col": 34
+    },
+    {
+     "row": 47,
+     "col": 38
+    },
+    {
+     "row": 35,
+     "col": 17
+    }
+   ]
+  },
+  "2154": {
+   "cls": "OutdoorsKE4",
+   "declared_by": "OutdoorsKE4",
+   "file": "kod/object/active/holder/room/monsroom/kcforest/ke4.kod",
+   "generators": [
+    {
+     "row": 13,
+     "col": 54
+    },
+    {
+     "row": 20,
+     "col": 39
+    },
+    {
+     "row": 34,
+     "col": 39
+    },
+    {
+     "row": 44,
+     "col": 37
+    },
+    {
+     "row": 53,
+     "col": 46
+    },
+    {
+     "row": 53,
+     "col": 56
+    },
+    {
+     "row": 46,
+     "col": 66
+    },
+    {
+     "row": 33,
+     "col": 71
+    },
+    {
+     "row": 22,
+     "col": 67
+    },
+    {
+     "row": 70,
+     "col": 20
+    },
+    {
+     "row": 14,
+     "col": 25
+    }
+   ]
+  },
+  "2500": {
+   "cls": "Orccave1",
+   "declared_by": "Orccave1",
+   "file": "kod/object/active/holder/room/monsroom/orccave1.kod",
+   "generators": [
+    {
+     "row": 30,
+     "col": 7
+    },
+    {
+     "row": 36,
+     "col": 6
+    },
+    {
+     "row": 5,
+     "col": 8
+    },
+    {
+     "row": 13,
+     "col": 5
+    },
+    {
+     "row": 25,
+     "col": 9
+    },
+    {
+     "row": 5,
+     "col": 16
+    },
+    {
+     "row": 9,
+     "col": 14
+    },
+    {
+     "row": 21,
+     "col": 19
+    },
+    {
+     "row": 29,
+     "col": 19
+    },
+    {
+     "row": 12,
+     "col": 27
+    },
+    {
+     "row": 3,
+     "col": 30
+    },
+    {
+     "row": 8,
+     "col": 35
+    },
+    {
+     "row": 16,
+     "col": 35
+    },
+    {
+     "row": 28,
+     "col": 36
+    },
+    {
+     "row": 37,
+     "col": 40
+    },
+    {
+     "row": 44,
+     "col": 36
+    }
+   ]
+  },
+  "2501": {
+   "cls": "OrcCave2",
+   "declared_by": "OrcCave2",
+   "file": "kod/object/active/holder/room/monsroom/orccave2.kod",
+   "generators": [
+    {
+     "row": 44,
+     "col": 33
+    },
+    {
+     "row": 40,
+     "col": 40
+    },
+    {
+     "row": 34,
+     "col": 46
+    },
+    {
+     "row": 17,
+     "col": 11
+    },
+    {
+     "row": 30,
+     "col": 15
+    },
+    {
+     "row": 11,
+     "col": 17
+    },
+    {
+     "row": 19,
+     "col": 50
+    },
+    {
+     "row": 27,
+     "col": 50
+    },
+    {
+     "row": 25,
+     "col": 44
+    },
+    {
+     "row": 25,
+     "col": 34
+    },
+    {
+     "row": 30,
+     "col": 30
+    },
+    {
+     "row": 27,
+     "col": 21
+    },
+    {
+     "row": 9,
+     "col": 30
+    },
+    {
+     "row": 9,
+     "col": 35
+    }
+   ]
+  },
+  "2502": {
+   "cls": "OrcCave3",
+   "declared_by": "OrcCave3",
+   "file": "kod/object/active/holder/room/monsroom/orccave3.kod",
+   "generators": [
+    {
+     "row": 71,
+     "col": 49
+    },
+    {
+     "row": 65,
+     "col": 56
+    },
+    {
+     "row": 68,
+     "col": 52
+    },
+    {
+     "row": 60,
+     "col": 43
+    },
+    {
+     "row": 63,
+     "col": 39
+    },
+    {
+     "row": 60,
+     "col": 32
+    },
+    {
+     "row": 51,
+     "col": 39
+    },
+    {
+     "row": 51,
+     "col": 43
+    },
+    {
+     "row": 54,
+     "col": 43
+    },
+    {
+     "row": 59,
+     "col": 50
+    },
+    {
+     "row": 59,
+     "col": 56
+    },
+    {
+     "row": 48,
+     "col": 52
+    },
+    {
+     "row": 43,
+     "col": 37
+    },
+    {
+     "row": 45,
+     "col": 28
+    },
+    {
+     "row": 51,
+     "col": 25
+    },
+    {
+     "row": 52,
+     "col": 13
+    },
+    {
+     "row": 43,
+     "col": 10
+    },
+    {
+     "row": 38,
+     "col": 21
+    },
+    {
+     "row": 18,
+     "col": 34
+    },
+    {
+     "row": 18,
+     "col": 40
+    },
+    {
+     "row": 18,
+     "col": 50
+    },
+    {
+     "row": 14,
+     "col": 57
+    },
+    {
+     "row": 21,
+     "col": 57
+    },
+    {
+     "row": 31,
+     "col": 58
+    },
+    {
+     "row": 11,
+     "col": 74
+    }
+   ]
+  },
+  "2503": {
+   "cls": "OrcCave4",
+   "declared_by": "OrcCave4",
+   "file": "kod/object/active/holder/room/monsroom/orccave4.kod",
+   "generators": [
+    {
+     "row": 43,
+     "col": 3
+    },
+    {
+     "row": 39,
+     "col": 16
+    },
+    {
+     "row": 41,
+     "col": 25
+    },
+    {
+     "row": 38,
+     "col": 33
+    },
+    {
+     "row": 35,
+     "col": 48
+    },
+    {
+     "row": 45,
+     "col": 23
+    },
+    {
+     "row": 47,
+     "col": 31
+    },
+    {
+     "row": 55,
+     "col": 19
+    },
+    {
+     "row": 43,
+     "col": 45
+    },
+    {
+     "row": 41,
+     "col": 60
+    },
+    {
+     "row": 55,
+     "col": 54
+    },
+    {
+     "row": 68,
+     "col": 48
+    },
+    {
+     "row": 51,
+     "col": 63
+    },
+    {
+     "row": 64,
+     "col": 58
+    },
+    {
+     "row": 33,
+     "col": 63
+    },
+    {
+     "row": 25,
+     "col": 76
+    },
+    {
+     "row": 24,
+     "col": 72
+    },
+    {
+     "row": 24,
+     "col": 44
+    },
+    {
+     "row": 21,
+     "col": 66
+    },
+    {
+     "row": 13,
+     "col": 63
+    },
+    {
+     "row": 2,
+     "col": 57
+    },
+    {
+     "row": 3,
+     "col": 25
+    },
+    {
+     "row": 11,
+     "col": 6
+    },
+    {
+     "row": 20,
+     "col": 7
+    },
+    {
+     "row": 9,
+     "col": 14
+    },
+    {
+     "row": 20,
+     "col": 20
+    },
+    {
+     "row": 10,
+     "col": 42
+    },
+    {
+     "row": 13,
+     "col": 19
+    },
+    {
+     "row": 12,
+     "col": 36
+    }
+   ]
+  },
+  "2504": {
+   "cls": "OrcCave5",
+   "declared_by": "OrcCave5",
+   "file": "kod/object/active/holder/room/monsroom/orccave5.kod",
+   "generators": [
+    {
+     "row": 20,
+     "col": 74
+    },
+    {
+     "row": 20,
+     "col": 58
+    },
+    {
+     "row": 30,
+     "col": 66
+    },
+    {
+     "row": 14,
+     "col": 58
+    },
+    {
+     "row": 12,
+     "col": 50
+    },
+    {
+     "row": 34,
+     "col": 58
+    },
+    {
+     "row": 23,
+     "col": 53
+    },
+    {
+     "row": 41,
+     "col": 71
+    },
+    {
+     "row": 58,
+     "col": 56
+    },
+    {
+     "row": 69,
+     "col": 57
+    },
+    {
+     "row": 71,
+     "col": 40
+    },
+    {
+     "row": 57,
+     "col": 24
+    },
+    {
+     "row": 48,
+     "col": 8
+    },
+    {
+     "row": 49,
+     "col": 23
+    },
+    {
+     "row": 56,
+     "col": 33
+    },
+    {
+     "row": 56,
+     "col": 45
+    },
+    {
+     "row": 63,
+     "col": 39
+    },
+    {
+     "row": 49,
+     "col": 39
+    },
+    {
+     "row": 42,
+     "col": 48
+    },
+    {
+     "row": 40,
+     "col": 55
+    },
+    {
+     "row": 38,
+     "col": 17
+    },
+    {
+     "row": 42,
+     "col": 28
+    },
+    {
+     "row": 34,
+     "col": 37
+    },
+    {
+     "row": 34,
+     "col": 42
+    },
+    {
+     "row": 33,
+     "col": 7
+    },
+    {
+     "row": 33,
+     "col": 25
+    },
+    {
+     "row": 19,
+     "col": 38
+    },
+    {
+     "row": 19,
+     "col": 42
+    },
+    {
+     "row": 23,
+     "col": 19
+    },
+    {
+     "row": 21,
+     "col": 11
+    },
+    {
+     "row": 21,
+     "col": 15
+    },
+    {
+     "row": 14,
+     "col": 13
+    },
+    {
+     "row": 9,
+     "col": 40
+    }
+   ]
+  },
+  "2505": {
+   "cls": "OrcCave6",
+   "declared_by": "OrcCave6",
+   "file": "kod/object/active/holder/room/monsroom/orccave6.kod",
+   "generators": [
+    {
+     "row": 45,
+     "col": 11
+    },
+    {
+     "row": 39,
+     "col": 8
+    },
+    {
+     "row": 38,
+     "col": 15
+    },
+    {
+     "row": 34,
+     "col": 5
+    },
+    {
+     "row": 26,
+     "col": 12
+    },
+    {
+     "row": 13,
+     "col": 17
+    },
+    {
+     "row": 14,
+     "col": 30
+    },
+    {
+     "row": 23,
+     "col": 47
+    },
+    {
+     "row": 47,
+     "col": 43
+    },
+    {
+     "row": 38,
+     "col": 63
+    },
+    {
+     "row": 43,
+     "col": 55
+    },
+    {
+     "row": 55,
+     "col": 41
+    },
+    {
+     "row": 61,
+     "col": 44
+    },
+    {
+     "row": 64,
+     "col": 33
+    },
+    {
+     "row": 49,
+     "col": 39
+    },
+    {
+     "row": 29,
+     "col": 47
+    },
+    {
+     "row": 69,
+     "col": 35
+    },
+    {
+     "row": 63,
+     "col": 25
+    },
+    {
+     "row": 53,
+     "col": 20
+    },
+    {
+     "row": 37,
+     "col": 24
+    },
+    {
+     "row": 35,
+     "col": 37
+    },
+    {
+     "row": 28,
+     "col": 32
+    },
+    {
+     "row": 58,
+     "col": 18
+    }
+   ]
+  },
+  "2506": {
+   "cls": "Orcpit1",
+   "declared_by": "Orcpit1",
+   "file": "kod/object/active/holder/room/monsroom/bossroom/orcpit1.kod",
+   "generators": [
+    {
+     "row": 52,
+     "col": 19
+    },
+    {
+     "row": 50,
+     "col": 23
+    },
+    {
+     "row": 57,
+     "col": 18
+    },
+    {
+     "row": 59,
+     "col": 22
+    },
+    {
+     "row": 58,
+     "col": 28
+    },
+    {
+     "row": 59,
+     "col": 46
+    },
+    {
+     "row": 63,
+     "col": 46
+    },
+    {
+     "row": 65,
+     "col": 49
+    },
+    {
+     "row": 63,
+     "col": 52
+    },
+    {
+     "row": 59,
+     "col": 54
+    }
+   ]
+  },
+  "2507": {
+   "cls": "OrcPitA",
+   "declared_by": "OrcPitA",
+   "file": "kod/object/active/holder/room/monsroom/orcpita.kod",
+   "generators": [
+    {
+     "row": 50,
+     "col": 43
+    },
+    {
+     "row": 36,
+     "col": 31
+    },
+    {
+     "row": 28,
+     "col": 39
+    },
+    {
+     "row": 15,
+     "col": 35
+    },
+    {
+     "row": 21,
+     "col": 19
+    },
+    {
+     "row": 15,
+     "col": 12
+    },
+    {
+     "row": 39,
+     "col": 17
+    },
+    {
+     "row": 44,
+     "col": 29
+    },
+    {
+     "row": 44,
+     "col": 34
+    },
+    {
+     "row": 27,
+     "col": 8
+    },
+    {
+     "row": 36,
+     "col": 28
+    },
+    {
+     "row": 48,
+     "col": 22
+    },
+    {
+     "row": 47,
+     "col": 23
+    },
+    {
+     "row": 45,
+     "col": 31
+    },
+    {
+     "row": 24,
+     "col": 33
+    },
+    {
+     "row": 20,
+     "col": 39
+    }
+   ]
+  },
+  "2508": {
+   "cls": "OrcPitB",
+   "declared_by": "OrcPitB",
+   "file": "kod/object/active/holder/room/monsroom/orcpitb.kod",
+   "generators": [
+    {
+     "row": 50,
+     "col": 43
+    },
+    {
+     "row": 36,
+     "col": 31
+    },
+    {
+     "row": 28,
+     "col": 39
+    },
+    {
+     "row": 15,
+     "col": 35
+    },
+    {
+     "row": 21,
+     "col": 19
+    },
+    {
+     "row": 15,
+     "col": 12
+    },
+    {
+     "row": 39,
+     "col": 17
+    },
+    {
+     "row": 44,
+     "col": 29
+    },
+    {
+     "row": 44,
+     "col": 34
+    },
+    {
+     "row": 27,
+     "col": 8
+    },
+    {
+     "row": 36,
+     "col": 28
+    },
+    {
+     "row": 48,
+     "col": 22
+    },
+    {
+     "row": 47,
+     "col": 23
+    },
+    {
+     "row": 45,
+     "col": 31
+    },
+    {
+     "row": 24,
+     "col": 33
+    },
+    {
+     "row": 20,
+     "col": 39
+    }
+   ]
+  },
+  "2600": {
+   "cls": "MarionCrypt1",
+   "declared_by": "MarionCrypt1",
+   "file": "kod/object/active/holder/room/monsroom/marcryp1.kod",
+   "generators": [
+    {
+     "row": 5,
+     "col": 21
+    },
+    {
+     "row": 5,
+     "col": 36
+    },
+    {
+     "row": 9,
+     "col": 28
+    },
+    {
+     "row": 17,
+     "col": 35
+    },
+    {
+     "row": 21,
+     "col": 23
+    },
+    {
+     "row": 25,
+     "col": 11
+    },
+    {
+     "row": 29,
+     "col": 18
+    },
+    {
+     "row": 37,
+     "col": 35
+    },
+    {
+     "row": 38,
+     "col": 19
+    }
+   ]
+  },
+  "2601": {
+   "cls": "MarionCrypt2",
+   "declared_by": "MarionCrypt2",
+   "file": "kod/object/active/holder/room/monsroom/marcryp2.kod",
+   "generators": [
+    {
+     "row": 7,
+     "col": 16
+    },
+    {
+     "row": 11,
+     "col": 8
+    },
+    {
+     "row": 14,
+     "col": 6
+    },
+    {
+     "row": 17,
+     "col": 2
+    },
+    {
+     "row": 18,
+     "col": 3
+    },
+    {
+     "row": 24,
+     "col": 7
+    },
+    {
+     "row": 23,
+     "col": 9
+    },
+    {
+     "row": 26,
+     "col": 8
+    },
+    {
+     "row": 27,
+     "col": 5
+    },
+    {
+     "row": 31,
+     "col": 7
+    },
+    {
+     "row": 32,
+     "col": 3
+    },
+    {
+     "row": 28,
+     "col": 11
+    },
+    {
+     "row": 29,
+     "col": 15
+    },
+    {
+     "row": 36,
+     "col": 14
+    },
+    {
+     "row": 37,
+     "col": 20
+    },
+    {
+     "row": 31,
+     "col": 25
+    },
+    {
+     "row": 32,
+     "col": 27
+    },
+    {
+     "row": 33,
+     "col": 31
+    },
+    {
+     "row": 34,
+     "col": 35
+    },
+    {
+     "row": 31,
+     "col": 37
+    },
+    {
+     "row": 31,
+     "col": 43
+    },
+    {
+     "row": 27,
+     "col": 45
+    },
+    {
+     "row": 24,
+     "col": 46
+    },
+    {
+     "row": 22,
+     "col": 45
+    },
+    {
+     "row": 21,
+     "col": 48
+    },
+    {
+     "row": 19,
+     "col": 42
+    },
+    {
+     "row": 23,
+     "col": 41
+    },
+    {
+     "row": 12,
+     "col": 50
+    },
+    {
+     "row": 13,
+     "col": 45
+    },
+    {
+     "row": 16,
+     "col": 45
+    },
+    {
+     "row": 11,
+     "col": 42
+    },
+    {
+     "row": 8,
+     "col": 39
+    },
+    {
+     "row": 3,
+     "col": 41
+    },
+    {
+     "row": 2,
+     "col": 38
+    },
+    {
+     "row": 5,
+     "col": 37
+    }
+   ]
+  },
+  "2602": {
+   "cls": "MarionCrypt3a",
+   "declared_by": "MarionCrypt3a",
+   "file": "kod/object/active/holder/room/monsroom/marcry3a.kod",
+   "generators": [
+    {
+     "row": 17,
+     "col": 5
+    },
+    {
+     "row": 17,
+     "col": 19
+    },
+    {
+     "row": 21,
+     "col": 16
+    },
+    {
+     "row": 24,
+     "col": 9
+    },
+    {
+     "row": 13,
+     "col": 17
+    },
+    {
+     "row": 24,
+     "col": 28
+    },
+    {
+     "row": 27,
+     "col": 31
+    }
+   ]
+  }
+ }
+}

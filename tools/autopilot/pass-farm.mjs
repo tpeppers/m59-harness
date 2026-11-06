@@ -11,6 +11,7 @@
 // 4 methods: recordInterruptedFarmOutcome, cooperativeTargetAllowed, passCooperativeCombat, passFarm
 import {cooperativePass} from '../m59-cooperative-combat.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
+import { chaseCache, orderByWalk } from '../m59-chase.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
@@ -587,8 +588,21 @@ export class PassFarmPart {
       // PATROL (policy.patrol, m59-patrol-farm.mjs): in the patrol's room only quarry within its radius is engaged, plus
       // whatever we are already fighting; the rest is left for the loop to meet. Last of the filters, so it only narrows
       // what confinement, the avoid set, the hunt area and gang-up allowed. No patrol here: null, nothing changes.
+      // ORDERED BY THE WALK, NOT BY THE STRAIGHT LINE (m59-chase.mjs). findCreature sorts by straight distance, and in
+      // a room of ledges the nearest quarry that way is routinely the farthest on foot -- in the Icky Cave a third of
+      // everything within 8 squares is round a ledge. The walker's own planner orders the nearest few by steps on
+      // foot, once per pass from a per-keeper cache; a quarry with no walk goes LAST, never away. Order only: every
+      // filter above has run, and rankQuarries keeps this order as its tie-break. No step mask: unchanged.
+      let quarryWalks = null;
+      if (this.policy.chaseOnFoot === true && found.length && c.self && !c.self.predicted) {
+        const ow = orderByWalk(found, s.world?.geometry, c.self,
+          { room: room?.num ?? null, cache: (this.chaseCache ??= chaseCache()) });
+        found = ow.ordered;
+        quarryWalks = ow.walks;
+      }
+
       const patrol = this.patrolHere(room?.num);
-      if (patrol && found.length && c.self) found = this.patrolEngageFilter(found, c.self, patrol);
+      if (patrol && found.length && c.self) found = this.patrolEngageFilter(found, c.self, patrol, quarryWalks);
 
       // ONE NEAREST TARGET PER KEEPER PRODUCES A PILE, NOT A FLEET.
       // Keep a wounded foe first, then a partner's deliberate shared target, otherwise
@@ -636,6 +650,10 @@ export class PassFarmPart {
       }
 
       if (!found.length && coolingTargets.length) {
+        // A PATROL DOES NOT STAND AND WAIT FOR A DEFERRED QUARRY. It walks on and meets the next one -- which is the
+        // whole of what a patrol is for. Prod 2026-11-05: Zoot read "waiting / nothing to do" for minutes at r35c40,
+        // every quarry in reach deferred after a blocked approach, and the loop never walked.
+        if (patrol && await this.patrolWalk(ctx, patrol)) return HANDLED;
         this.emptyPasses = 0;
         this.doing = 'waiting';
         const soonest = Math.min(...coolingTargets.map(x => x.cooling.until));
@@ -1694,6 +1712,8 @@ export class PassFarmPart {
                                         exactTargetId: claimedSwing,
                                         disengageAt: safe.fleeAt, loot: true,
                                         holdPosition: holding, reach: PLAYER_REACH,
+                                        // m59-chase.mjs, off unless a strategy turned it on (policy.chaseOnFoot).
+                                        chase: this.policy.chaseOnFoot === true,
                                         equip: training.equip,
                                         rounds: training.rounds,
                                         weaponPriority: this.weaponPriorityNow(engageName),
@@ -1707,6 +1727,8 @@ export class PassFarmPart {
       }
       this.farmCombat = {at:Date.now(),pending:false,target:engageName,target_id:claimedSwing,holding:!!holding,killed:!!f.killed,died:!!f.died,out_of_reach:!!f.out_of_reach,reason:f.reason??f.why??null,rounds:f.rounds??null,combat:(f.combat??[]).slice(-8)};
       if(this.finishFailedCombatApproach(f))return HANDLED;
+      // A piece of a chase on foot (m59-chase.mjs): walked toward the quarry, not yet in reach. Progress, not a stall.
+      if(this.finishChasePiece(f))return HANDLED;
 
       // With equip:false fight() cannot know which prepared weapon shattered. Remember
       // the exact short-sword id here so the next pass makes a replacement instead of
@@ -1797,9 +1819,12 @@ export class PassFarmPart {
         if (!this.hold) {
           const closed = quarry ? await this.closeOnQuarry(quarry)
                                 : { closed: false, why: 'nothing to close on' };
+          // A chase piece keeps the quarry ours, so the next pass carries on toward the same one (m59-chase.mjs).
+          if (closed.closed && closed.chase && quarry) this.foeId = quarry.id;
           if (closed.closed)
-            this.progress(`closed on ${closed.target} — no wall to fetch it to, so the ` +
-                          'fight happens where it stands');
+            this.progress(closed.chase ? `closing on ${closed.target} on foot`
+                                       : `closed on ${closed.target} — no wall to fetch it to, so the ` +
+                                         'fight happens where it stands');
           else this.noProgress(`could not close on the quarry: ${closed.why}`);
           return HANDLED;
         }

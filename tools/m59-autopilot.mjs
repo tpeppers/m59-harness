@@ -2428,6 +2428,14 @@ export class Autopilot {
       // THE NO-COMBAT LOCK (sanctuary.mjs noCombatLockAdopt / noCombatLockShepherd): a lockdown's room is whatever
       // NO_COMBAT room the character stands in, and outside one it walks to the nearest. Off by default; postures turn it on.
       lockNoCombat: false,
+      // SECOND WIND FARMING (m59-second-wind.mjs): 'auto' | 'on' | 'off' | { mode, preyRatio, eat }. Auto: a farmer that
+      // knows Second Wind, against a room whose worst prey is at most 1/preyRatio (2) of its max health, keeps no vigor
+      // floor and eats nothing -- the skill refills it at 25 and rolls to improve. Operator 2026-11-05. OFF until a farm
+      // strategy asks (`secondWind`): rolled out on the Icky Cave first, widened once its kill rate is in.
+      secondWindFarming: 'off',
+      // CHASE ON FOOT (m59-chase.mjs): rank quarry by steps on foot and walk the planner's route to a quarry round a ledge.
+      // OFF until a farm strategy asks (`chaseOnFoot`), for the same staged rollout. Off is origin/main's behaviour exactly.
+      chaseOnFoot: false,
       // AN ERRAND'S PURSE LEASE (m59-purse-lease.mjs): { carry, until, owner }. While live, no banking rule takes it.
       purseLease: null,
       // Weapons never to draw. null means no prohibition, which is what every doctrine
