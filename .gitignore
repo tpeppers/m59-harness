@@ -144,6 +144,12 @@ node_modules/
 # entry; it does not ride with strategy/strategies.
 /substrate/farm-strategies/
 
+# NEEDLE SITES (tools/m59-needle-farm.mjs; docs/m59-strategies.md "The needle"): one file per kill-needle -- the
+# striker's square, the kill square, the archer stations, the pull square, the bench and the replacement order. Squares
+# a character is told to stand on and a roster of who stands there are ORDERS, so this machine's. The SHAPE is committed
+# BESIDE it: substrate/needles.example/. The keepers' shared presence rows live in substrate/.needle/ (ignored above).
+/substrate/needles/
+
 # The measured cost of the blink race, per map, per exit — how long the walk from the blink
 # point to each common crossing actually takes. Measured on this server by these characters
 # against this movement epoch, which is exactly the kind of number that must not be averaged

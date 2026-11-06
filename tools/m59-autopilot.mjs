@@ -249,6 +249,7 @@ import { TownShopsPart } from './autopilot/town-shops.mjs';
 import { CooperativePart } from './autopilot/cooperative.mjs';
 import { GearUpkeepPart } from './autopilot/gear-upkeep.mjs';
 import { RetreatPart } from './autopilot/retreat.mjs';
+import { NeedlePart } from './autopilot/needle.mjs';
 import { survivalOffOf } from './m59-hazards.mjs';
 
 
@@ -2665,6 +2666,8 @@ export class Autopilot {
       gangUp: null,
       // { room, loop: [{row, col}], engageWithin, ... } -- walk the loop when nothing is in reach (m59-patrol-farm.mjs). null = hold a wall.
       patrol: null,
+      // { site, role } -- hold a needle slot in the site's room: striker at the tip or archer behind it (m59-needle-farm.mjs). null = none.
+      needle: null,
       // { room, squares, rect? } -- ONE character's operator-drawn hunt area (normGuardZone). Wins over huntArea
       // in its own room, so a strategy file's area is the fallback, never the override. null = none.
       guardZone: null,
@@ -4216,6 +4219,7 @@ export class Autopilot {
   // @autopilot-part ./autopilot/cooperative.mjs#1
   // @autopilot-part ./autopilot/gear-upkeep.mjs#1
   // @autopilot-part ./autopilot/retreat.mjs#1
+  // @autopilot-part ./autopilot/needle.mjs#1
 }
 installParts(Autopilot, [
   HuntSetupPart,
@@ -4263,6 +4267,7 @@ installParts(Autopilot, [
   CooperativePart,
   GearUpkeepPart,
   RetreatPart,
+  NeedlePart,
 ]);
 
 // ONE WALL EACH.

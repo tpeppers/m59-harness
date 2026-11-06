@@ -40,6 +40,7 @@ import { spareBlockerMode } from './m59-spare.mjs';
 import { normalizeRequires, normalizeFloor } from './m59-strategy-gate.mjs';
 import { normalizeLootEject } from './m59-loot-eject.mjs';
 import { normPatrol } from './m59-patrol-farm.mjs';
+import { normNeedle } from './m59-needle-farm.mjs';
 import { normalizeGangUp } from './m59-gang-up.mjs';
 import { unrevealedWeaponMode } from './m59-unrevealed-weapons.mjs';
 
@@ -223,6 +224,12 @@ export const STRATEGY_FIELDS = Object.freeze([
   // within engageWithin squares, and resumes at the nearest waypoint after a fight. Elsewhere nothing changes. `work`, like
   // huntArea; the walk itself still yields when a bot or lease holds `movement`. Operator 2026-11-04, the Icky Cave.
   { path: 'patrol', keys: ['patrol'], faculty: 'work', arg: 'patrol', normalize: v => normPatrol(v) },
+  // THE NEEDLE (m59-needle-farm.mjs): { site: '<name>' | {...}, role: 'striker' | 'archer' }. In the site's room the
+  // keeper holds its needle slot -- the striker at the tip, archers on their stations -- strikes or shoots the closest
+  // valid monster in reach, and the front archer pulls after the tip has been quiet for pull.idleS (15 s). The squares and
+  // the roster live in this machine's substrate/needles/<site>.json (orders, not code). Elsewhere nothing changes. `work`,
+  // like patrol; the walks still yield when a bot or lease holds `movement`. Operator 2026-11-05, 2143 Deep in the Jungle.
+  { path: 'needle', keys: ['needle'], faculty: 'work', arg: 'needle', normalize: v => normNeedle(v) },
 ]);
 
 /** { room, squares } -> { room, squares: [[row, col], ...] } (deduplicated), or null. */

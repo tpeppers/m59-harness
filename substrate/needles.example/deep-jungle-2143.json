@@ -1,0 +1,54 @@
+{
+  "_about": "THE SHAPE of a needle site (tools/m59-needle-farm.mjs, docs/m59-strategies.md 'The needle'). The live copy is this machine's substrate/needles/<name>.json (gitignored: squares and roster are orders). Prove a copy with: node tools/m59-needle-farm.mjs check --site deep-jungle-2143",
+  "name": "deep-jungle-2143",
+  "room": 2143,
+  "why": "Operator 2026-11-05: the striker stands at r35c42 and swings at monsters brought to r34c43, where they stop. On the coarse grid (the grid monsters move on under LOS_OLD) r34c43 steps only NE, E and SW, and SW is r35c42, whose only direction is back: a cul-de-sac the striker plugs.",
+  "kill": { "row": 34, "col": 43 },
+  "killRadius": 3,
+  "striker": {
+    "station": { "row": 35, "col": 42 },
+    "reach": 3,
+    "_reach": "3 is a thrust weapon (the nerudite sword the island strikers carry); the keeper clamps it to the weapon in hand (2 for a mace or axe).",
+    "pullStep": null,
+    "_pullStep": "null: the striker holds the tip through a pull. Every square forward of r35c42 is monster ground.",
+    "minHealth": 0.5
+  },
+  "archers": {
+    "stations": [
+      { "row": 34, "col": 41 },
+      { "row": 34, "col": 42 },
+      { "row": 35, "col": 43 },
+      { "row": 35, "col": 44 },
+      { "row": 34, "col": 45 },
+      { "row": 33, "col": 43 }
+    ],
+    "_stations": "`derive --room 2143 --striker r35c42 --kill r34c43`, best first: every one is player-walkable from the tip, off the monster component, threat 0 (no monster square within 3 has coarse line of sight to it, so nothing can swing at it: monster.kod:1782) and SEES the tip (so shots count toward archery: player.kod:4096-4108). Ranked by how few monster squares sit within 3 at all. The pocket behind the striker (r35c41, r36c41, ...) is safe too but cannot see the tip: 1-in-25 training.",
+    "capacity": 4,
+    "_capacity": "1 striker : 1-4 archers is the operator's break-even estimate; 2143 may go to 6 (the six stations above).",
+    "reach": 17,
+    "_reach": "17 is the battle bow, the shortest bow; a practice bow is 30, a long bow 100. Clamped to the bow in hand.",
+    "pullSquare": { "row": 30, "col": 43 },
+    "_pullSquare": "threat 0, sees the tip, 5 squares from the striker, and sees 122 monster squares within bow range: the most of any safe square within 6.",
+    "minHealth": 0.3,
+    "minArrows": 1
+  },
+  "pull": { "idleS": 15, "everyS": 20, "maxPer10m": 20, "excursionS": 25, "minHealth": 0.7, "legSteps": 16 },
+  "roster": {
+    "strikers": [],
+    "archers": [],
+    "_roster": "Preference order by agent slot (t1...). Empty = by name. Who has which ROLE is the strategy assignment (needle.role); this only orders the replacement."
+  },
+  "reserve": {
+    "mode": "hold",
+    "squares": [
+      { "row": 34, "col": 39 },
+      { "row": 36, "col": 39 },
+      { "row": 38, "col": 41 },
+      { "row": 33, "col": 39 }
+    ],
+    "_squares": "no monster square within 3 of any of them: the bench for the second striker and overflow archers."
+  },
+  "staleS": 20,
+  "rounds": 1,
+  "econ": { "arrowPrice": null, "tickMin": 5 }
+}
