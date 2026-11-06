@@ -464,6 +464,10 @@ await ok('the shipped 2143 example site loads and is proved on the shipped map',
   const { site } = loadSite('deep-jungle-2143', { dirs: [], extraDirs: [new URL('../substrate/needles.example', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')] });
   assert.deepEqual(site.kill, W(34, 43));
   assert.deepEqual(site.striker.station, W(35, 42));
+  // Operator 2026-11-05: seven archers, in this order; the seventh station is r32c43.
+  assert.equal(archerSlots(site), 7);
+  assert.deepEqual(site.roster.archers, ['t3', 't2', 't10', 't14', 't15', 't7', 't9']);
+  assert.deepEqual(site.archers.stations[6], W(32, 43));
   let map;
   try { map = (await import('./m59-map.mjs')).loadMap(); } catch { console.log('   (no map on disk: geometry half skipped)'); return; }
   (await import('./m59-routes.mjs')).attachStepMasks(map);

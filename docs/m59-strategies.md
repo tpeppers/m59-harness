@@ -467,7 +467,7 @@ fact [the safe wall](m59-routing.md) is made of, read for a crowd instead of for
 **The site is data, and it is this machine's.** `substrate/needles/<site>.json` (gitignored: squares a character is
 told to stand on and the order it is replaced in are orders); the shape is `substrate/needles.example/deep-jungle-2143.json`.
 It names the kill square, the striker's station (and an optional `pullStep`), the archer stations best first, the
-archers' `capacity` (default 4: the operator's 1 striker : 1-4 archers; 2143 lists six stations and may go to 6), the
+archers' `capacity` (default 4: the operator's 1 striker : 1-4 archers; 2143 holds seven by operator order: Statler, Pepe, Animal, Piggy, Clifford, Janice and Camilla as the +1), the
 `pullSquare`, the `pull` clock, the bench (`reserve`), and the replacement order (`roster`). An unknown key is refused;
 a key starting `_` (or `why`) is a note. `derive` ranks the squares: off the monster component, walkable from the
 striker (`reachableFrom`, the router's step rule), threat 0 (no monster square within 3 has coarse sight of it), sees
@@ -549,7 +549,8 @@ archer's behalf are not keeper rows -- both said in the report. Every pull is a 
 **Deploying it.** The keeper code needs a `restart-keepers` handoff; the strategy field needs nothing from the broker
 (no `autopilot` argument). On prod, the island coordinator gives the roles: `avar-village-ops.needle-draft.mjs` (beside
 the live file, for review) adds a `needle` module -- the first `needle.strikers` melee (default 2) get the striker
-strategy, the rationed archers get the needle's archer strategy. `m59-needle-farm-test.mjs` (30) pins it.
+strategy, the rationed archers get the needle's archer strategy, and `needle.archers` (`max`, `prefer`) replaces
+`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (30) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 
