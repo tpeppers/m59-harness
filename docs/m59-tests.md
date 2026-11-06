@@ -364,7 +364,7 @@ through a nested shelter order.
   `chaseMaxPieces`, and contact resets the count.
 
 - `m59-patrol-farm-test.mjs` (23): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
-- `m59-needle-farm-test.mjs` (49): `needle`, the single striker in the needle with archers behind it. The field
+- `m59-needle-farm-test.mjs` (54): `needle`, the single striker in the needle with archers behind it. The field
   takes `{ site, role }` only and the site file refuses bare pairs, unknown keys (a `fleeBelow` included), a `hold`
   bench with no squares, a duplicated station or one on the striker's square; notes (`_x`, `why`) pass. Target choice:
   the closest valid monster in reach, a closer one takes the next swing, a tie keeps the current one, sight breaks a
@@ -398,7 +398,11 @@ through a nested shelter order.
   exemption moves to the new mender and off the old one, never off one it did not add; the courier's lap is the hall for
   the mender's reagents and spare arrows above the hall floor, Hanla for the rest, nothing when the hall cannot spare it;
   one mender (front-most `mend_ready`); on the keepers a worn bow is dropped on its station, the mender casts Mend on it
-  from hers, and the archer picks it back up.
+  from hers, and the archer picks it back up. LIVE 2026-11-06: the stand-in is the station when free, else the nearest
+  free square of the role's safe set (never the tip for the bench); an occupied station sends the archer to the nearest
+  free safe square; a refused walk is HANDLED (never ordinary farming), blocks that square 30 s, and the archer shoots
+  from its safe stand-in; a striker kept off the tip waits on the bench and never swings; cooperative combat leaves a
+  needle keeper alone (not ordinary: no hold, no veto), with the same keeper sans needle as the control.
 
 - `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy

@@ -6,7 +6,7 @@ existing behavior, or `{target_id,hold,why,started_at?}`. The optional start tim
 an encounter deadline through participants and finisher changes. No public default strategy opts in.
 The ordinary strategy loader caches modules until keeper restart. This hook is
 additional to `farmStrategy`; assigning it does not replace quarry, weapon,
-confinement or loot orders. A keeper with a fixed `buddy` assignment yields to it.
+confinement or loot orders. A keeper with a fixed `buddy` assignment yields to it, and so does a keeper holding a needle slot in its needle's room (2026-11-06: the attack veto refused the needle's own swings; see m59-strategies.md "The needle").
 
 The context contains `now`, `me`, fresh `members`, visible `monsters`, and the
 requested attack id. Each member carries its agent, positively identified visible

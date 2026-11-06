@@ -27,7 +27,7 @@
 // keeper's own flee line as `disengageAt`, and a striker that breaks off retreats through `retreatToSafety`, the same
 // call passFarm makes.
 import { bodyAuthority } from '../m59-body-command.mjs';
-import { allocate, chooseTarget, loadSite, mendStock, needleBusy, normNeedle, pullDue, readPresence, roleReach, slotOf, sq, writePresence } from '../m59-needle-farm.mjs';
+import { allocate, chooseTarget, loadSite, mendStock, needleBusy, normNeedle, pullDue, readPresence, roleReach, safeSquaresFor, slotOf, sq, standInFor, writePresence } from '../m59-needle-farm.mjs';
 import { bandAtOrBelow, bowBand } from '../m59-practicebow.mjs';
 import { floorsFor, readReserve, reserveBreach, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
 import { OF } from '../m59-parse.mjs';
@@ -321,8 +321,10 @@ export class NeedlePart {
       if (site.reserve.mode !== 'hold') return null;
       const i = Math.max(0, alloc.reserve.indexOf(me));
       const spot = site.reserve.squares[i % site.reserve.squares.length];
-      if (!ON(self, spot)) return this.needleWalk(spot, 'to the needle bench');
+      const go = standInFor({ site, role: 'reserve', self, preferred: spot, occupied: this.needleOccupied(), blocked: this.needleBlocked() });
+      if (go && !ON(self, go.square)) return this.needleWalk(go.square, 'to the needle bench');
       this.doing = 'waiting'; this.emptyPasses = 0;
+      st.last = { at: now, what: 'bench', at_square: sq(self), why: slot.role === 'reserve' ? 'on the bench' : whyUnfit };
       return HANDLED;
     }
 
@@ -340,7 +342,25 @@ export class NeedlePart {
       const pr = rows.find(r => r.agent === alloc.puller.agent)?.pull;
       if (pr?.phase === 'out' && now - Number(pr.at) < site.pull.excursionS * 1000) station = site.striker.pullStep;
     }
-    if (!ON(self, station)) return this.needleWalk(station, slot.role === 'striker' ? 'to the needle tip' : `to archer station ${slot.index + 1}`);
+    // WHERE TO STAND: the station, or -- when a body stands on it or a walk to it was just refused -- the nearest free
+    // square of this role's safe set (an archer may shoot from any of them; a striker strikes only from its station and
+    // waits on the bench otherwise). NEVER ordinary farming in the needle's room: on 2026-11-06 a refused station walk
+    // handed the pass to it three times out of every few, and it walked archers to walls on the monsters' own ground.
+    if (!ON(self, station)) {
+      const go = standInFor({ site, role: slot.role, self, preferred: station, occupied: this.needleOccupied(), blocked: this.needleBlocked() });
+      if (go && !ON(self, go.square)) {
+        st.last = { at: now, what: 'walk', to: sq(go.square), why: go.why };
+        return this.needleWalk(go.square, ON(go.square, station) ? (slot.role === 'striker' ? 'to the needle tip' : `to archer station ${slot.index + 1}`) : `to stand in on ${sq(go.square)}`);
+      }
+      const onSafe = safeSquaresFor(site, slot.role).some(q => ON(self, q));
+      if (slot.role === 'striker' || !onSafe) {
+        this.doing = 'waiting for a free needle square'; this.emptyPasses = 0;
+        st.last = { at: now, what: 'wait', at_square: sq(self), why: go ? go.why : 'every safe square is occupied or refused a walk' };
+        return HANDLED;
+      }
+      // An archer on a safe square that is not its station: it shoots from here.
+      st.last = { at: now, what: 'stand_in', at_square: sq(self), why: go?.why ?? 'my station is not reachable now' };
+    }
     st.walkFails = 0;
 
     // THE CLOSEST VALID MONSTER IN REACH, re-chosen every pass. Never a chase: fight() is held to this square.
@@ -351,7 +371,10 @@ export class NeedlePart {
     const geo = s.world?.geometry;
     const los = slot.role === 'archer' && geo ? o => lineOfSight(geo, self.row, self.col, o.row, o.col, { fine: false }) : null;
     const pick = chooseTarget(valid, self, { reach, currentId: st.currentId, los });
-    if (pick.target) return this.needleFight(ctx, pick.target, { site, role: slot.role, reach, seen: pick.seen });
+    if (pick.target) {
+      st.last = { at: now, what: 'fight', target_id: pick.target.id, at_square: sq(self), distance: pick.distance, reach };
+      return this.needleFight(ctx, pick.target, { site, role: slot.role, reach, seen: pick.seen });
+    }
 
     // NOTHING IN REACH: the mender mends a dropped bow; an archer with a worn bow drops it for the mender.
     if (slot.role === 'archer') {
@@ -365,10 +388,11 @@ export class NeedlePart {
       const lastPullAt = Math.max(st.lastPullAt, ...rows.map(r => Number(r.pull?.done_at) || 0));
       const due = pullDue({ site, now, quietSince: st.quietSince, lastPullAt, pullTimes: st.pullTimes, health: health ?? 1,
         attacked: (this.inReachOfUs?.() ?? []).length > 0, visible: valid.length });
-      st.last = { at: now, pull: due };
+      st.last = { at: now, what: due.due ? 'pull' : 'wait', pull: due };
       if (due.due) return this.needlePull(ctx, { site, role: slot.role, from: alloc.puller.from, station, valid });
     }
     this.doing = 'waiting'; this.emptyPasses = 0;
+    if (alloc.puller?.agent !== me) st.last = { at: now, what: 'wait', at_square: sq(self), why: `nothing valid within ${reach}` };
     if (!this._needleWaitSaid || now - this._needleWaitSaid > 60_000) {
       this._needleWaitSaid = now;
       this.note('holding the needle', { site: site.name, slot: slot.slot, at: sq(self), reach, quiet_s: Math.round((now - st.quietSince) / 1000),
@@ -377,7 +401,24 @@ export class NeedlePart {
     return HANDLED;
   }
 
-  /** A bounded walk to a needle square. Three failures in a row hand the pass back to ordinary farming for it. */
+  /** Squares ("row,col") another body stands on: players and monsters, not floor items (an item has no collision). */
+  needleOccupied() {
+    const c = this.s?.client, out = new Set();
+    for (const o of c?.room?.objects?.values?.() ?? []) {
+      if (!o || o.id === c.selfId || (o.flags & OF.GETTABLE) || !Number.isFinite(o.row) || !Number.isFinite(o.col)) continue;
+      if (!((o.flags & OF.PLAYER) || (o.flags & OF.ATTACKABLE))) continue;
+      out.add(`${o.row},${o.col}`);
+    }
+    return out;
+  }
+  /** Squares a needle walk was just refused on (30 s). */
+  needleBlocked(now = Date.now()) {
+    const st = this.needleState();
+    for (const [k, until] of Object.entries(st.blocked ?? {})) if (until <= now) delete st.blocked[k];
+    return new Set(Object.keys(st.blocked ?? {}));
+  }
+
+  /** A bounded walk to a needle square. A refused walk marks that square blocked for 30 s; the pass stays the needle's. */
   async needleWalk(to, why) {
     const s = this.s, st = this.needleState();
     const left = await this.leaveHold?.(`walking ${why}`).catch(e => ({ refused: true, why: e.message }));
@@ -387,12 +428,9 @@ export class NeedlePart {
     const self = s.client?.self;
     if (ON(self, to) || w?.arrived) { st.walkFails = 0; this.progress(`walked ${why}`); return HANDLED; }
     st.walkFails = (st.walkFails ?? 0) + 1;
-    if (st.walkFails >= 3) {
-      this.note('needle: cannot reach my square', { to: sq(to), at: sq(self), why: w?.reason ?? null, attempts: st.walkFails,
-        consequence: 'ordinary farming decides this pass; the walk is tried again next pass' });
-      st.walkFails = 0;
-      return null;
-    }
+    (st.blocked ??= {})[`${to.row},${to.col}`] = Date.now() + 30_000;
+    this.note('needle: walk refused -- standing in elsewhere for 30 s', { to: sq(to), at: sq(self), why: w?.reason ?? null, attempts: st.walkFails,
+      consequence: 'the next pass stands on the nearest free safe square of this role, never ordinary farming' });
     this.noProgress(`needle walk ${why} did not arrive: ${w?.reason ?? 'no reason given'}`);
     return HANDLED;
   }

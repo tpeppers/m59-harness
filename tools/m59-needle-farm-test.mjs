@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { readToolSource } from './autopilot/source.mjs';
 import { Autopilot, HANDLED } from './m59-autopilot.mjs';
 import { STRATEGY_FIELDS, validateStrategy } from './m59-strategy-schema.mjs';
-import { allocate, archerSlots, chainVacancies, checkSite, chooseCourierLap, chooseNextCourier, chooseTarget, mendExemptPlan, mendStock, preDispatchDue, rotateChain, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
+import { allocate, archerSlots, safeSquaresFor, standInFor, chainVacancies, checkSite, chooseCourierLap, chooseNextCourier, chooseTarget, mendExemptPlan, mendStock, preDispatchDue, rotateChain, deriveNeedle, econReport, loadSite, monsterComponent, needleBusy,
   normNeedle, normSite, parseSquare, pullDue, readPresence, roleReach, shillingsIn, slotOf, weaponReach, writePresence } from './m59-needle-farm.mjs';
 import { OF } from './m59-parse.mjs';
 
@@ -692,6 +692,71 @@ await ok('on the keepers: a worn bow is dropped on the station, the mender casts
   await pass(archer);                                           // sees `mended`, picks it up
   assert.ok(!objectsAt.has(101)); assert.equal(archer.needleStatus().mend_request, null);
   assert.ok(notes.some(x => x.what === 'needle mend: bow picked back up'));
+});
+
+// --------------------------------------------------------------------- live 2026-11-06: stand-ins, never ordinary farming
+// The needle went live in 2143 at 09:37Z and the archers were not on their stations: station walks were refused
+// (object_blocked: bodies at the tip), every third refusal handed the pass to ordinary farming, and ordinary farming walked
+// them to walls on the monsters' own ground; the cooperative strategy's attack veto refused the needle's own swings.
+await ok('stand-in: the station when free; the nearest free safe square when it is occupied or refused; never off the safe set', () => {
+  const st = W(34, 41);
+  assert.deepEqual(standInFor({ site: SITE, role: 'archer', self: W(36, 39), preferred: st }).square, st);
+  const occ = standInFor({ site: SITE, role: 'archer', self: W(34, 39), preferred: st, occupied: new Set(['34,41']) });
+  assert.deepEqual(occ.square, W(34, 39), 'already on a bench square: stay and shoot from it');
+  assert.match(occ.why, /occupied/);
+  const away = standInFor({ site: SITE, role: 'archer', self: W(35, 42), preferred: st, blocked: new Set(['34,41']) });
+  assert.deepEqual(away.square, W(34, 42), 'from the tip, the nearest free safe square');
+  assert.match(away.why, /walk .* just failed/);
+  const s1 = standInFor({ site: SITE, role: 'striker', self: W(36, 41), preferred: SITE.striker.station, occupied: new Set(['35,42']) });
+  assert.ok(SITE.reserve.squares.some(q => q.row === s1.square.row && q.col === s1.square.col), 'a striker kept off the tip waits on the bench');
+  const all = new Set([...safeSquaresFor(SITE, 'archer')].map(q => `${q.row},${q.col}`));
+  assert.equal(standInFor({ site: SITE, role: 'archer', self: W(20, 20), preferred: st, occupied: all }), null);
+  assert.ok(!safeSquaresFor(SITE, 'reserve').some(q => q.row === 35 && q.col === 42), 'the bench never includes the tip');
+});
+await ok('keeper: a station occupied by a body -> the archer walks to the nearest free safe square, not to ordinary farming', async () => {
+  reset();
+  const a = keeperAt('t9', 'archer', { self: W(35, 42), monsters: [M(70, 34, 41, { flags: OF.ATTACKABLE })] });
+  const r = await a.needlePass(ctxOf(a), [], a.needleHere(2143));
+  assert.equal(r, HANDLED);
+  assert.deepEqual(walkCalls.map(w => w.to), ['r34c42']);
+  assert.equal(a.needleStatus().last.what, 'walk');
+});
+await ok('keeper: a refused station walk is HANDLED, blocks that square for 30 s, and the archer shoots from a safe stand-in', async () => {
+  reset();
+  const a = keeperAt('t9', 'archer', { self: W(34, 39), monsters: [M(52, 34, 43)] });
+  let refuse = true;
+  const walk = a.s.walkTo;
+  a.s.walkTo = async (col, row, o) => refuse ? (walkCalls.push({ agent: 't9', to: `r${row}c${col}` }), { arrived: false, steps: 0, reason: 'object_blocked' }) : walk(col, row, o);
+  const go = () => a.needlePass(ctxOf(a), [...a.s.client.room.objects.values()], a.needleHere(2143));
+  assert.equal(await go(), HANDLED, 'never null: never ordinary farming');
+  assert.deepEqual(walkCalls.map(w => w.to), ['r34c41']);
+  assert.ok(notes.some(x => /walk refused/.test(x.what)));
+  await go();                                                // r34c41 blocked: stays on the safe bench square and shoots
+  assert.equal(fightCalls.length, 1); assert.equal(fightCalls[0].holdPosition, true); assert.equal(fightCalls[0].exactTargetId, 52);
+  assert.equal(a.needleStatus().last.what, 'fight');
+  for (let i = 0; i < 6; i++) assert.equal(await go(), HANDLED);
+});
+await ok('keeper: a striker kept off the tip waits on the bench and never swings from it', async () => {
+  reset();
+  const s = keeperAt('t1', 'striker', { self: W(34, 39), monsters: [M(80, 35, 42, { flags: OF.PLAYER }), M(52, 34, 41)] });
+  assert.equal(await s.needlePass(ctxOf(s), [...s.s.client.room.objects.values()].filter(o => !(o.flags & OF.PLAYER)), s.needleHere(2143)), HANDLED);
+  assert.equal(fightCalls.length, 0); assert.equal(walkCalls.length, 0, 'already on the bench');
+  assert.equal(s.needleStatus().last.what, 'wait');
+});
+await ok('cooperative combat leaves a needle keeper alone: not ordinary, so no hold, no veto of its swings, not a member', async () => {
+  const { CooperativeCombat } = await import('./m59-cooperative-combat.mjs');
+  const ap = keeperAt('t9', 'archer', { self: W(34, 41) });
+  Object.assign(ap, { running: true, mode: 'farm' });
+for (const k of ['travelling', 'inert']) Object.defineProperty(ap, k, { value: false, configurable: true });
+  ap.s.live = true; ap.s.combat = null; ap.s.world.room = { num: 2143 };
+  ap.policy = { ...ap.policy, assignedRoom: 2143, confineRooms: [2143, 2144, 2101] };
+  let asked = 0;
+  const co = new CooperativeCombat(ap, { store: { write() {}, read: () => [] }, decide: () => { asked++; return { target_id: 1, hold: true, why: 'distraction' }; } });
+  assert.equal(co.ordinary(), false, 'in the needle\'s room');
+  assert.equal(co.veto(52), false, 'the needle\'s swing is never vetoed');
+  assert.equal(co.decision(), null); assert.equal(asked, 0);
+  ap.policy = { ...ap.policy, needle: null };
+  assert.equal(co.ordinary(), true, 'the same keeper without a needle is an ordinary farmer (the control)');
 });
 
 // ------------------------------------------------------------------------------ survival is the keeper's, by shape

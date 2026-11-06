@@ -641,6 +641,28 @@ target's owner is the caster's owner), so nobody walks:
   the reagents handed to the mender directly), and arrows the hall cannot spare are a Hanla lap. The hall's plain-arrow
   floor is an open question for the operator (`HALL_FLOOR` in the courier draft).
 
+**LIVE, 2026-11-06: TWO THINGS TOOK THE NEEDLE'S PASSES, AND BOTH ARE CLOSED.** Within twenty minutes of going live in 2143
+the operator saw archers off their stations, on the monsters' side, being hit. The keepers' own presence rows and status
+said the needle WAS running (`needle.last` was null only because it was written by the pull path alone; it now records
+every decision: `walk`, `stand_in`, `fight`, `wait`, `pull`, `bench`). What took the passes:
+
+- **A refused station walk handed the pass to ordinary farming.** Walks to the stations beside the tip come back
+  `object_blocked` while bodies crowd it, and every third refusal returned null, so passFarm's ordinary branch ran: it took
+  "walls" at r32c46 and r34c45, approached quarry, and joined cooperative distractions -- on monster ground. Now a refused
+  walk marks that square blocked for 30 s and the pass stays the needle's: `standInFor` puts the body on the station if it
+  is free, else on the nearest free square of the role's SAFE SET (`safeSquaresFor`: an archer's stations, the pull square
+  and the bench; a striker's station and the bench), and an archer on any of them shoots from there. A square a body stands
+  on is not walked to. Nothing in the needle's room falls back to ordinary farming for a walk.
+- **The cooperative combat strategy vetoed the needle's swings.** `CooperativeCombat.ordinary()` counted needle keepers as
+  ordinary farmers, so its attack veto (`cooperativeAttackVeto`, consulted by `client.attack`) refused every swing at a
+  monster other than its own choice -- "broke off, landed 0" pass after pass -- and its passive hold took whole passes before
+  passFarm. A keeper with a needle in its room is now out of cooperative combat, like a buddy farmer.
+
+Not changed, and reported: the striker left the room through the survival ladder's caster exit ("a caster is in the room:
+no spot here holds") -- avar shamans cast without a range or sight check (monster.kod MonsterCanCastSpell), so no square in
+2143 is safe from a spell, and archers resting on a station can still take spell damage. That is survival, and it is the
+keeper's.
+
 **Survival is the keeper's, unchanged** ([the boundary](m59-boundary.md)). The needle runs inside passFarm, below
 passFleeAndRest and the fight-back rungs; every exchange is `fight()` held to the square with the keeper's own flee
 line as `disengageAt`; a striker that breaks off retreats through `retreatToSafety`, the call passFarm makes; an
@@ -677,7 +699,7 @@ archer's behalf are not keeper rows -- both said in the report. Every pull is a 
 (no `autopilot` argument). On prod, the island coordinator gives the roles: `avar-village-ops.needle-draft.mjs` (beside
 the live file, for review) adds a `needle` module -- the first `needle.strikers` melee (default 2) get the striker
 strategy, the rationed archers get the needle's archer strategy, and `needle.archers` (`max`, `prefer`) replaces
-`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (49) pins it.
+`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (54) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 

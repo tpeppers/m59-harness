@@ -377,6 +377,36 @@ export function allocate(site, rows = [], { now = Date.now() } = {}) {
   };
 }
 
+/**
+ * THE SQUARES A ROLE MAY STAND ON. An archer: every archer station, the pull square, the bench -- all derived safe
+ * (nothing that can reach them can see them). A striker: its station and the bench (it strikes only from the station).
+ * Anyone else (the bench itself): the bench.
+ */
+export function safeSquaresFor(site, role) {
+  const list = role === 'archer' ? [...site.archers.stations, site.archers.pullSquare, ...site.reserve.squares]
+    : role === 'striker' ? [site.striker.station, ...site.reserve.squares] : [...site.reserve.squares];
+  const seen = new Set();
+  return list.filter(q => q && !seen.has(`${q.row},${q.col}`) && seen.add(`${q.row},${q.col}`));
+}
+
+/**
+ * WHERE TO STAND THIS PASS. The preferred square (the slot's station) unless a body stands on it or a walk to it just
+ * failed (`blocked`); otherwise the nearest of the role's safe squares that is free -- including the one we are on.
+ * Never a square outside safeSquaresFor: the live failure (2026-11-06) was a refused station walk handing the pass to
+ * ordinary farming, which walked archers onto the monsters' own ground. -> { square, why } | null
+ */
+export function standInFor({ site, role, self, preferred, occupied = new Set(), blocked = new Set() }) {
+  const key = q => `${q.row},${q.col}`;
+  const free = q => !occupied.has(key(q)) && !blocked.has(key(q));
+  if (preferred && (same(self, preferred) || free(preferred))) return { square: preferred, why: 'my station' };
+  const here = self && safeSquaresFor(site, role).find(q => same(q, self));
+  const opts = safeSquaresFor(site, role).filter(q => !same(q, preferred) && (same(q, self) || free(q)))
+    .sort((a, b) => (self ? d2(a, self) - d2(b, self) : 0) || a.row - b.row || a.col - b.col);
+  if (!opts.length) return null;
+  const why = preferred ? (occupied.has(key(preferred)) ? `${sq(preferred)} is occupied` : `a walk to ${sq(preferred)} just failed`) : 'no station';
+  return { square: opts[0], why: here && same(opts[0], here) ? `${why}; staying on safe ${sq(here)}` : `${why}; the nearest free safe square` };
+}
+
 /** What one agent does under an allocation: { role: 'striker'|'archer'|'reserve'|'none', station, index }. */
 export function slotOf(alloc, agent) {
   if (!alloc || !agent) return { role: 'none' };

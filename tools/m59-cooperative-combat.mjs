@@ -76,6 +76,10 @@ export class CooperativeCombat {
       &&(!a.policy?.assignedRoom||Number(a.policy.assignedRoom)===Number(s.world?.room?.num))
       &&(!a.policy?.confineRooms?.length||a.policy.confineRooms.includes(s.world?.room?.num))
       &&!a.policy?.buddy&&!a.operatorSurvivalStandDown?.()
+      // A NEEDLE KEEPER IS NOT AN ORDINARY FARMER (2026-11-06, live in 2143): its target is the closest valid monster to its
+      // square, re-chosen every swing, and the cooperative strategy's attack veto refused exactly those swings ("broke off,
+      // landed 0" pass after pass) while its passive hold took whole passes before passFarm. Like a buddy, it is out.
+      &&!a.needleHere?.(s.world?.room?.num)
       &&['work','movement'].every(f=>(a.facultyOwner?.(f)??'keeper')==='keeper');
   }
   emergency() {
