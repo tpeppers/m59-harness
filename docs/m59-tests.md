@@ -364,6 +364,43 @@ through a nested shelter order.
   `chaseMaxPieces`, and contact resets the count.
 
 - `m59-patrol-farm-test.mjs` (23): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
+- `m59-needle-farm-test.mjs` (49): `needle`, the single striker in the needle with archers behind it. The field
+  takes `{ site, role }` only and the site file refuses bare pairs, unknown keys (a `fleeBelow` included), a `hold`
+  bench with no squares, a duplicated station or one on the striker's square; notes (`_x`, `why`) pass. Target choice:
+  the closest valid monster in reach, a closer one takes the next swing, a tie keeps the current one, sight breaks a
+  tie for an archer; reach is the site's number clamped to the weapon in hand. Allocation: one striker by incumbent,
+  roster order, name; the incumbent is never displaced; a STALE (20 s) or UNFIT striker is replaced by the next
+  eligible melee and a newcomer needs the floor + 0.2; archers keep their stations, fill lowest first, capacity caps
+  them and the rest overflow to the bench; the puller is the front archer, or a striker with a pull step; archers-only
+  runs, pulls and is flagged money-losing. The pull: 15 s quiet, something visible, not hit, health floor, one per
+  `everyS`, `maxPer10m`. The keeper on a fake session: the striker swings held (`holdPosition`) at the closest and
+  switches next pass; off its square it walks back before swinging; out of reach it waits and never chases; archers
+  walk to their own stations; the front archer walks out to the pull square, takes one exchange and walks back, then
+  is rate-limited; a movement lease, another room or no needle return null; an archer with no arrows hands the pass
+  back and a hurt striker goes to the bench; the bench takes the tip when the old striker's row goes stale; a striker
+  that breaks off retreats and an archer does not; archers-only is said out loud. Economics: rates per 30 duty-minutes,
+  null (not zero) net without an arrow price, arrows bought from `bought` rows. Source pins: the seam is in passFarm
+  after the patrol filter and before the ranking, and the needle code names no protected faculty. On the shipped map
+  the 2143 example site checks clean, every station sees the tip, the tip steps only NE/E/SW and the striker square
+  only back; the example holds seven archers, Sweetums then Kermit as strikers, Camilla on disco duty. The ROTATION CHAIN
+  (courier -> striker -> archer): vacancies (off roster, at stop_at, away past seatVacantS); a free seat calls the
+  courier up and hands the job to the pre-dispatched next courier; the handover waits for the incoming striker in the room,
+  fit and between pulls, then gives the old striker the seat (FIRE without archery); nobody eligible stops the courier job
+  out loud and the next free seat promotes nobody; the NEXT-COURIER RULE picks the highest max health fire-not-archery-
+  not-discordance character by default and the highest max health discordance knower when the archer with the most
+  training ahead knows discordance (`top_by: 'next_out'` the other reading), refusing hk*, piloted, in-the-needle, the
+  714 hall group and `exclude` with reasons; PRE-DISPATCH fires at 98, once, and the pre-dispatched courier is the one the
+  call-up uses; a courier on a lap is never called up; a stuck handover times out;
+  2000 random ticks never leave the needle without a striker. DISCO DUTY: a held seat survives a stale row and is never
+  given away, an away archer is not the puller, `disco_missing` when no caster is present; on the keeper a disco archer in
+  a storm stops shooting and publishes its hold, and shoots again from the same seat after. Shared rows go to a temp
+  `M59_NEEDLE_STATE_DIR`. THE MENDER: usable stock is above the PvP floor and the need is the gap to 30/30; the mend
+  exemption moves to the new mender and off the old one, never off one it did not add; the courier's lap is the hall for
+  the mender's reagents and spare arrows above the hall floor, Hanla for the rest, nothing when the hall cannot spare it;
+  one mender (front-most `mend_ready`); on the keepers a worn bow is dropped on its station, the mender casts Mend on it
+  from hers, and the archer picks it back up.
+
+- `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy
   default is null and every keeper helper answers the old way without it (and in another room). The state machine:
   nearest waypoint first, arrival advances in loop order and counts laps, `arriveWithin` counts as arrived, after a

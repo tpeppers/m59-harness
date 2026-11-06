@@ -1,0 +1,139 @@
+{
+  "_about": "THE SHAPE of a needle site (tools/m59-needle-farm.mjs, docs/m59-strategies.md 'The needle'). The live copy is this machine's substrate/needles/<name>.json (gitignored: squares and roster are orders). Prove a copy with: node tools/m59-needle-farm.mjs check --site deep-jungle-2143",
+  "name": "deep-jungle-2143",
+  "room": 2143,
+  "why": "Operator 2026-11-05: the striker stands at r35c42 and swings at monsters brought to r34c43, where they stop. On the coarse grid (the grid monsters move on under LOS_OLD) r34c43 steps only NE, E and SW, and SW is r35c42, whose only direction is back: a cul-de-sac the striker plugs.",
+  "kill": {
+    "row": 34,
+    "col": 43
+  },
+  "killRadius": 3,
+  "striker": {
+    "station": {
+      "row": 35,
+      "col": 42
+    },
+    "reach": 3,
+    "_reach": "3 is a thrust weapon (the nerudite sword the island strikers carry); the keeper clamps it to the weapon in hand (2 for a mace or axe).",
+    "pullStep": null,
+    "_pullStep": "null: the striker holds the tip through a pull. Every square forward of r35c42 is monster ground.",
+    "minHealth": 0.5
+  },
+  "archers": {
+    "stations": [
+      {
+        "row": 34,
+        "col": 41
+      },
+      {
+        "row": 34,
+        "col": 42
+      },
+      {
+        "row": 35,
+        "col": 43
+      },
+      {
+        "row": 35,
+        "col": 44
+      },
+      {
+        "row": 34,
+        "col": 45
+      },
+      {
+        "row": 33,
+        "col": 43
+      },
+      {
+        "row": 32,
+        "col": 43
+      }
+    ],
+    "_stations": "`derive --room 2143 --striker r35c42 --kill r34c43`, best first: every one is player-walkable from the tip, off the monster component, threat 0 (no monster square within 3 has coarse line of sight to it, so nothing can swing at it: monster.kod:1782) and SEES the tip (so shots count toward archery: player.kod:4096-4108). Ranked by how few monster squares sit within 3 at all. The pocket behind the striker (r35c41, r36c41, ...) is safe too but cannot see the tip: 1-in-25 training.",
+    "capacity": 7,
+    "_capacity": "7 by operator order 2026-11-05: Statler t3, Pepe t2, Animal t10, Piggy t14, Clifford t15, Janice t7, and Camilla t9 as the hopeful +1. The operator's general estimate is 1 striker : 1-4 archers to break even; 1:7 is a training-heavy needle, read `econ` to see what it costs.",
+    "reach": 17,
+    "_reach": "17 is the battle bow, the shortest bow; a practice bow is 30, a long bow 100. Clamped to the bow in hand.",
+    "pullSquare": {
+      "row": 30,
+      "col": 43
+    },
+    "_pullSquare": "threat 0, sees the tip, 5 squares from the striker, and sees 122 monster squares within bow range: the most of any safe square within 6.",
+    "minHealth": 0.3,
+    "minArrows": 1,
+    "_station7": "r32c43 (the 7th, added 2026-11-05): the 7th square `derive` ranks, so it meets every criterion -- walkable from the tip, off the monster component, threat 0, sees the tip (2.0 squares from it, sees 105 monster squares within bow range). No compromise was needed. It is the most exposed of the seven by `near` (11 monster squares within 3, none of which can see it), and it sits on the front archer's way to the pull square r30c43; bodies do not block a walk."
+  },
+  "pull": {
+    "idleS": 15,
+    "everyS": 20,
+    "maxPer10m": 20,
+    "excursionS": 25,
+    "minHealth": 0.7,
+    "legSteps": 16
+  },
+  "roster": {
+    "strikers": [
+      "t11",
+      "t1"
+    ],
+    "archers": [
+      "t3",
+      "t2",
+      "t10",
+      "t14",
+      "t15",
+      "t7",
+      "t9"
+    ],
+    "_roster": "Preference order by agent slot (t1...). Empty = by name. Who has which ROLE is the strategy assignment (needle.role); this only orders the replacement.",
+    "_archers": "Operator order 2026-11-05, in this order: Statler t3, Pepe t2, Animal t10, Piggy t14, Clifford t15, Janice t7, Camilla t9 (the hopeful +1). The order decides who takes a FREE station first, lowest index first; an archer already on a station keeps it.",
+    "_strikers": "Operator order 2026-11-05: Sweetums (t11) is the striker; Kermit (t1), the Hanla arrow courier, is the next one. Who carries the striker strategy is the island coordinator's rotation chain (avar-village-ops needle.chain: courier -> striker -> archer); this list only orders the tip among the keepers that carry it."
+  },
+  "reserve": {
+    "mode": "hold",
+    "squares": [
+      {
+        "row": 34,
+        "col": 39
+      },
+      {
+        "row": 36,
+        "col": 39
+      },
+      {
+        "row": 38,
+        "col": 41
+      },
+      {
+        "row": 33,
+        "col": 39
+      }
+    ],
+    "_squares": "no monster square within 3 of any of them: the bench for the second striker and overflow archers."
+  },
+  "staleS": 20,
+  "rounds": 1,
+  "econ": {
+    "arrowPrice": null,
+    "tickMin": 5
+  },
+  "disco": {
+    "agents": [],
+    "holdS": 120,
+    "castSquare": null,
+    "_disco": "Operator 2026-11-05: one Discordance caster per needle group on 'disco duty'. Camilla (t9), the 7th archer. In a Sandstorm she stops shooting (a sandstorm ruins shots anyway: player.kod WindsRuinShot) and stands by while the island coordinator casts Discordance through her keeper; her seat is held for holdS seconds, through the trance in which her keeper publishes nothing. castSquare null = she casts where she stands: her station is threat 0, which is the casting safety standard's best case, and walking out costs storm time. Set castSquare to make her step to another square to cast; she walks back after.",
+    "_agents": "Empty = THE ROLE FOLLOWS THE ROTATION: any archer at the needle that knows Discordance is on disco duty (Camilla t9 today). Name agents here to pin it instead. The island coordinator's chain keeps a Discordance knower in the room (the next-courier rule)."
+  },
+  "mend": {
+    "agents": null,
+    "at": "med",
+    "stock": {
+      "orc tooth": 30,
+      "sapphire": 30
+    },
+    "checkS": 120,
+    "waitS": 60,
+    "_mend": "Operator 2026-11-05: the disco caster also mends the needle's bows and carries 30 orc teeth + 30 sapphires USABLE, on top of her PvP floor (named in her status as mend.pvp_floor). agents null = the disco-duty archers that know Mend (Kraanan 4: 9 mana, 1 sapphire + 1 orc tooth). Mend reaches an item on the floor of the caster's room (mend.kod IsTargetInRange), so an archer whose bow reads 'med' or worse drops it on its own station, the mender casts from hers, and the archer picks it back up -- nobody walks. The reserve book's mend exemption follows the role (the coordinator draft). The courier keeps the stock from hall 713."
+  }
+}

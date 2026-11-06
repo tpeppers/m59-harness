@@ -115,6 +115,8 @@ export default {
 | `patrol` | `patrol` | work | `normPatrol` (`m59-patrol-farm.mjs`): `{ room, loop: [{ row, col }, ...], engageWithin?, engageWalk?, arriveWithin?, legSteps?, resumeSlack? }` — in that room a farmer with nothing in reach walks the loop instead of holding a wall; see [Patrol](#patrol-patrol-walk-the-spawn-points-in-a-loop) (`m59-patrol-farm-test.mjs`) |
 | `chaseOnFoot` | `chaseOnFoot` | work | boolean, default off: rank quarry by steps on foot and walk the route to one round a ledge; see [chase on foot](m59-combat.md#chase-on-foot--walk-as-if-to-stand-on-the-quarry) (`m59-chase-test.mjs`) |
 | `secondWind` | `secondWindFarming` | work | `'off'` (default), `'auto'`, `'on'`, `{ mode, prey_ratio, eat }`: against weak prey, no vigor floor and no meals; see [docs/m59-policy.md](m59-policy.md) (`m59-second-wind-test.mjs`) |
+| `patrol` | `patrol` | work | `normPatrol` (`m59-patrol-farm.mjs`): `{ room, loop: [{ row, col }, ...], engageWithin?, arriveWithin?, legSteps?, resumeSlack? }` — in that room a farmer with nothing in reach walks the loop instead of holding a wall; see [Patrol](#patrol-patrol-walk-the-spawn-points-in-a-loop) (`m59-patrol-farm-test.mjs`) |
+| `needle` | `needle` | work | `normNeedle` (`m59-needle-farm.mjs`): `{ site: '<name>' \| {...}, role: 'striker' \| 'archer' }` — in the site's room the keeper holds its needle slot (the striker at the tip, an archer on its station), strikes or shoots the closest valid monster in reach, and the front archer pulls after 15 s of quiet; the squares and replacement order are this machine's `substrate/needles/<site>.json`; see [The needle](#the-needle-needle-one-striker-at-the-tip-archers-behind-it-a-pull-when-it-goes-quiet) (`m59-needle-farm-test.mjs`) |
 
 **A GUARD ZONE OVERRIDES IT FOR ONE CHARACTER.** `autopilot action=start guard_zone={ room, from: {row, col}, to: {row, col} }` (or `{ room, squares }`) is an operator order to one character, stored as `policy.guardZone` (`normGuardZone`, which keeps the drawn `rect`). In its own room it is the area `huntAreaHere` uses, in place of the strategy file's `huntArea`; `guard_zone: null` hands the room back to the file. The field command's room map draws one by dragging a rectangle (operator 2026-10-16).
 
@@ -437,6 +439,209 @@ rebaked. `substrate/farm-strategies.example/icky-cave-patrol.mjs` is the shape.
 
 A strategy key only (no `autopilot` argument), hot-reloaded with the file; the keeper code needs a `restart-keepers`
 handoff.
+
+### The needle (`needle`): one striker at the tip, archers behind it, a pull when it goes quiet
+
+Operator, 2026-11-05, of 2143 Deep in the Jungle (Ko'catan): *"a single striker stands in front of the
+safe-spot/choke-point and strikes at whatever monster stands in the front of the pack, regardless of if it changes ...
+while the archers stand back safely and train their abilities ... the goal is it just becomes a killzone, and the
+monsters on the map all wander over into your stationary farming spot. If monsters aren't coming to the kill-needle
+location, the melee striker can step forward/aside, and the bower in the front can step out and shoot at an enemy
+before returning to their station"*. Then: *"Idle for 15s even is enough to be worth pulling ... the melee striker is
+optional but assumed -- my intuition is that the method can be close to break even at 1/(1-4) striker/archers ... but
+probably can't support just lone archers without incoming money."*
+
+```js
+needle: { site: 'deep-jungle-2143', role: 'striker' },   // or role: 'archer'
+```
+
+```bash
+node tools/m59-needle-farm.mjs derive --room 2143 --striker r35c42 --kill r34c43   # every candidate square, and why
+node tools/m59-needle-farm.mjs check  --site deep-jungle-2143                       # a site file, proved on the map
+node tools/m59-needle-farm.mjs status --site deep-jungle-2143                       # who holds the tip and each station
+node tools/m59-needle-farm.mjs econ   --site deep-jungle-2143 --since 2h            # the break-even readout
+```
+
+**Why a needle works, from the server's own rules.** On a stock server (`piLOS = LOS_OLD`) monsters move on the
+COARSE grid (CanMoveInRoom: the source's direction bit, the destination's floor bit) and see along a staircase of the
+same steps (Room.LineOfSight, `room.kod:2125`); a monster attacks only with sight (`monster.kod:1782`). A needle is a
+coarse cul-de-sac. In 2143 the kill square r34c43 steps only NE, E and SW; SW is r35c42, whose only direction is back
+to r34c43. With the striker standing on r35c42 the pack stops at the tip, in its reach. Around it are squares the
+player walks to on the BSP that no monster square within reach can see: an archer there is never swung at, and if it
+also sees the tip (`player.kod:4096-4108`) every shot counts toward archery. This is the same "two grids disagree"
+fact [the safe wall](m59-routing.md) is made of, read for a crowd instead of for one body.
+
+**The site is data, and it is this machine's.** `substrate/needles/<site>.json` (gitignored: squares a character is
+told to stand on and the order it is replaced in are orders); the shape is `substrate/needles.example/deep-jungle-2143.json`.
+It names the kill square, the striker's station (and an optional `pullStep`), the archer stations best first, the
+archers' `capacity` (default 4: the operator's 1 striker : 1-4 archers; 2143 holds seven by operator order: Statler, Pepe, Animal, Piggy, Clifford, Janice and Camilla as the +1), the
+`pullSquare`, the `pull` clock, the bench (`reserve`), and the replacement order (`roster`). An unknown key is refused;
+a key starting `_` (or `why`) is a note. `derive` ranks the squares: off the monster component, walkable from the
+striker (`reachableFrom`, the router's step rule), threat 0 (no monster square within 3 has coarse sight of it), sees
+the tip, then fewest monster squares within 3 at all (the robust choice if a sight bit is off). The pull square is the
+safe square within 6 of the striker that sees the most of the room. 2143's choices and why are in the example file.
+`check` also says, per square, whether the server's monster_grid (a `LOS_NEW_MONSTER` server) would reach it: in 2143
+it reaches all of them, so **the whole site assumes the coarse grid** -- which is the only setting consistent with the
+operator's observation that the pack stops at the tip.
+
+**Roles and who holds what.** The ROLE is the assignment (`needle.role` in the strategy file, so the coordinator gives
+it by giving a strategy). The SLOT is decided by the keepers among themselves: each one in the site's room publishes a
+row (`substrate/.needle/<site>/<agent>.json`, one writer each, like the buddy system's) with its role, health and
+fitness, and every keeper runs the same `allocate` over the fresh rows and gets the same answer:
+
+| slot | who | does |
+|---|---|---|
+| striker | the first fit, fresh striker-role row: the incumbent first, then `roster.strikers`, then name | holds the striker station; swings at the closest valid monster within its weapon's reach (2, or 3 for a thrust weapon -- the site's `reach` is clamped to the weapon in hand); never leaves the square to chase |
+| archer | up to `capacity` archer-role rows; incumbents keep their station, a free one fills lowest first | holds its station; shoots the closest valid monster in bow reach (ties go to one it can see) |
+| puller | the archer on the lowest occupied station; with no archer, the striker only if it has a `pullStep` | as an archer, plus the pull |
+| bench | every other fit striker, and archers past capacity | `reserve.mode: "hold"` stands on a reserve square; `"farm"` (the default) is ordinary farming |
+
+**Closest wins, every swing.** `rounds: 1` (the default) re-chooses before each exchange, so a new monster stepping
+to the front takes the next swing; two at the same distance keep the current one. "Valid" is passFarm's own prey list
+after every filter (hunt, confinement, avoid, hunt area, gang-up, karma), plus anything able to hit us that is not
+spared or karma-forbidden; never a player, so never a fleet-mate.
+
+**The pull.** When no valid monster has been within `killRadius` (3) of the tip, nor in the striker's reach, for
+`pull.idleS` (15 s), something valid is visible in the room, the puller is not being hit and is above `pull.minHealth`,
+the last pull AT THIS SITE (anyone's, from the rows) is `pull.everyS` (20 s) ago and fewer than `pull.maxPer10m` (20)
+happened in ten minutes: the puller walks to the pull square, takes one exchange at the valid monster nearest it, and
+walks back -- one pass, bounded by the walks' step budgets. While an archer's pull is out, a striker with a `pullStep`
+steps there and back. 2143 sets no `pullStep`: every square forward of r35c42 is monster ground, so the striker holds
+the tip and the front archer pulls from r30c43 (threat 0, sees 122 monster squares).
+
+**The striker is optional.** With no fit striker the needle runs **archers-only**: they hold their stations, the front
+archer pulls, and the mode is said out loud as MONEY-LOSING (`needle running archers-only`, `needle.money_losing` in
+status, minutes in that mode in `econ`). With no archer it runs striker-only.
+
+**THE REPLACEMENT RULE.** A striker under `striker.minHealth` (default 0.5) publishes itself unfit and goes to the
+bench; a striker whose keeper's survival ladder took the body (flee, rest, retreat, death, the Underworld) stops
+publishing, and its row goes stale after `staleS` (20 s). Either way the next `allocate` gives the tip to the next
+eligible melee: the incumbent rule first, then `roster.strikers`, then name. A newcomer needs `minHealth + 0.2` so a
+body the ladder just let go is not handed the tip at the edge of its flee line; the incumbent needs only to stay fit,
+so a healed striker coming back does not displace its replacement. This needs a second melee carrying the striker
+strategy on the bench -- the coordinator gives it to two by default.
+
+**THE ROTATION CHAIN: ARROW COURIER -> STRIKER -> ARCHER.** Operator, 2026-11-05: *"Let's have Sweetums be the
+striker, so he gets first dibs on next becoming a bower as people cycle out/in (he'll replace the bower, another striker
+will be selected, they become the next bower, etc.)... and we'll have the Han-lan arrow person become the next striker, as
+each person rotates (that way the arrow person is what's really rotating, which leaves the group basically never without
+a striker)."* The decisions are pure (`chainVacancies`, `rotateChain` in `m59-needle-farm.mjs`) and the island
+coordinator executes them (`avar-village-ops.needle-draft.mjs`, config `needle.chain { striker, courier, ... }`; 2143:
+Sweetums t11 strikes, Kermit t1 couriers, and every courier after him is CHOSEN, below):
+
+| step | when | what |
+|---|---|---|
+| vacancy | an archer reaches `stop_at` (99), leaves the roster, or is away from the island's farm rooms (dead, logged out, locked out) for `seat_vacant_s` (300) | the seat is free |
+| call-up | a free seat, a courier, and the courier not on a lap (`scratch/needle-courier-state.json`) | the courier gets the striker strategy and goes back on the roster; its keeper walks to the needle and waits on the bench (the incumbent keeps the tip). The pre-dispatched next courier takes the job -- or, if none was sent, the rule chooses one now -- or nobody (none eligible): logged with the reasons, and the courier job stops |
+| handover | the called-up striker is IN the needle's room, fit for the tip (`minHealth + 0.2`), and no pull is out | the old striker gets the archer strategy and takes the free seat first; `archers.skill_by` FIRE when it knows no archery (Sweetums: fire 11, archery unknown). The tip passes at the next keeper pass |
+
+While either step waits, the free seat is HELD for the striker (the archer queue may not fill it), up to `hold_max_s`
+(2700 s, longer than a courier lap). With no courier there is no call-up, nothing is held, the archer queue fills the seat
+and the striker stays at the tip. **The needle is never without a striker:** the old striker leaves the tip only after
+its replacement is a fit striker-role keeper in the room, and `m59-needle-farm-test.mjs` drives 2000 random ticks of the
+chain to pin it. Every step is logged with why. The courier half is `hanla-courier.needle-draft.mjs`: it serves whoever
+the chain names, lives in the clearing (2144) between laps, drops its arrows on Zheng He (and any 2101 cache) where the
+archers restock, and never on the guild hall chests.
+
+**THE NEXT COURIER IS CHOSEN, AND SENT EARLY.** Operator, 2026-11-05: *"The arrow carrier should be replaced by the
+highest health person who has fire but not [archery or discordance] each time, unless the bow practicer in the needle who
+has the highest remaining archery skill knows discordance, in which case the next hanlan arrow carrier should be someone
+who knows discordance: this should ensure someone who knows discordance is always in the room that sandstorms are cast
+... The next arrow carrier should actually just head to the island when someone hits 98 archery (since they'll imminently
+hit 99 archery, in the next hour or two, but it's a long walk to the island)."* `chooseNextCourier`:
+
+- **candidates**: the fleet's `t<n>` characters only (never the service fleet `hk*`), never piloted, never anyone already
+  in the needle (its striker, courier, called-up striker, pre-dispatched courier, archers), never anyone posted in the
+  Barloque guild hall (room 714, or `hall_group`: the maxed-archery group t19, t18, t21, t13, t20), never `exclude`;
+- **default**: the highest MAX health that knows fire and knows neither archery nor Discordance;
+- **disco**: when the needle archer with the most training still ahead knows Discordance, the highest max health
+  Discordance knower instead -- so a Discordance knower is always in the sandstorm room.
+
+**"Highest remaining" is read as the most training still ahead: the largest `99 - skill`** in the skill the archer trains
+(archery, or fire for an archer `skill_by` fire). That is the archer who will be at the needle longest. The other reading
+-- the archer closest to 99, who leaves next -- is `top_by: 'next_out'`; this is an open question for the operator. Every
+choice is logged with its reasons (`NEEDLE NEXT COURIER`), including who was refused and why when nobody qualifies.
+
+**PRE-DISPATCH.** When any needle archer reaches `pre_dispatch_at` (98) in the skill it trains, the next courier is chosen
+then and walked to `stage_room` (2144, the clearing beside the needle, where the courier lives; NO_COMBAT for monsters) so
+it is on the island before the seat frees. It is kept out of the archer queue and the candidate pool meanwhile, and the
+call-up hands it the courier job.
+
+**DISCO DUTY.** Operator: *"Ideally one person in each group has 'Discordance' and can be on 'disco duty' to keep the
+sandstorms down, the sandstorms can be a serious problem for this strategy."* The site's `disco.agents` (2143: Camilla,
+t9, the seventh archer) are its Discordance casters. While a Sandstorm is on the room (the keeper's own room-enchantment
+observations), such an archer stops shooting -- a sandstorm ruins shots anyway (`player.kod` WindsRuinShot) -- and stands
+by while the island coordinator casts Discordance through it (the dispel module, `cast_all`: every knower in the room
+casts, each cast freezing that keeper for the trance). Its row says `away: 'disco'` with a `hold_until` (`disco.holdS`,
+120 s), so the seconds its frozen keeper publishes nothing do not free its seat, and the front-archer pull passes to the
+next archer meanwhile. `disco.castSquare` null (2143) casts from the station -- threat 0, the casting safety standard's
+best case; set it to make the caster step out and back. The storm lifted, it shoots again from the same seat. A needle
+with no configured caster present is `disco_missing`, and both the keepers (`NEEDLE HAS NO DISCORDANCE CASTER`) and the
+coordinator (by spell knowledge, every 5 minutes) say so loudly. Disco duty is a property of the NEEDLE SITE only
+(operator: "No other places will have sandstorms"); nothing else in this repository gains Discordance logic. The island
+coordinator's own dispel module is unchanged.
+
+**THE MENDER.** Operator, 2026-11-05: *"let's have the discord caster for the archery needle group also provide mending
+services for bows, so they'll need to carry extra orc teeth and sapphires, give them 30 of each.. and let's actually have
+the hanlan arrow courier be the guild hall version *optionally, as-needed* so it can bring those orc teeth and sapphires
+with it to keep the mending desk supplied as well as the arrows"*. Mend (Kraanan 4: 9 mana, 1 sapphire + 1 orc tooth,
+`mend.kod:55-56`) reaches an item in the caster's pack OR ON THE FLOOR OF ITS ROOM (`mend.kod` IsTargetInRange: the
+target's owner is the caster's owner), so nobody walks:
+
+- the site's `mend` block: `agents` null = the disco-duty archers that know Mend; `at` = the bow band to mend at
+  (`med`, read by look with `m59-practicebow.mjs` bowBand every `checkS`; mend late, `mend.kod:112-134`); `stock` =
+  30 orc teeth + 30 sapphires USABLE on top of the mender's PvP floor;
+- an archer whose bow reads `med` or worse, with nothing in reach, unwields it and drops it ON ITS OWN STATION (threat 0),
+  says `mend_req` in its row (its seat held, not the puller), and waits up to `waitS`; the mender (`alloc.mender`: the
+  front-most archer whose row says `mend_ready`) casts Mend on it from its own station and says `mended`; the archer picks
+  the bow back up. The mender mends its own bow in its pack. Each is a `needle_mend` / `needle_mended` ledger row;
+- `mend_ready` is honest: knows Mend, a sapphire and an orc tooth usable above the PvP floor, and the reserve would not
+  veto the cast. **The PvP floor is always named** (`needle.mend.pvp_floor` in status): the reserve book's
+  casts-to-keep turned into reagents. An "everything" item sentinel (`sapphire: 100000`, the PvP-and-Discordance lock) is
+  not a floor; what lets Mend past it is `agents.<a>.exempt: ['mend']`, which the coordinator draft moves to whoever holds
+  the mender role and takes from whoever it gave it to (`mendExemptPlan`; it never touches an exemption it did not add);
+- the stock comes from the courier: each round `chooseCourierLap` decides HALL or HANLA by need -- the mender's need
+  (from its row) is always a hall lap to 713 (`hall_withdraw`, with whatever arrows the hall can spare above its floor;
+  the reagents handed to the mender directly), and arrows the hall cannot spare are a Hanla lap. The hall's plain-arrow
+  floor is an open question for the operator (`HALL_FLOOR` in the courier draft).
+
+**Survival is the keeper's, unchanged** ([the boundary](m59-boundary.md)). The needle runs inside passFarm, below
+passFleeAndRest and the fight-back rungs; every exchange is `fight()` held to the square with the keeper's own flee
+line as `disengageAt`; a striker that breaks off retreats through `retreatToSafety`, the call passFarm makes; an
+archer that breaks off rests on its square (nothing can swing at it). The schema refuses a `needle` with any key but
+`site` and `role`, and the site file refuses unknown keys, so no survival or war key can ride in on it.
+`m59-unattended-test.mjs` stays green.
+
+**Archers restock the normal way.** No bow, fewer than `archers.minArrows`, or hurt: the archer is unfit and the
+needle hands the pass back to ordinary farming -- which is where the island coordinator's sticky archers and resupply,
+the town trip and the couriers answer (arrows at the trading post 2101, Zheng He in 2144). Restocked and back in 2143,
+the keeper walks to its station by itself. Archery practice is the fight itself: the archer strategy bans every melee
+weapon (a swing zeroes the 75-attempt block) and the needle passes the same training gate passFarm does.
+
+**Why a farm strategy field, not a keeper faculty or a coordinator mode.** The four protected faculties are the
+keeper's and the needle takes none of them; what it decides -- where to stand, what to swing at, when to fetch -- is
+`work` and movement on the farm clock, which is exactly what a strategy file carries, assigned to one character by
+name, yielded to a lease, hot-reloaded. A coordinator mode could not do the per-swing part at all: the island
+coordinator ticks every 15 s and drives through the broker, and "the closest monster, switching when another is
+closer" has to be decided on the keeper's one-second clock from its own room view. So the coordinator decides WHO
+(by giving a strategy), the keepers decide WHERE and WHAT (by `allocate` and `chooseTarget`), and survival stays above
+both. It is wired like `patrol`: one field (`m59-strategy-schema.mjs`), one seam in passFarm after every filter and
+before the ranking (`needlePass` owns the pass or returns null), status as `needle`. Silence -- no `needle`, another
+room, a movement lease, a bench that farms, an archer out of arrows -- is the farm pass that was there before.
+
+**The break-even readout** (`econ`). Never a count without its denominator: every rate is per 30 minutes OF DUTY in
+that role, and duty minutes come from the keepers' own `needle_duty` ledger rows (every `econ.tickMin`, 5 minutes;
+gaps over two minutes between needle passes are not duty). Kills are the `killed` rows the needle tagged
+`needle: { site, role }` -- the same rows every kills/30m counts. Shots are attempts (each spends an arrow); income is
+the shillings in those kills' loot; arrows bought are the keepers' own `bought` rows for arrows. `--arrow-price N`
+values the shots; without it the cost is null, not zero. Sold loot is not valued, and arrows a courier bought on an
+archer's behalf are not keeper rows -- both said in the report. Every pull is a `needle_pull` row.
+
+**Deploying it.** The keeper code needs a `restart-keepers` handoff; the strategy field needs nothing from the broker
+(no `autopilot` argument). On prod, the island coordinator gives the roles: `avar-village-ops.needle-draft.mjs` (beside
+the live file, for review) adds a `needle` module -- the first `needle.strikers` melee (default 2) get the striker
+strategy, the rationed archers get the needle's archer strategy, and `needle.archers` (`max`, `prefer`) replaces
+`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (49) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 

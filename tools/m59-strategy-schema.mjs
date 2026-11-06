@@ -41,6 +41,7 @@ import { normalizeRequires, normalizeFloor } from './m59-strategy-gate.mjs';
 import { normalizeLootEject } from './m59-loot-eject.mjs';
 import { normPatrol } from './m59-patrol-farm.mjs';
 import { normSecondWindFarming } from './m59-second-wind.mjs';
+import { normNeedle } from './m59-needle-farm.mjs';
 import { normalizeGangUp } from './m59-gang-up.mjs';
 import { unrevealedWeaponMode } from './m59-unrevealed-weapons.mjs';
 
@@ -231,6 +232,12 @@ export const STRATEGY_FIELDS = Object.freeze([
   // farmer with Second Wind keeps no vigor floor and eats nothing. Off by default; the same staged rollout.
   { path: 'secondWind', keys: ['secondWindFarming'], faculty: 'work', arg: 'second_wind_farming',
     normalize: v => { normSecondWindFarming(v); return v; } },
+  // THE NEEDLE (m59-needle-farm.mjs): { site: '<name>' | {...}, role: 'striker' | 'archer' }. In the site's room the
+  // keeper holds its needle slot -- the striker at the tip, archers on their stations -- strikes or shoots the closest
+  // valid monster in reach, and the front archer pulls after the tip has been quiet for pull.idleS (15 s). The squares and
+  // the roster live in this machine's substrate/needles/<site>.json (orders, not code). Elsewhere nothing changes. `work`,
+  // like patrol; the walks still yield when a bot or lease holds `movement`. Operator 2026-11-05, 2143 Deep in the Jungle.
+  { path: 'needle', keys: ['needle'], faculty: 'work', arg: 'needle', normalize: v => normNeedle(v) },
 ]);
 
 /** { room, squares } -> { room, squares: [[row, col], ...] } (deduplicated), or null. */

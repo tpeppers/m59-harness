@@ -8,7 +8,8 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 4 methods: recordInterruptedFarmOutcome, cooperativeTargetAllowed, passCooperativeCombat, passFarm
+// 5 methods: recordInterruptedFarmOutcome, cooperativeTargetAllowed, passCooperativeCombat, passFarm,
+//   recordFarmFightOutcome
 import {cooperativePass} from '../m59-cooperative-combat.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { chaseCache, orderByWalk } from '../m59-chase.mjs';
@@ -603,6 +604,15 @@ export class PassFarmPart {
 
       const patrol = this.patrolHere(room?.num);
       if (patrol && found.length && c.self) found = this.patrolEngageFilter(found, c.self, patrol, quarryWalks);
+
+      // THE NEEDLE (policy.needle, m59-needle-farm.mjs; tools/autopilot/needle.mjs): in the needle's room a keeper with a
+      // slot holds it -- the striker at the tip, an archer on its station -- and strikes or shoots the closest valid
+      // monster in reach, or pulls when the tip has gone quiet. It owns the pass or returns null, and with null (no needle
+      // here, movement leased, a reserve that farms, an archer out of arrows) everything below runs as it always did.
+      // Here, after every filter and before the ranking: `found` is the prey these orders allow, and the needle only
+      // chooses among it by distance from where it stands. Operator 2026-11-05.
+      const needle = this.needleHere?.(room?.num) ?? null;
+      if (needle && await this.needlePass(ctx, found, needle) === HANDLED) return HANDLED;
 
       // ONE NEAREST TARGET PER KEEPER PRODUCES A PILE, NOT A FLEET.
       // Keep a wounded foe first, then a partner's deliberate shared target, otherwise
@@ -1937,70 +1947,7 @@ export class PassFarmPart {
           return HANDLED;
         }
       }
-      const looted = (f.looted || []).map(x => x.name + (x.amount ? ` x${x.amount}` : ''));
-      if (f.killed) {
-        releaseQuarry(this.s.name);
-        this.tally.kills++;
-        this.killTimes.push(Date.now());
-        if (this.killTimes.length > 500) this.killTimes.shift();
-        this.farmStrategyHook('onKill', { creature: f.target, room: room?.num ?? null, looted });
-        // ON THE FEED, WITH THE CREATURE AND THE ROOM. The tally counts; this remembers
-        // what and where, which is what makes a max-health gain attributable to the thing
-        // that paid for it. Ten per character, in memory — see m59-tougher.mjs.
-        tougher.recordKill(this.who(), {
-          creature: f.target, room: room?.name ?? null, room_num: room?.num ?? null,
-          level: v.health?.max ?? null, rounds: f.rounds, looted, from_safe_spot: !!holding,
-        });
-        // AND INTO THE LONG RECORD, because every in-process count of a kill is wiped
-        // constantly. `tally.kills` and `killTimes` are both fields on this object, and
-        // the supervisor restarts keepers about once a minute — so both really mean
-        // "since the last restart", and the board column asking "is this character
-        // earning RIGHT NOW" was answered from a counter that had been zeroed since the
-        // last kill. Measured: the fleet killed at least 26 things in half an hour while
-        // every kills/30m on the page read 0. countKills() in m59-ledger.mjs counts these
-        // instead, and this is the only thing that survives a keeper.
-        this.ledgerEvent('killed', {
-          creature: f.target, room: room?.name ?? null, room_num: room?.num ?? null,
-          rounds: f.rounds, from_safe_spot: !!holding,
-          looted: looted.length ? looted.join(', ') : undefined,
-        });
-        // A kill means the wilderness is working again, so the run of flees that would
-        // otherwise accumulate over a long healthy session is cleared. Without this a
-        // character that fled three times an hour ago gets marched to town mid-fight.
-        this.fledInARow = 0;
-        // Remember where the work is. This is what roaming steers back toward.
-        if (room?.num != null) this.homeRoom = room.num;
-        this.progress('killed something');
-      } else {
-        if (f.died) {
-          releaseQuarry(this.s.name);
-          this.noProgress('died in a fight');
-        } else if (partialFightMadeProgress(f)) {
-          // THE QUARRY MOVING OUT OF REACH IS NOT THE FIGHT FAILING.
-          //
-          // fight() preserves foe_id so the next pull resumes this exact wounded object.
-          // A landed hit is therefore durable progress toward the same kill even when the
-          // exchange ends because it stepped 3.2 squares away. The old unconditional
-          // noProgress() turned five such damaging exchanges into STALLED and the
-          // controller stopped healthy keepers after about a minute. Count only the
-          // server-confirmed landed blow, never the attempted swing: all-miss breaks still
-          // accumulate and expose a genuinely ineffective fight.
-          this.progress('damaged the current quarry');
-        } else {
-          this.noProgress('broke off without a landed hit or a kill');
-        }
-      }
-      this.countLoot(looted);
-      await this.wearLootedArmour(looted);
-      this.note(f.killed ? 'killed' : (f.died ? 'died' : 'broke off'), {
-        target: f.target, rounds: f.rounds, looted,
-        landed_hits: f.landed_hits ?? 0,
-        damage_dealt: f.damage_dealt ?? null,
-        health: f.health?.after?.value, why: f.note,
-        ...(holding ? { from_safe_spot: { col: this.hold?.col, row: this.hold?.row,
-                                          proven: this.holdWorks() } } : {}),
-        ...(f.refused?.length ? { left_on_the_floor: f.refused.length } : {}),
-      });
+      await this.recordFarmFightOutcome(f, { room, v, holding });
       return HANDLED;
     }
 
@@ -2008,6 +1955,80 @@ export class PassFarmPart {
     // The last stage, so there is nothing to fall through TO — but it answers anyway, so
     // that "every stage returns a verdict" is a rule with no exceptions to remember.
     return HANDLED;
+  }
+  /**
+   * WHAT A FARM FIGHT CAME TO, RECORDED ONE WAY. The kill count, the kill feed, the `killed` ledger row (the only kill
+   * count that survives a keeper restart), the strategy's onKill hook, the progress verdict, the loot tally, the looted
+   * armour and the journal line. Moved out of passFarm verbatim (2026-11-05) so the needle (tools/autopilot/needle.mjs)
+   * records its kills exactly as every other farm kill is recorded; `extra` is merged into the `killed` row (the needle
+   * tags its site and role there, which is what `m59-needle-farm.mjs econ` counts).
+   */
+  async recordFarmFightOutcome(f, { room = null, v = {}, holding = false, extra = {} } = {}) {
+    const looted = (f.looted || []).map(x => x.name + (x.amount ? ` x${x.amount}` : ''));
+    if (f.killed) {
+      releaseQuarry(this.s.name);
+      this.tally.kills++;
+      this.killTimes.push(Date.now());
+      if (this.killTimes.length > 500) this.killTimes.shift();
+      this.farmStrategyHook('onKill', { creature: f.target, room: room?.num ?? null, looted });
+      // ON THE FEED, WITH THE CREATURE AND THE ROOM. The tally counts; this remembers
+      // what and where, which is what makes a max-health gain attributable to the thing
+      // that paid for it. Ten per character, in memory — see m59-tougher.mjs.
+      tougher.recordKill(this.who(), {
+        creature: f.target, room: room?.name ?? null, room_num: room?.num ?? null,
+        level: v.health?.max ?? null, rounds: f.rounds, looted, from_safe_spot: !!holding,
+      });
+      // AND INTO THE LONG RECORD, because every in-process count of a kill is wiped
+      // constantly. `tally.kills` and `killTimes` are both fields on this object, and
+      // the supervisor restarts keepers about once a minute — so both really mean
+      // "since the last restart", and the board column asking "is this character
+      // earning RIGHT NOW" was answered from a counter that had been zeroed since the
+      // last kill. Measured: the fleet killed at least 26 things in half an hour while
+      // every kills/30m on the page read 0. countKills() in m59-ledger.mjs counts these
+      // instead, and this is the only thing that survives a keeper.
+      this.ledgerEvent('killed', {
+        creature: f.target, room: room?.name ?? null, room_num: room?.num ?? null,
+        rounds: f.rounds, from_safe_spot: !!holding,
+        looted: looted.length ? looted.join(', ') : undefined,
+        ...extra,
+      });
+      // A kill means the wilderness is working again, so the run of flees that would
+      // otherwise accumulate over a long healthy session is cleared. Without this a
+      // character that fled three times an hour ago gets marched to town mid-fight.
+      this.fledInARow = 0;
+      // Remember where the work is. This is what roaming steers back toward.
+      if (room?.num != null) this.homeRoom = room.num;
+      this.progress('killed something');
+    } else {
+      if (f.died) {
+        releaseQuarry(this.s.name);
+        this.noProgress('died in a fight');
+      } else if (partialFightMadeProgress(f)) {
+        // THE QUARRY MOVING OUT OF REACH IS NOT THE FIGHT FAILING.
+        //
+        // fight() preserves foe_id so the next pull resumes this exact wounded object.
+        // A landed hit is therefore durable progress toward the same kill even when the
+        // exchange ends because it stepped 3.2 squares away. The old unconditional
+        // noProgress() turned five such damaging exchanges into STALLED and the
+        // controller stopped healthy keepers after about a minute. Count only the
+        // server-confirmed landed blow, never the attempted swing: all-miss breaks still
+        // accumulate and expose a genuinely ineffective fight.
+        this.progress('damaged the current quarry');
+      } else {
+        this.noProgress('broke off without a landed hit or a kill');
+      }
+    }
+    this.countLoot(looted);
+    await this.wearLootedArmour(looted);
+    this.note(f.killed ? 'killed' : (f.died ? 'died' : 'broke off'), {
+      target: f.target, rounds: f.rounds, looted,
+      landed_hits: f.landed_hits ?? 0,
+      damage_dealt: f.damage_dealt ?? null,
+      health: f.health?.after?.value, why: f.note,
+      ...(holding ? { from_safe_spot: { col: this.hold?.col, row: this.hold?.row,
+                                        proven: this.holdWorks() } } : {}),
+      ...(f.refused?.length ? { left_on_the_floor: f.refused.length } : {}),
+    });
   }
   // @end 1
 }

@@ -75,6 +75,9 @@ export class StatusPart {
       gang_up: this.gangUpStatus(),
       // Null when unset. The patrol loop (m59-patrol-farm.mjs): where in it, laps, skipped waypoints, the last walk.
       patrol: this.patrolStatus(),
+      // Null when unset. The needle (m59-needle-farm.mjs): this keeper's slot, the mode (archers-only is money-losing),
+      // who holds the tip and the stations, the quiet clock and the last pull decision.
+      needle: this.needleStatus?.() ?? null,
       loot_only: lootOnlyStatus(this.policy.lootOnly ?? null, this.s?._lootOnlyMemory ?? null),
       // WHETHER AN UNIDENTIFIED WEAPON IS PICKED UP THIS PASS (policy.lootUnrevealedWeapons), and why:
       // the mode, the verdict, the remove-curse desk it rests on, and a policy value it refused.
