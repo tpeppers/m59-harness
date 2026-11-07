@@ -471,6 +471,7 @@ async function main() {
   if (held) { console.error(`a plan desk (pid ${held.pid}) is already serving ${held.dir ?? dir}`); process.exit(0); }
   const beats = deskBeatFiles({ dir, substrate });
   const heartbeat = () => {
+    if (parent && !pidAlive(parent)) { console.error(`plan desk: broker pid ${parent} is gone; leaving with it`); process.exit(0); }
     const other = liveDesk({ dir, substrate }, { exceptPid: process.pid });
     if (other && yieldsTo(other, me)) { console.error(`plan desk pid ${other.pid} also started; this one (pid ${process.pid}) steps aside`); process.exit(0); }
     const h = JSON.stringify({ pid: process.pid, at: Date.now(), since: me.since, fleet,
@@ -501,25 +502,24 @@ async function main() {
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
   // TWO SPEEDS. While a client is open: once a second, because the client rewrites its request
   // every second and calls a reply older than six seconds "not answering" (planpane.c Fresh).
-  // While none is: nothing, until a watched folder changes or IDLE_BEAT_MS passes -- that is the
-  // heartbeat, which must stay inside DESK_FRESH_MS or a second desk would think this one dead.
+  // While none is: nothing, until a watched folder changes or IDLE_BEAT_MS passes. The independent
+  // heartbeat below stays fresh even while a provider awaits a bounded broker control transfer.
   const IDLE_BEAT_MS = 10_000;
-  // A DESK THAT CANNOT FINISH A PASS LEAVES. Its heartbeat is stale after DESK_FRESH_MS, so a second
-  // desk is already entitled to start; one that stays wedged only becomes the next stray. Leaving
-  // keeps it to one: the broker starts a fresh desk within its PLAN_DESK_POLL.
-  const WEDGED_MS = 60_000;
+  heartbeat();
+  setInterval(heartbeat, 5000).unref();
+  // A responsive async pass can legitimately await the broker for up to 120 seconds. Keep that
+  // window alive, but still leave if a pass never returns so the broker can replace a wedged desk.
+  const WEDGED_MS = 180_000;
   let passAt = Date.now();
   setInterval(() => {
     if (Date.now() - passAt <= WEDGED_MS) return;
     console.error(`plan desk: no pass completed in ${Math.round((Date.now() - passAt) / 1000)}s; leaving so a working desk can serve ${dir}`);
     process.exit(1);
   }, 5000).unref();
-  let beatAt = 0;
   for (;;) {
     passAt = Date.now();
     if (parent && !pidAlive(parent)) { console.error(`plan desk: broker pid ${parent} is gone; leaving with it`); process.exit(0); }
     if (Date.now() - listedAt > 300_000) relist();
-    if (Date.now() - beatAt >= 5000) { heartbeat(); beatAt = Date.now(); }
     let busy = 0;
     try { busy += await desk.tick(); } catch (e) { console.error(`plan desk tick: ${e.stack ?? e.message}`); busy++; }
     try { busy += serveStrays({ ownDir: dir, folders, state: strays, log: m => console.error(m) }); }

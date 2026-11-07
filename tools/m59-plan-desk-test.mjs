@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFi
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { parsePlanRequest, renderPlanView, parseArgs, createDesk, enc, liveDesk, yieldsTo, lastAck, whenHolds, runRequest, downgradeArg,
          checkoutRoots, clientFolders, serveStrays, STRAY_QUIET_MS, freshRequests } from './m59-plan-desk.mjs';
 import { reflectShopping, reflectPool, itemOptions } from './plans/courier.mjs';
@@ -389,6 +389,63 @@ ok('cancel removes the standing request', !existsSync(join(substrate, 'courier-r
   ok('a desk process with a client open finishes its tick (no import cycle with its own entry module)',
      r.status === 0 && /served 1 client/.test(r.stderr ?? ''), `status ${r.status} signal ${r.signal} ${(r.stderr ?? '').slice(-300)}`);
   ok('and writes that client a reply', existsSync(reply) && readFileSync(reply, 'utf8').startsWith('M59PLAN\t'));
+}
+
+// A SLOW CONTROL TRANSFER IS STILL A LIVE DESK. This CLI child runs an actual provider whose
+// promise stays pending. Its heartbeat must advance before that provider completes, and losing
+// its owning broker must still stop it while the promise is pending.
+{
+  const procDir = join(tmp, 'slow-proc', 'cc'), sub = join(tmp, 'slow-proc', 'sub');
+  const inDir = join(procDir, 'plan', 'in'), providerDir = join(sub, 'plans');
+  const started = join(sub, 'operation-started'), released = join(sub, 'operation-released'), completed = join(sub, 'operation-completed');
+  mkdirSync(inDir, { recursive: true }); mkdirSync(providerDir, { recursive: true });
+  writeFileSync(join(providerDir, 'blocked.mjs'), `
+import { existsSync, writeFileSync } from 'node:fs';
+export const provider = { id: 'heartbeat',
+  entries: () => [{ id: 'heartbeat.block', title: 'Bounded control transfer fixture', args: [] }],
+  async run() {
+    writeFileSync(${JSON.stringify(started)}, String(Date.now()));
+    while (!existsSync(${JSON.stringify(released)})) await new Promise(resolve => setTimeout(resolve, 100));
+    writeFileSync(${JSON.stringify(completed)}, String(Date.now()));
+    return { ok: true, message: 'finished' };
+  }
+};`);
+  writeFileSync(join(inDir, '7171.tsv'), `M59PLANREQ\t1\t${Date.now()}\t7171\t127.0.0.1%3A1\t__nobody__\tnobody\t1\t0\nR\t1\theartbeat.block\t\nEND\n`);
+  const waitUntil = async (predicate, timeoutMs) => {
+    const until = Date.now() + timeoutMs;
+    do { if (predicate()) return true; await new Promise(resolve => setTimeout(resolve, 100)); } while (Date.now() < until);
+    return false;
+  };
+  const fakeBroker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
+  const brokerExited = new Promise(resolve => fakeBroker.once('exit', resolve));
+  const child = spawn(process.execPath, [join(HERE, 'm59-plan-desk.mjs'), '--fleet', 'test', '--parent', String(fakeBroker.pid),
+    '--dir', procDir, '--substrate', sub], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+    env: { ...process.env, M59_STATE_FILE: join(sub, 'roster.json') } });
+  let exited = false, exitCode = null, diagnostic = '';
+  child.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-4000); });
+  child.once('error', error => { diagnostic += error.message; exited = true; });
+  child.once('exit', code => { exited = true; exitCode = code; });
+  const readBeat = () => { try { return JSON.parse(readFileSync(join(procDir, 'plan', 'desk.json'), 'utf8')); } catch { return null; } };
+  try {
+    await waitUntil(() => existsSync(started) || exited, 30_000);
+    ok('a CLI desk begins the pending provider operation', existsSync(started) && !exited, diagnostic);
+    if (existsSync(started) && !exited) {
+      const first = readBeat();
+      const advanced = await waitUntil(() => exited || (readBeat()?.at ?? 0) > (first?.at ?? 0), 12_000);
+      ok('the heartbeat advances while that async operation remains blocked', advanced && !exited &&
+        readBeat()?.pid === child.pid && !existsSync(completed), diagnostic);
+      fakeBroker.kill();
+      await brokerExited;
+      await waitUntil(() => exited, 8000);
+      ok('the independent heartbeat detects parent loss during a blocked operation', exited && exitCode === 0 &&
+        /broker pid .* is gone/.test(diagnostic), diagnostic);
+      ok('parent loss stops the desk before the blocked operation can complete', !existsSync(completed));
+    }
+  } finally {
+    writeFileSync(released, 'cleanup');
+    if (child.pid && !exited) child.kill();
+    if (fakeBroker.pid && fakeBroker.exitCode === null && fakeBroker.signalCode === null) fakeBroker.kill();
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
