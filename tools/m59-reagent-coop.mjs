@@ -23,7 +23,7 @@ export const REAGENT_COOP_SCHEMA = {
     bulk_fraction: { type: 'number', minimum: 0, maximum: 1, description: 'Fraction of each chest reserved equally across reagent types. Default 0.90.' },
     reagents: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' }, description: 'Reagent types sharing that bulk. Default: all 27 reagent types in the game data.' },
     shilling_tithe_pct: { type: 'number', minimum: 0, maximum: 100, description: 'Minimum percentage of bank-bound surplus contributed per town trip, after retaining shopping money. Default 20.' },
-    shilling_cap: { type: 'integer', minimum: 0, maximum: 75000, description: 'Maximum total shillings across all guild chests. Default 75000; money uses no bulk.' },
+    shilling_cap: { type: 'integer', minimum: 0, maximum: 10000000, description: 'Maximum total shillings across all guild chests. Default 75000; money uses no bulk. Up to 10,000,000 (operator 2026-11-07: half of the island haul, ~400k, goes into the Swines chests).' },
     hall_room: { type: 'integer', minimum: 1, description: 'Guild hall map number. Default 714, Bookmaker’s Guild House.' },
     chest_keys: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string' }, description: 'Chest squares to read before transfers, such as r18c2. All must be readable for the shared shilling cap.' },
     retry_ms: { type: 'integer', minimum: 10000, maximum: 3600000, description: 'Delay before retrying an unavailable coop within the same shopping trip. Default 300000.' },
