@@ -57,6 +57,9 @@ const hostile = names => names.map((n, i) => ({ id: 100 + i, nameRsc: n, flags: 
   ok('not tried again within the minute', again === false && travels.length === 1);
 }
 {
+  { const w = keeper({ hp: 90, max: 90 });
+    ok('a farmer holding a spot at FULL health waiting for prey stays (Farol 546, 2026-11-07)',
+       (await w.k.leaveForCasters({ hostiles: hostile(['kyip-kyip-kreeet avar shaman']) })) === false && !w.travels.length && w.k.hold !== null); }
   const { k, travels } = keeper({ hp: 80, hold: null });
   ok('scratched mid-fight off a spot (80/90): the room is not left', (await k.leaveForCasters({ hostiles: hostile(['kyip-kyip-kreeet avar shaman']) })) === false && !travels.length);
   const low = keeper({ hp: 40, hold: null });

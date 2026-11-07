@@ -585,7 +585,11 @@ export class SafeSpotsPart {
     if (this.operatorSurvivalStandDown?.()) return false;
     const hp = v?.health ?? this.s.client?.vitals?.()?.health;
     // On a spot, or hurt enough to want one (restBelow) -- never a farmer mid-fight with a scratch.
-    const resting = !!this.hold || (hp?.max > 0 && hp.value / hp.max < (this.policy?.restBelow ?? 0.6));
+    // A SPOT HELD AT FULL HEALTH IS A FARMER WAITING FOR PREY, NOT A REST (2026-11-07, Deep in the Forest of Farol 546: mollusk
+    // creatures are casters, and every farmer that took a wall at full health to wait for the next spawn walked out to 545 and back,
+    // round and round, passing up the mollusks and trees it was there for). Holding a spot counts only while not at full health.
+    const full = hp?.max > 0 && hp.value >= hp.max;
+    const resting = (!!this.hold && !full) || (hp?.max > 0 && hp.value / hp.max < (this.policy?.restBelow ?? 0.6));
     if (!resting) return false;
     const casters = this.castersHere(hostiles);
     if (!casters.length) return false;
