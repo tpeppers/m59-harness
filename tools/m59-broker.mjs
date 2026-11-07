@@ -48,6 +48,7 @@ import http from 'node:http';
 import { CombatDispatch } from './m59-combat-dispatch.mjs';
 import { mayStartJourney, floorFor, floorSource } from './m59-travelgate.mjs';
 import { nativeContextReader } from './m59-native-context-read.mjs';
+import { RidealongControls, sameRidealong, verifyRidealongProxy, ridealongSession } from './m59-ridealong.mjs';
 const readNativeContext = nativeContextReader();
 import os from 'node:os';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -1551,6 +1552,7 @@ async function spawnKeeperInner(agent, index, credentials) {
           agent, character: credentials?.character ?? null, pid: previous.pid,
         });
         if (identity?.ok && keeperOwnershipIsGuarded(agent, previous.pid)) {
+          await restoreAdoptedRidealong(agent, reply.value);
           keeperPorts.set(agent, previous.port);
           console.error(`[keeper] adopted tracked ${agent} on port=${previous.port} ` +
                         `pid=${previous.pid}`);
@@ -1649,6 +1651,7 @@ async function spawnKeeperInner(agent, index, credentials) {
           }
           console.error(`[keeper] ${agent}: legacy pid ${pid} stopped; replacement will be guarded`);
         } else {
+          await restoreAdoptedRidealong(agent, live);
           keeperProcesses.set(agent, {
             pid,
             port,
@@ -1685,6 +1688,10 @@ async function spawnKeeperInner(agent, index, credentials) {
         env: {
           ...process.env,
           M59_KEEPER_OWNERSHIP: Buffer.from(JSON.stringify(ownershipPermit), 'utf8').toString('base64url'),
+          // A watched character uses the native client's existing proxy connection. Never
+          // inherit another keeper's attachment or fall back to a second server login.
+          M59_KEEPER_ATTACH: ridealong.records.has(agent)
+            ? JSON.stringify(ridealongAttachment(ridealong.records.get(agent))) : '',
           // A character held offline comes back dormant, never logged in (see DORMANCY above).
           ...dormancyEnvFor(agent),
         },
@@ -2012,6 +2019,8 @@ function ensurePendingSuccessorWatch() {
 // not come up, it is stopped and the old keeper's handoff is withdrawn: nothing changed.
 async function warRestartKeeper(agent, { timeoutMs = 90_000, deferPiloted = true, skipPiloted = false,
                                          deferMaxMinutes = null } = {}) {
+  if (ridealong.records.has(agent)) return { agent, ok: false,
+    why: 'this keeper shares a debug client connection; reclaim and release it to load new keeper code' };
   const index = agentIndices.get(agent);
   const credentials = rosterEntry(agent)?.credentials ?? null;
   let old = keeperProcesses.get(agent);
@@ -2506,7 +2515,8 @@ function spectateBeatNow(agent) {
 function spectateRouteNow(agent) {
   return chooseKeeperRoute({
     agent, character: rosterEntry(agent)?.credentials?.character ?? null, roster: STATE_FILE,
-    beat: spectateBeatNow(agent), probe: spectateLinks.get(agent)?.probe ?? null,
+    beat: ridealong.records.has(agent) ? null : spectateBeatNow(agent),
+    probe: spectateLinks.get(agent)?.probe ?? null,
     now: Date.now(), pidAlive: isProcessLive,
   });
 }
@@ -5805,6 +5815,9 @@ async function heldByLocalClients(saved) {
     console.error(`[state] a Meridian client (pid ${u.pid}) is running but ${u.why} — ` +
                   'not standing down for it');
   for (const c of mine) {
+    // A surviving guarded keeper on this very client's connection is automation, not
+    // a human takeover. Discover it before the ordinary boot-time pilot claim.
+    if (await recoverRidealong(c.agent, c.pid, saved[c.agent]?.credentials)) continue;
     const character = saved[c.agent]?.credentials?.character ?? null;
     held.set(c.agent, { pid: c.pid, character });
     // claimPilot reads the session for an object id and a keeper; there is neither yet,
@@ -5977,6 +5990,8 @@ async function reconcileFleet() {
     // watch does the login the moment the person lets go; a /rejoin here would put the OLD keeper back
     // in the world on the old code first -- the very thing it was staged to prevent.
     if (pendingSuccessors.has(agent)) continue;
+    if (ridealong.transitions.has(agent) || (ridealong.records.has(agent) &&
+        ridealong.records.get(agent).phase !== 'active')) continue;
     // Being played by a person. Not missing — occupied. Rejoining would take the
     // character out from under a hand that is on the keys, and the login would bump
     // them straight out of the world.
@@ -6371,6 +6386,167 @@ const jobBoard = new JobBoard({
 // A warm successor reads the board but never writes it until it owns the fleet (started(), after the handover).
 if (successorOf()) jobBoard.persist = false;
 { const t = setInterval(() => { try { jobBoard.sweep(); } catch { /* never fatal */ } }, 60_000); t.unref?.(); }
+const ridealongAttachment = r => ({ agent: r.agent, port: r.attach_port, player: r.player,
+  client_pid: r.client_pid, gate_control: r.gate_control });
+const ridealongProxyStatus = r => fetch(`http://127.0.0.1:${r.gate_control}/status`, {
+  signal: AbortSignal.timeout(3000),
+}).then(async response => {
+  if (!response.ok) throw Error(`proxy status HTTP ${response.status}`);
+  return response.json();
+});
+const ridealong = new RidealongControls({
+  stateFile: STATE_FILE,
+  credentials: a => fleetState.get(a)?.credentials ?? null,
+  pilot: a => pilotOf(a), pidAlive,
+  keeper: a => keeperProcesses.get(a),
+  logPath: a => resolve('substrate', `keeper-${a}.log`),
+  proxyStatus: ridealongProxyStatus,
+  claim: (a, pid, options) => claimPilot(a, pid, options),
+  unclaim: (a, expected) => {
+    if (piloted.get(a) !== expected) throw Error('pilot claim changed during release');
+    piloted.delete(a);
+    unmarkHumanDesk(a, expected, 'released to the broker keeper on the same client connection');
+    console.error(`[pilot] ${a} released to registered keeper; debug client pid ${expected.pid} watches`);
+  },
+  stop: async a => {
+    const r = await stopRecordedKeeper(a, keeperProcesses.get(a), { reason: 'debug client control transfer' });
+    return r.stopped;
+  },
+  start: async a => {
+    if (SESSION_DRIVER !== 'keeper-process') throw Error('ridealong requires the keeper-process session driver');
+    if (dormancyOf(a)) throw Error('character is held dormant; wake it before releasing to the keeper');
+    const index = agentIndices.get(a);
+    if (index == null) throw Error('agent has no keeper allocation');
+    if (!await spawnKeeper(a, index, fleetState.get(a).credentials)) return false;
+    const previous = sessions.get(a), proxy = makeKeeperProxy(a, index);
+    await proxy.initialize();
+    sessions.set(a, proxy);
+    try { previous?.dispose?.(); } catch {}
+    ensureKeeperLivenessSweep();
+    return true;
+  },
+  ready: async (a, want) => {
+    const kp = keeperProcesses.get(a);
+    if (!kp) return false;
+    const deadline = Date.now() + 30_000;
+    do {
+      const reply = await keeperLiveAt(kp.port, { timeoutMs: 2000 }).catch(() => null);
+      const live = reply?.ok ? reply.value : null;
+      if (live && validateKeeperSample(live, { agent: a, character: fleetState.get(a)?.credentials?.character,
+          pid: kp.pid }).ok && sameRidealong(want, live.ridealong) && live.connected && live.in_game)
+        return true;
+      if (!recordedKeeperAlive(kp)) return false;
+      await new Promise(r => setTimeout(r, 250));
+    } while (Date.now() < deadline);
+    return false;
+  },
+});
+async function recoverRidealong(agent, clientPid, credentials) {
+  if (SESSION_DRIVER !== 'keeper-process' || !credentials) return false;
+  const band = keeperPortBand();
+  // Only at broker startup, only for clients that matched this exact roster. `/live`
+  // is cheap, and every result must pass character, PID and dual ownership guards.
+  const found = await Promise.all(Array.from({ length: band.end - band.base + 1 }, async (_, i) => {
+    const port = band.base + i;
+    const reply = await keeperLiveAt(port, { timeoutMs: 800 }).catch(() => null);
+    const live = reply?.ok ? reply.value : null;
+    if (!live?.ridealong || live.ridealong.client_pid !== clientPid ||
+        !validateKeeperSample(live, { agent, character: credentials.character }).ok ||
+        !keeperOwnershipIsGuarded(agent, live.pid)) return null;
+    try {
+      const proxy = await ridealongProxyStatus(live.ridealong);
+      verifyRidealongProxy(live.ridealong, proxy, credentials);
+      return { port, live, proxy };
+    } catch { return null; }
+  }));
+  const matches = found.filter(Boolean);
+  if (matches.length !== 1) return false;
+  const { port, live, proxy } = matches[0];
+  keeperProcesses.set(agent, { pid: live.pid, port, startedAt: Date.now(), adopted: true });
+  keeperPorts.set(agent, port);
+  ridealong.records.set(agent, { ...live.ridealong, proxy_pid: Number(proxy.pid) || null,
+    phase: 'active', keeper_ready: !!(live.connected && live.in_game), since: Date.now(),
+    keeper_was_running: !!savedStandingOrders(agent, credentials) });
+  console.error(`[pilot] ${agent} recovered registered ridealong pid ${live.pid}; native client pid ${clientPid} watches`);
+  return true;
+}
+async function restoreAdoptedRidealong(agent, live) {
+  if (!live?.ridealong || ridealong.records.has(agent)) return;
+  const r = live.ridealong;
+  const rec = { ...r, phase: 'closing', keeper_ready: false, since: Date.now(),
+    keeper_was_running: !!savedStandingOrders(agent) };
+  ridealong.records.set(agent, rec);
+  try {
+    const proxy = await ridealongProxyStatus(r);
+    rec.proxy_pid = Number(proxy.pid) || null;
+    verifyRidealongProxy(r, proxy, rosterEntry(agent)?.credentials ?? {});
+    if (pidAlive(r.client_pid)) {
+      rec.phase = 'active'; rec.keeper_ready = !!(live.connected && live.in_game);
+      return;
+    }
+  } catch { /* the ordinary watch stops the attachment after restoring native protection */ }
+  if (pidAlive(r.client_pid)) {
+    claimPilot(agent, r.client_pid, { keeperWasRunning: rec.keeper_was_running });
+    rec.phase = 'suspended';
+  }
+}
+function savedStandingOrders(agent) {
+  try { const a = JSON.parse(readFileSync(STATE_FILE, 'utf8'))[agent]?.autopilot; return a && a.mode !== 'idle'; }
+  catch { return true; }
+}
+async function syncRidealong(agent) {
+  const rec = ridealong.records.get(agent), kp = keeperProcesses.get(agent);
+  if (!rec) return false;
+  rec.keeper_ready = false;
+  if (!kp) return false;
+  const reply = await keeperLiveAt(kp.port, { timeoutMs: 2000 }).catch(() => null);
+  const live = reply?.ok ? reply.value : null;
+  if (!live || !validateKeeperSample(live, { agent, character: rosterEntry(agent)?.credentials?.character, pid: kp.pid }).ok)
+    return false;
+  // A save can renumber the player while the process, proxy and client stay the same.
+  const current = live.ridealong;
+  if (current && Number.isInteger(current.player) && current.player > 0 &&
+      sameRidealong({ ...rec, player: current.player }, current)) {
+    rec.player = current.player;
+    rec.keeper_ready = !!(live.connected && live.in_game);
+  }
+  return rec.keeper_ready;
+}
+async function maintainRidealongs() {
+  for (const [agent, rec] of ridealong.records) {
+    if (ridealong.transitions.has(agent)) continue;
+    await syncRidealong(agent);
+    let status;
+    try { status = await ridealongProxyStatus(rec); } catch {
+      // A missing local proxy cannot carry keeper packets. Restore the native pilot
+      // protection before stopping, so a delayed proxy cannot race an ordinary login.
+      if (!pidAlive(rec.client_pid) && rec.proxy_pid && pidAlive(rec.proxy_pid)) {
+        rec.phase = 'closing'; continue;
+      }
+      await ridealong.suspend(agent, 'proxy status unavailable');
+      continue;
+    }
+    const row = ridealongSession(rec, status);
+    if (row?.attached?.agent === agent) rec.player = Number(row.player_id);
+    if (!pidAlive(rec.client_pid)) {
+      // The native process can exit a moment before its proxy socket closes. Never
+      // begin an independent login during that interval.
+      if (row) { rec.phase = 'closing'; continue; }
+      await ridealong.suspend(agent, 'native client exited and proxy connection closed');
+      continue;
+    }
+    // A save can briefly leave one source of player identity behind the other.
+    // Give a missing session a bounded grace; a visible released gate is immediate.
+    if (!row) {
+      rec.keeper_ready = false;
+      rec.missing_since ??= Date.now();
+      if (Date.now() - rec.missing_since < 20_000) continue;
+    } else delete rec.missing_since;
+    if (row && row.attached?.agent !== agent) rec.keeper_ready = false;
+    if (!row || row.gate?.holder !== `keeper:${agent}`)
+      await ridealong.suspend(agent, 'native client gate released or expired');
+  }
+}
 // A claim is held by ONE of two things: a local client pid, or a heartbeat lease from a client on
 // another machine (tools/runtime/pilot-lease.mjs). Every liveness check on a pilot goes through
 // here, because a lease claim has pid null and `pidAlive(null)` would release it on the spot.
@@ -6392,6 +6568,7 @@ async function autoClaimLocalClient() {
   if (!scanned) return;                           // disarmed: nobody has launched anything
   const hit = soleClientAgent(clients, (a) => sessions.has(a));
   if (!hit.agent) return;
+  if (ridealong.records.has(hit.agent)) return; // this native client deliberately watches automation
   const s = sessions.get(hit.agent);
   // The client must be pointed at the server this fleet is on. A second checkout playing
   // the same account elsewhere is not our operator.
@@ -6867,7 +7044,7 @@ function startPilotWatch() {
     // A disarmed watch returns immediately without spawning anything.
     if (looking) return;
     looking = true;
-    autoClaimLocalClient()
+    maintainRidealongs().then(() => autoClaimLocalClient())
       .catch(e => console.error(`[pilot] auto-claim: ${e.message}`))
       .finally(() => { looking = false; });
   }, PILOT_POLL_MS);
@@ -7055,7 +7232,11 @@ function startPlanDesk() {
       planDeskChild = spawn(process.execPath,
         [fileURLToPath(new URL('./m59-plan-desk.mjs', import.meta.url)), '--fleet', FLEET === '' ? '-' : FLEET,
          '--substrate', PLAN_DESK_SUBSTRATE, '--dir', PLAN_DESK_DIR, '--parent', String(process.pid)],
-        { stdio: ['ignore', out, out], cwd: BROKER_ROOT, windowsHide: true });
+        { stdio: ['ignore', out, out], cwd: BROKER_ROOT, windowsHide: true,
+          env: { ...process.env, M59_STATE_FILE: STATE_FILE,
+            M59_PLAN_BROKER_PORT: String(argv.includes('--http')
+              ? (argv[argv.indexOf('--http') + 1] || 8899)
+              : (process.env.M59_PLAN_BROKER_PORT || 8901)) } });
       const child = planDeskChild;
       console.error(`[plan-desk] started pid ${child.pid} on ${PLAN_DESK_DIR}`);
       child.on('exit', (code, signal) => {
@@ -19938,7 +20119,7 @@ const TOOLS = [
     schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['claim', 'renew', 'release', 'status', 'rearm'] },
+        action: { type: 'string', enum: ['claim', 'renew', 'release', 'status', 'rearm', 'attach', 'reclaim', 'control_status'] },
         agent: { type: 'string', description: 'the character being played; required for claim/release' },
         pid: { type: 'number', description: 'process id of the client that was launched, on THIS machine; required for claim unless lease_ms is given' },
         lease_ms: { type: 'number', description: 'claim/renew: a remote claim held by heartbeat instead of a pid, 15000-300000 (default 60000). Lapses unless renewed' },
@@ -19946,10 +20127,27 @@ const TOOLS = [
         lease_id: { type: 'string', description: 'renew/release: the lease_id the claim returned. A renew of an ENDED lease (released, lapsed, superseded) answers released:true and is never re-claimed -- stop heartbeating. claim with a lease_id only continues that lease while it is live' },
         character: { type: 'string', description: 'name to expect in speech; defaults to the session\'s' },
         why: { type: 'string', description: 'for rearm: what launched a client, for the log' },
+        fleet_state: { type: 'string', description: 'attach/reclaim/control_status: exact absolute roster identity' },
+        attach_port: { type: 'number', description: 'attach/reclaim: loopback proxy keeper attachment port' },
+        gate_control: { type: 'number', description: 'attach/reclaim: loopback proxy gate status port' },
+        player: { type: 'number', description: 'attach/reclaim: exact native client player object id' },
       },
       required: ['action'],
     },
     run: async (a) => {
+      if (a.action === 'attach') {
+        if (SESSION_DRIVER !== 'keeper-process') return { ok: false, error: 'ridealong requires the keeper-process session driver' };
+        return ridealong.attach(a);
+      }
+      if (a.action === 'reclaim') return ridealong.reclaim(a);
+      if (a.action === 'control_status') {
+        if (!a.agent || typeof a.fleet_state !== 'string' ||
+            !/^(?:[a-z]:[\\/]|\/)/i.test(a.fleet_state) ||
+            resolve(a.fleet_state).toLowerCase() !== resolve(STATE_FILE).toLowerCase())
+          return { ok: false, error: 'agent and this broker\'s exact absolute fleet_state are required' };
+        await syncRidealong(a.agent);
+        return { ok: true, ...ridealong.status(a.agent) };
+      }
       if (a.action === 'status') {
         return {
           piloted: [...piloted.entries()].map(([agent, p]) => ({
@@ -19965,6 +20163,7 @@ const TOOLS = [
           // nothing claimed it" has two very different causes — no match, or nobody
           // looked — and the tool answered identically for both.
           watching: clientWatch.armed,
+          attached: [...ridealong.records.keys()].map(agent => ridealong.status(agent)),
           watch_note: clientWatch.why(),
           note: piloted.size ? undefined : 'nobody is being played by hand right now',
         };
@@ -22478,6 +22677,7 @@ function buildHandoverSnapshot() {
   put('commerceQuotes', commerceQuotes.records);
   put('combat', { revision: combatDispatch.revision, commands: combatDispatch.commands });
   put('piloted', piloted);
+  put('ridealong', ridealong.records);
   // Pids and ports only: a successor broker adopts each by its address and proves its identity
   // before addressing it. Without this every pending successor would be an orphan the moment the
   // predecessor retired, and its character would resume on the old keeper.
@@ -22521,6 +22721,7 @@ function restoreHandoverSnapshot(s) {
     refill(combatDispatch.commands, s.combat.commands);
   }
   refill(piloted, s.piloted);
+  refill(ridealong.records, s.ridealong);
   if (Array.isArray(s.pendingSuccessors) && s.pendingSuccessors.length) {
     const n = pendingSuccessors.importSnapshot(s.pendingSuccessors);
     console.error(`[handover] ${n} pending successor(s) carried: ${s.pendingSuccessors.map(r => r.agent).join(', ')}`);
@@ -22588,7 +22789,7 @@ function runBrokerHandover() {
       if (reconcileTimer !== null) clearTimeout(reconcileTimer);
       reconcileTimer = null;
       const quiet = await settled(() => !reconcileInFlight && keeperSpawning.size === 0 &&
-                                        keeperHandoffs.size === 0, 15_000);
+                                        keeperHandoffs.size === 0 && ridealong.transitions.size === 0, 15_000);
       if (!quiet) return { ok: false, why: 'keeper spawns or a rejoin sweep did not settle within 15s' };
       beat = uptime.pauseBeat();
       return { ok: true };

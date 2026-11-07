@@ -2223,7 +2223,7 @@ async function healToFloor(ctx, agent, floor, budgetMs) {
   ctx.log(agent, `at ${at0.hpText}, below the ${floor} floor — handing back to the keeper to heal`);
 
   // Give the body back so the survival ladder and the safe-wall book are live again.
-  await call('autopilot', { agent, action: 'free' }, 30_000).catch(() => {});
+  await call('autopilot', { agent, action: 'free', by: `fleetscript:${ctx.name}` }, 30_000).catch(() => {});
   await call('autopilot', { agent, action: 'revive' }, 30_000).catch(() => {});
 
   const until = Date.now() + budgetMs;
@@ -2259,7 +2259,7 @@ async function healToFloor(ctx, agent, floor, budgetMs) {
   } finally {
     // Take it back either way: the caller still owns this errand and an unheld body is one
     // the patrol will re-task out from under the next step.
-    await call('autopilot', { agent, action: 'busy', kind: 'fleetscript',
+    await call('autopilot', { agent, action: 'busy', by: `fleetscript:${ctx.name}`, kind: 'fleetscript',
       label: ctx.name, lease_ms: BUSY_LEASE_MS }, 30_000).catch(() => {});
   }
 }
@@ -3030,7 +3030,10 @@ export async function holdKeeper(ctx, agent, fleet) {
     lease_ms: KEEPER_LEASE_MS, why: `fleet errand: ${ctx.name}`,
   }).catch(e => ({ error: `keeper :${who.port} did not answer the claim (${e.message}) — ` +
                           `it has probably restarted since the port scan` }));
-  const got = Object.keys(claim?.faculties ?? {}).filter(f => KEEPER_FACULTIES.includes(f));
+  const got = (Array.isArray(claim?.granted) ? claim.granted : Object.keys(claim?.faculties ?? {}))
+    .filter(f => KEEPER_FACULTIES.includes(f));
+  const busyRefusal = claim?.refused?.find(r => r.code === 'busy');
+  if (busyRefusal) throw Error(`keeper lease refused: ${busyRefusal.why}`);
   if (claim?.error || !got.length) {
     ctx.log(agent, `the keeper would not yield work/movement/economy: ${claim?.error ?? 'refused'}`);
     return { ok: false, cancelJourney: async () => {}, release: async () => {} };
@@ -3142,7 +3145,8 @@ export async function holdKeeper(ctx, agent, fleet) {
       const again = await ask('commander_claim', {
         faculties: KEEPER_FACULTIES, by, lease_ms: KEEPER_LEASE_MS,
         why: `fleet errand: ${ctx.name} (lease lapsed, taken back)` }).catch(() => null);
-      const got = Object.keys(again?.faculties ?? {}).filter(f => KEEPER_FACULTIES.includes(f));
+      const got = (Array.isArray(again?.granted) ? again.granted : Object.keys(again?.faculties ?? {}))
+        .filter(f => KEEPER_FACULTIES.includes(f));
       // A walk issued by a helper module (m59-inventory walkRoom) counts as the errand's own too.
       const walking = own.walkUntil > Date.now() ||
         (globalThis.__m59OwnWalks?.get?.(agent) ?? 0) > Date.now();
@@ -3190,7 +3194,7 @@ export async function holdKeeper(ctx, agent, fleet) {
 }
 
 async function recoverFromDeath(ctx, agent, budgetMs) {
-  await call('autopilot', { agent, action: 'free' }, 30_000).catch(() => {});
+  await call('autopilot', { agent, action: 'free', by: `fleetscript:${ctx.name}` }, 30_000).catch(() => {});
   await call('autopilot', { agent, action: 'revive' }, 30_000).catch(() => {});
   const until = Date.now() + budgetMs;
   try {
@@ -3206,7 +3210,7 @@ async function recoverFromDeath(ctx, agent, budgetMs) {
     }
     return { ok: false, why: `did not come back within ${Math.round(budgetMs / 1000)}s` };
   } finally {
-    await call('autopilot', { agent, action: 'busy', kind: 'fleetscript',
+    await call('autopilot', { agent, action: 'busy', by: `fleetscript:${ctx.name}`, kind: 'fleetscript',
       label: ctx.name, lease_ms: BUSY_LEASE_MS }, 30_000).catch(() => {});
   }
 }
@@ -4209,7 +4213,7 @@ async function runStep(ctx, agent, rawStep, state) {
                       'nothing reads the hunt list outside farm mode' };
 
       // Hand the body back: the keeper cannot hunt while the lease holds its work and legs.
-      await call('autopilot', { agent, action: 'free' }, 30_000).catch(() => {});
+      await call('autopilot', { agent, action: 'free', by: `fleetscript:${ctx.name}` }, 30_000).catch(() => {});
 
       const deadline = Date.now() + budgetMs;
       let now = before, done = false;
@@ -4310,7 +4314,7 @@ async function runStep(ctx, agent, rawStep, state) {
       // HAND THE BODY BACK. This is the step, not the tidy-up: the keeper will not maintain
       // a post while anything else holds work or movement, and the lease this script runs
       // under holds both.
-      await call('autopilot', { agent, action: 'free' }, 30_000).catch(() => {});
+      await call('autopilot', { agent, action: 'free', by: `fleetscript:${ctx.name}` }, 30_000).catch(() => {});
       const at = await observe(agent).catch(() => null);
       const there = Number(at?.room) === room;
       return { ok: there, result: { room: at?.room ?? null, mode, spells, handed_back: true },
@@ -5621,7 +5625,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
   // every pass for ever — 15 sends across 15 passes before it was found.
   const freeAll = async () => {
     await Promise.all([...held].map(a =>
-      call('autopilot', { agent: a, action: 'free' }, 30_000).catch(() => {})));
+      call('autopilot', { agent: a, action: 'free', by: `fleetscript:${name}` }, 30_000).catch(() => {})));
     held.clear();
   };
   // Removed again in the finally: these are per-RUN, and a long-lived process that calls
@@ -5664,7 +5668,10 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // KEEPER — it is the only one of the two that stops the process holding the socket from
       // steering. Sending only the first is what put this runner and twenty-one keepers on the
       // same bodies all afternoon.
-      await call('autopilot', { agent, action: 'busy', kind: 'fleetscript', label: name,
+      // Name OUR holder: with a DUM standing claim this first announcement can be refused
+      // until holdKeeper takes the faculties and announces again. Borrowing DUM's owner
+      // here would make its next missing-claim heartbeat cancel this errand's own walk.
+      await call('autopilot', { agent, action: 'busy', by: `fleetscript:${name}`, kind: 'fleetscript', label: name,
                                 lease_ms: BUSY_LEASE_MS }, 40_000)
         .catch(() => {});
       held.add(agent);
@@ -5680,7 +5687,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // the beat that would have carried the renewal never starts. The character still needs
       // the fleet to leave it alone. This interval is the runner's, so it runs on every path.
       busyBeat = setInterval(() => {
-        busyRenewal = call('autopilot', { agent, action: 'busy', kind: 'fleetscript', label: name,
+        busyRenewal = call('autopilot', { agent, action: 'busy', by: `fleetscript:${name}`, kind: 'fleetscript', label: name,
                             lease_ms: BUSY_LEASE_MS }, 20_000).catch(() => {});
       }, KEEPER_BEAT_MS);
       busyBeat.unref?.();
@@ -6043,7 +6050,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // character for a whole lease after the errand ended — Pepe's travels were refused
       // "busy: fleetscript (disciple-drill (local))" for five minutes, 2026-09-28.
       await busyRenewal?.catch?.(() => {});
-      await call('autopilot', { agent, action: 'free' }, 30_000).catch(() => {});
+      await call('autopilot', { agent, action: 'free', by: `fleetscript:${name}` }, 30_000).catch(() => {});
       held.delete(agent);
     }
   };

@@ -62,7 +62,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, exists
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { resolveFleet } from './m59-fleetpath.mjs';
+import { resolveFleet, stateFileFor } from './m59-fleetpath.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const HARNESS = resolve(HERE, '..');
@@ -85,10 +85,12 @@ export function parsePlanRequest(text, now = Date.now()) {
   const at = num(h[2]);
   if (!(at <= now + 1000 && now - at <= FRESH_MS)) return null;
   const r = { version: Number(h[1]), at, pid: num(h[3]), server: dec(h[4])?.toLowerCase(), account: dec(h[5])?.toLowerCase(),
-              character: dec(h[6]), player_id: num(h[7]), visible: h[8] === '1', inventory: [], room: [], requests: [] };
+              character: dec(h[6]), player_id: num(h[7]), visible: h[8] === '1', inventory: [], room: [], requests: [], capabilities: {} };
   if (!(r.pid > 0) || !r.account || r.character == null) return null;
   for (const f of rows) {
-    if (f[0] === 'I' && f.length === 4) {
+    if (f[0] === 'C' && f.length === 3 && r.version === 2 && f[1] === 'logs' && f[2] === '1') {
+      r.capabilities.logs = true;
+    } else if (f[0] === 'I' && f.length === 4) {
       const name = dec(f[2]); if (name == null || r.inventory.length >= 512) return null;
       r.inventory.push({ id: num(f[1]), name, amount: num(f[3]) || 1 });
     } else if (f[0] === 'W' && f.length === 3) {
@@ -139,7 +141,7 @@ export function downgradeArg(a) {
   return { ...a, type: 'text', title: `${a.title ?? a.id}${hint}`, options: [], bounds: [] };
 }
 
-export function renderPlanView({ version = 1, pid, ack, control = 'none', status = '', entries = [], messages = [] }, now = Date.now()) {
+export function renderPlanView({ version = 1, pid, ack, control = 'none', status = '', entries = [], messages = [], logs = [] }, now = Date.now()) {
   const v2 = version >= 2;
   const L = [['M59PLAN', v2 ? 2 : 1, now, pid, ack, control, enc(status)].join('\t')];
   for (const e of entries.slice(0, 256)) {
@@ -163,6 +165,15 @@ export function renderPlanView({ version = 1, pid, ack, control = 'none', status
     }
   }
   for (const m of messages.slice(-12)) L.push(['M', m.seq, m.ok ? 1 : 0, enc(m.message)].join('\t'));
+  if (v2) {
+    const lines = []; let bytes = 0;
+    for (const l of logs.slice(-64).reverse()) {
+      const line = ['L', l.seq, enc(l.text)].join('\t');
+      if (bytes + line.length > 65536) break;
+      lines.push(line); bytes += line.length;
+    }
+    L.push(...lines.reverse());
+  }
   L.push('END');
   return L.join('\n') + '\n';
 }
@@ -211,7 +222,7 @@ export async function runRequest(req, { entries, owner }, ctx) {
   for (const a of e.args ?? []) req.args[a.id] = String(req.args[a.id] ?? a.default ?? '').trim();
   for (const a of e.args ?? []) {
     const v = req.args[a.id], name = a.title ?? a.id;
-    if (v === '') { if (a.optional) continue; return { ok: false, message: `${e.title}: ${name} is required` }; }
+    if (v === '') { if (a.optional || a.required === false) continue; return { ok: false, message: `${e.title}: ${name} is required` }; }
     const offered = (a.options ?? []).filter(o => whenHolds(o.when, req.args));
     if (a.type === 'count' && !/^\d{1,6}$/.test(v)) return { ok: false, message: `${name} must be a whole number` };
     if (a.type === 'boolean' && !['true', 'false'].includes(v)) return { ok: false, message: `${name} must be true or false` };
@@ -375,7 +386,7 @@ export function freshRequests(inDir, now = Date.now()) {
   return names.filter(f => { try { const t = statSync(join(inDir, f)).mtimeMs; return t <= now + 1000 && now - t <= FRESH_MS; } catch { return false; } });
 }
 
-export async function createDesk({ fleet, dir, substrate, providerDirs, log = console.error, roster = null }) {
+export async function createDesk({ fleet, dir, substrate, providerDirs, log = console.error, roster = null, stateFile = stateFileFor(fleet) }) {
   const state = new Map();   // pid -> { ack, messages }
   roster ??= () => rosterAgents(resolveFleet(['--fleet', fleet === '' ? '-' : fleet]).stateFile);
   let presenceWritten = null;
@@ -394,9 +405,11 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
     for (const f of files) {
       let req; try { req = parsePlanRequest(readFileSync(join(inDir, f), 'utf8'), now); } catch { req = null; }
       if (!req || String(req.pid) + '.tsv' !== f) continue;
-      const st = state.get(req.pid) ?? { ack: lastAck(dir, req.pid), messages: [] };
+      const identity = `${req.server}|${req.account}|${req.character}`;
+      const prior = state.get(req.pid);
+      const st = prior?.identity === identity ? prior : { ack: lastAck(dir, req.pid), messages: [], identity };
       const me = agents.find(a => a.account === req.account) ?? null;
-      const ctx = { fleet, substrate, harness: HARNESS, dir, now, log, agents,
+      const ctx = { fleet, substrate, stateFile, harness: HARNESS, dir, now, log, agents,
                     client: { ...req, agent: me?.agent ?? null }, desk: st };
       const g = await gatherEntries(providers, ctx);
       for (const r of req.requests.filter(r => r.seq > st.ack).sort((a, b) => a.seq - b.seq)) {
@@ -409,7 +422,7 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
       for (const p of providers) if (typeof p.tick === 'function') {
         try { await p.tick(ctx); } catch (e) { log(`[plan ${me?.agent ?? req.account}] ${p.id} tick: ${e.message}`); }
       }
-      if (me) presence[me.agent] = { character: req.character, player_id: req.player_id, with: req.room,
+      if (me && ctx.control !== 'keeper') presence[me.agent] = { character: req.character, player_id: req.player_id, with: req.room,
                                      inventory: req.inventory, pid: req.pid, at: req.at };
       const after = st.messages.length && req.requests.length ? await gatherEntries(providers, ctx) : g;
       const control = ctx.control ?? 'none';
@@ -419,7 +432,7 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
       const status = me ? `${me.agent} (${req.character}) on fleet ${fleet || '(unnamed)'}${kills}` :
         `account ${req.account} is not in fleet ${fleet || '(unnamed)'}'s roster — fleet plans need a fleet character`;
       writeAtomic(join(dir, 'plan', 'out', f), renderPlanView({ version: req.version, pid: req.pid, ack: st.ack, control, status,
-        entries: after.entries, messages: st.messages }, Date.now()));
+        entries: after.entries, messages: st.messages, logs: req.capabilities.logs ? st.logs ?? [] : [] }, Date.now()));
       state.set(req.pid, st); served++;
     }
     // WHO IS AT A KEYBOARD, AND WITH WHOM. The broker has no room for a piloted character (its
@@ -460,7 +473,8 @@ async function main() {
   const heartbeat = () => {
     const other = liveDesk({ dir, substrate }, { exceptPid: process.pid });
     if (other && yieldsTo(other, me)) { console.error(`plan desk pid ${other.pid} also started; this one (pid ${process.pid}) steps aside`); process.exit(0); }
-    const h = JSON.stringify({ pid: process.pid, at: Date.now(), since: me.since, fleet, dir, substrate, root: HARNESS, parent });
+    const h = JSON.stringify({ pid: process.pid, at: Date.now(), since: me.since, fleet,
+      state_file: resolve(stateFileFor(fleet)), dir, substrate, root: HARNESS, parent });
     for (const f of beats) { try { writeAtomic(f, h); } catch {} }
   };
   // The other checkouts' client folders, re-listed every five minutes (a worktree can appear any

@@ -1,168 +1,179 @@
-// PLAN ROWS: WHO HAS THE CONTROLS. "Relinquish control to Keeper" / "Take control back".
-//
-// The lock is the proxy's control gate (m59-proxy-gate.mjs). It is the only place a lock
-// can be enforced: the server allows one connection per character, the human's client is
-// that connection, so "locked out" has to mean "your packets stop at the proxy". The
-// client also refuses movement locally while the gate is held (clientcontext.c), but that
-// is courtesy — a stock client through the same proxy is locked out just the same.
-//
-// The gate is a LEASE (ttl below), renewed by this desk while it runs. If the desk dies
-// the person gets their character back within the ttl rather than being trapped.
-//
-// What drives while the gate is held is reported, not assumed: see `driver` below. Today
-// that is honestly "nothing on this connection" unless something is injecting through the
-// proxy, because the keeper PROCESS cannot share the human's socket. That gap is the main
-// finding in docs/m59-client-vs-harness.md, and this row says so rather than pretending.
-
-import { readdirSync, readFileSync, existsSync, openSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { evidenceDirFor } from '../m59-fleetpath.mjs';
-import { readSpectateBeat, spectateHolds, spectateDir } from '../m59-spectate-route.mjs';
+// The proxy gates input; the broker's normal keeper drives the shared connection.
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { evidenceDirFor, stateFileFor } from '../m59-fleetpath.mjs';
+import { createKeeperLogTail } from '../m59-plan-logs.mjs';
 
 const TTL_MS = 120_000, RENEW_MS = 30_000;
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const holderFor = agent => `keeper:${agent}`;
-
 export function gateProxies(dir = join(evidenceDirFor(), 'proxies')) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter(f => f.endsWith('.json')).map(f => {
     try { return JSON.parse(readFileSync(join(dir, f), 'utf8')); } catch { return null; }
   }).filter(a => a?.gate_control && a.pid && alive(a.pid));
 }
-
-async function http(port, path, body = null) {
-  const r = await fetch(`http://127.0.0.1:${port}${path}`, body ? { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(3000) } : { signal: AbortSignal.timeout(3000) });
+async function http(port, path, body = null, timeoutMs = 3000) {
+  const r = await fetch(`http://127.0.0.1:${port}${path}`, {
+    ...(body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   return r.json();
 }
-
-// Find the gate-capable proxy session carrying THIS client: same player object id. The
-// client's own server string names the real server when it went through a proxy
-// (M59_INVENTORY_SERVER), so the advert's `server` must match it too.
 export async function findSession(client, proxies = gateProxies()) {
   for (const a of proxies) {
     const srv = `${a.server?.host}:${a.server?.port}`.toLowerCase();
-    // ...or the proxy's own listen address: a client the fleet terminal points at the proxy names
-    // where it connected (127.0.0.1:5962), not the server behind it.
     if (client.server && client.server !== srv && client.server !== `127.0.0.1:${a.listen}`) continue;
     try {
       const g = await http(a.gate_control, '/gate');
       const s = (g.sessions ?? []).find(s => ((s.player_id ?? 0) & 0x0fffffff) === client.player_id);
       if (s) return { advert: a, session: s };
-    } catch { /* a proxy that will not answer cannot hold a lock for anybody */ }
+    } catch { /* cannot establish this connection */ }
   }
   return null;
 }
-
-const renewals = new Map();   // pid -> timer
-
-// SPECTATE (tools/m59-spectate-keeper.mjs): the keeper that drives while the gate is held, attached
-// to the person's own connection through the proxy's attach port. Started here, one per agent;
-// its heartbeat is <harness>/substrate/spectate/<agent>.json.
-const HARNESS = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-// The heartbeat is read the way the broker reads it (tools/m59-spectate-route.mjs), so the desk and the
-// broker can never disagree about whether a spectate keeper is alive.
-const spectateBeat = agent => readSpectateBeat(agent);
-const spectateAlive = agent => { const h = spectateBeat(agent);
-  return spectateHolds(h, { agent, pidAlive: alive }).holds ? h : null; };
-function logFd(agent) {
-  try { const d = spectateDir(); mkdirSync(d, { recursive: true }); return openSync(join(d, `${agent}.log`), 'a'); }
-  catch { return 'ignore'; }
+async function broker(args) {
+  const port = Number(process.env.M59_PLAN_BROKER_PORT || process.env.M59_BROKER_PORT || 8901);
+  const r = await http(port, '/', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pilot', arguments: args } }, 120_000);
+  if (r.error) throw Error(r.error.message ?? 'broker refused the request');
+  if (r.result?.content) {
+    const text = r.result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+    try { return JSON.parse(text); } catch { throw Error(text || 'empty broker response'); }
+  }
+  return r.result ?? { error: 'empty broker response' };
 }
-function startSpectate(ctx, advert, playerId) {
-  if (spectateAlive(ctx.client.agent)) return { ok: true, already: true };
-  if (!advert.attach) return { ok: false, why: 'this proxy has no attach port (start it with --attach), so no keeper can drive' };
-  const child = spawn(process.execPath, [join(HARNESS, 'tools', 'm59-spectate-keeper.mjs'), '--fleet', ctx.fleet === '' ? '-' : ctx.fleet,
-    '--agent', ctx.client.agent, '--attach-port', String(advert.attach), '--player', String(playerId)],
-    // ITS OUTPUT GOES TO substrate/spectate/<agent>.log. It was discarded, and the first live failure
-    // (a scrambled stream, see m59-proxy-token.mjs) had to be reconstructed from crash dumps instead.
-    { cwd: HARNESS, detached: true, stdio: ['ignore', logFd(ctx.client.agent), logFd(ctx.client.agent)], windowsHide: true });
-  child.unref();
-  return { ok: true, pid: child.pid };
-}
-function stopSpectate(agent) {
-  const h = spectateBeat(agent);
-  if (h?.pid) { try { process.kill(h.pid, 'SIGTERM'); } catch { /* already gone */ } }
-}
-const gaveUp = new Map();   // agent -> when the keeper was found dead while holding the gate
 
-export const provider = {
-  id: 'control',
-  // A KEEPER THAT DIED WHILE HOLDING THE CONTROLS GIVES THEM BACK. Locked out with nobody driving is
-  // the one state this must never leave a person in for long: after 20s without a live spectate
-  // keeper, the gate is released and the person is told.
-  async tick(ctx) {
-    const c = ctx.client;
-    if (!c.agent) return;
-    const found = await findSession(c);
-    const gate = found?.session?.gate;
-    if (!gate || gate.holder !== holderFor(c.agent)) { gaveUp.delete(c.agent); return; }
-    if (spectateAlive(c.agent) || found.session.attached) { gaveUp.delete(c.agent); return; }
-    if (!gaveUp.has(c.agent)) { gaveUp.set(c.agent, ctx.now); return; }
-    if (ctx.now - gaveUp.get(c.agent) < 20_000) return;
-    clearInterval(renewals.get(c.pid)); renewals.delete(c.pid);
-    await http(found.advert.gate_control, `/ungate?player=${found.session.player_id}`, { holder: holderFor(c.agent) }).catch(() => {});
-    gaveUp.delete(c.agent);
-    const st = ctx.desk; st.messages.push({ seq: Date.now(), ok: false, message: 'The keeper stopped, so the controls are yours again.' });
-    ctx.log(`[plan ${c.agent}] spectate keeper gone while holding the gate -- released`);
-  },
-  async entries(ctx) {
-    const c = ctx.client;
-    const found = await findSession(c);
-    const gate = found?.session?.gate ?? null;
-    ctx.control = !gate ? 'none' : gate.holder === holderFor(c.agent) ? 'keeper' : 'other';
-    if (!found) {
-      return [{ id: 'control.keeper', group: 'Control', icon: 'keeper', title: 'Relinquish control to Keeper', disabled: true,
-        describe: 'No gate-capable proxy is carrying this client, so nothing can lock it. Start one with ' +
-                  '`node tools/m59-proxy.mjs --observe --gate-control 8931 --listen <port> --server <host:port>` and ' +
-                  'reconnect through it (dev.bat finds it by itself).' }];
+// Injection points exercise the real transition ordering without a production fleet.
+export function createControlProvider({ find = findSession, callBroker = broker, proxy = http } = {}) {
+  const params = (ctx, found) => ({ agent: ctx.client.agent, pid: ctx.client.pid,
+    fleet_state: ctx.stateFile ?? stateFileFor(ctx.fleet), attach_port: found.advert.attach,
+    gate_control: found.advert.gate_control, player: found.session.player_id });
+  function matches(ctx, found, status) {
+    const a = status?.attached;
+    return !!(status?.automated && a && a.client_pid === ctx.client.pid &&
+      a.player === found?.session.player_id && a.attach_port === found?.advert.attach &&
+      a.gate_control === found?.advert.gate_control);
+  }
+  async function observe(ctx, found, refresh = false) {
+    const st = ctx.desk;
+    if (refresh || st.controlObservedAt !== ctx.now) {
+      st.controlObservedAt = ctx.now; st.controlStatus = null;
+      if (ctx.client.agent && found?.session?.gate?.holder === holderFor(ctx.client.agent)) {
+        try { st.controlStatus = await callBroker({ action: 'control_status', agent: ctx.client.agent,
+          fleet_state: ctx.stateFile ?? stateFileFor(ctx.fleet) }); }
+        catch (e) { st.controlStatus = { error: e.message }; }
+      }
     }
-    if (!gate) {
-      const why = found.session.gate_refusal;
-      return [{ id: 'control.keeper', group: 'Control', icon: 'keeper', title: 'Relinquish control to Keeper',
-        disabled: !!why || !c.agent,
-        describe: why ? `Not yet: ${why}.` : !c.agent ? 'This account is not in the fleet roster.' :
-          'Your movement, combat, trade and item packets stop at the proxy until you take control back; ' +
-          'chat, looking and logging off still work. You spectate. Logging off always releases.' }];
-    }
-    if (gate.holder === holderFor(c.agent)) {
-      return [{ id: 'control.take', group: 'Control', icon: 'keeper', title: 'Take control back from Keeper', running: true,
-        describe: `Keeper has held the controls since ${new Date(gate.since).toLocaleTimeString()} ` +
-          `(${gate.dropped} of your inputs dropped). ` + (found.session.attached
-            ? `Keeper ${found.session.attached.agent} is driving on your connection: ${found.session.attached.injected} of its packets sent, ` +
-              `${found.session.attached.forged} moves mirrored to your screen.`
-            : spectateAlive(c.agent) ? 'Keeper is starting and attaching to your connection…'
-            : 'No keeper is attached yet.') }];
-    }
-    return [{ id: 'control.take', group: 'Control', icon: 'keeper', title: `Controls held by ${gate.holder}`, disabled: true,
-      describe: `${gate.reason || 'no reason given'} — only its holder can release it, or it lapses by itself.` }];
-  },
-  async run(entry, args, ctx) {
-    const c = ctx.client;
-    const found = await findSession(c);
-    if (!found) return { ok: false, message: 'no gate-capable proxy carries this client' };
-    const port = found.advert.gate_control, q = `?player=${found.session.player_id}`;
-    if (entry === 'control.keeper') {
-      const r = await http(port, '/gate' + q, { holder: holderFor(c.agent), reason: 'relinquished from the PLAN tab', ttl_ms: TTL_MS });
-      if (!r.ok) return { ok: false, message: r.why ?? r.error };
-      clearInterval(renewals.get(c.pid));
-      renewals.set(c.pid, setInterval(() => http(port, '/gate' + q, { holder: holderFor(c.agent), reason: 'relinquished from the PLAN tab', ttl_ms: TTL_MS })
-        .then(x => { if (!x.ok) { clearInterval(renewals.get(c.pid)); renewals.delete(c.pid); } }).catch(() => {}), RENEW_MS));
-      const sp = startSpectate(ctx, found.advert, found.session.player_id);
-      gaveUp.delete(c.agent);
-      return { ok: true, message: sp.ok ? 'Keeper has the controls and is attaching to your connection. You are spectating; take control back from this tab, or log off.'
-                                        : `Keeper has the controls, but cannot drive: ${sp.why}. Take control back to play.` };
-    }
-    if (entry === 'control.take') {
-      clearInterval(renewals.get(c.pid)); renewals.delete(c.pid);
-      // Ungate FIRST: from this packet on the keeper's frames are dropped at the proxy, so stopping it can be slow.
-      const r = await http(port, '/ungate' + q, { holder: holderFor(c.agent) });
-      stopSpectate(c.agent);
-      return r.ok ? { ok: true, message: `Controls are yours again (${r.was?.dropped ?? 0} inputs were dropped while Keeper held them).` }
-                  : { ok: false, message: r.why ?? r.error };
-    }
-    return { ok: false, message: `unknown control entry ${entry}` };
-  },
-};
+    ctx.keeperRegistered = matches(ctx, found, st.controlStatus);
+    return st.controlStatus;
+  }
+  const logPath = ctx => join(ctx.substrate, `keeper-${ctx.client.agent}.log`);
+  const logRow = ctx => ({ id: 'control.logs', group: 'Control', icon: 'keeper', configure: true,
+    title: `Keeper debug log: ${ctx.desk.logTail?.enabled ? 'on' : 'off'}`,
+    disabled: !ctx.client.capabilities?.logs || !ctx.client.agent,
+    describe: ctx.client.capabilities?.logs
+      ? 'Duplicate new output from this character\'s harness keeper log into this client\'s text window. The disk log continues normally. Starts at the end when enabled.'
+      : 'Relaunch the updated debug client to display keeper logs here.',
+    args: [{ id: 'enabled', title: 'Show keeper debug log in this client', type: 'boolean', default: String(!!ctx.desk.logTail?.enabled) }],
+  });
+  return {
+    id: 'control',
+    async entries(ctx) {
+      const c = ctx.client, found = await find(c), gate = found?.session?.gate;
+      ctx.control = !gate ? 'none' : gate.holder === holderFor(c.agent) ? 'keeper' : 'other';
+      const status = await observe(ctx, found);
+      let row;
+      if (!found) row = { id: 'control.keeper', title: 'Release to Keeper', disabled: true,
+        describe: 'No gate-capable proxy carries this client. Relaunch with the fleet terminal\'s L key.' };
+      else if (!gate) {
+        const why = found.session.gate_refusal || (!found.advert.attach ? 'proxy needs the keeper attach port' : !c.agent ? 'this account is not in the fleet roster' : null);
+        row = { id: 'control.keeper', title: 'Release to Keeper', disabled: !!why,
+          describe: why ? `Not yet: ${why}.` : 'The broker runs your normal keeper on this client\'s connection. DUM bots and FleetScripts can use it. You watch; reclaim to play.' };
+      } else if (ctx.control === 'keeper') row = { id: 'control.take', title: 'Reclaim from Keeper', running: true,
+        describe: ctx.keeperRegistered
+          ? `Broker keeper ${status.attached.pid} is driving; ${found.session.attached?.injected ?? 0} packets sent, ${found.session.attached?.forged ?? 0} moves mirrored.`
+          : `Waiting for the broker keeper. ${status?.error ?? 'Reclaim returns the controls to this client.'}` };
+      else row = { id: 'control.take', title: `Controls held by ${gate.holder}`, disabled: true,
+        describe: `${gate.reason || 'no reason given'}; only its holder can release it, or its lease expires.` };
+      return [{ group: 'Control', icon: 'keeper', ...row }, logRow(ctx)];
+    },
+    async tick(ctx) {
+      const st = ctx.desk, c = ctx.client;
+      if (!c.agent) return;
+      const found = await find(c), gate = found?.session?.gate;
+      if (gate?.holder === holderFor(c.agent)) {
+        await observe(ctx, found);
+        if (ctx.keeperRegistered) {
+          st.keeperMissingAt = null;
+          if (!st.nextGateRenew || ctx.now >= st.nextGateRenew) {
+            const r = await proxy(found.advert.gate_control, `/gate?player=${found.session.player_id}`,
+              { holder: holderFor(c.agent), reason: 'released from the MANAGE tab', ttl_ms: TTL_MS });
+            if (!r.ok) throw Error(r.error ?? r.why ?? 'could not renew keeper gate');
+            st.nextGateRenew = ctx.now + RENEW_MS;
+          }
+        } else {
+          st.keeperMissingAt ??= ctx.now;
+          if (ctx.now - st.keeperMissingAt >= 20_000) {
+            const r = await callBroker({ action: 'reclaim', ...params(ctx, found) });
+            if (r.ok) {
+              await proxy(found.advert.gate_control, `/ungate?player=${found.session.player_id}`, { holder: holderFor(c.agent) });
+              st.messages.push({ seq: Date.now(), ok: false, message: 'The keeper stopped; controls returned to this client.' });
+              st.keeperMissingAt = null;
+            }
+          }
+        }
+      } else { st.nextGateRenew = null; st.keeperMissingAt = null; }
+      if (st.logTail?.enabled && c.capabilities?.logs) st.logs = [...st.logs ?? [], ...st.logTail.read(logPath(ctx))].slice(-64);
+    },
+    async run(entry, args, ctx) {
+      if (entry === 'control.logs') {
+        if (!ctx.client.capabilities?.logs || !ctx.client.agent) return { ok: false, message: 'This client cannot display keeper logs; relaunch the updated debug client.' };
+        ctx.desk.logTail ??= createKeeperLogTail();
+        const enabled = args.enabled === 'true';
+        ctx.desk.logTail.setEnabled(enabled, logPath(ctx)); ctx.desk.logs = [];
+        return { ok: true, message: `Keeper debug log ${enabled ? 'on' : 'off'} for this client.` };
+      }
+      const found = await find(ctx.client);
+      if (!found || !ctx.client.agent) return { ok: false, message: 'No fleet client connection found.' };
+      const port = found.advert.gate_control, q = `?player=${found.session.player_id}`, holder = holderFor(ctx.client.agent);
+      if (entry === 'control.keeper') {
+        if (!found.advert.attach) return { ok: false, message: 'Proxy has no keeper attach port; relaunch its updated version.' };
+        const gate = await proxy(port, '/gate' + q, { holder, reason: 'released from the MANAGE tab', ttl_ms: TTL_MS });
+        if (!gate.ok) return { ok: false, message: gate.why ?? gate.error };
+        let r;
+        try { r = await callBroker({ action: 'attach', ...params(ctx, found) }); }
+        catch (e) {
+          // A lost HTTP reply does not cancel the broker's ownership transfer.
+          // Keep the gate until its status proves whether the transfer completed.
+          try {
+            const status = await callBroker({ action: 'control_status', agent: ctx.client.agent,
+              fleet_state: ctx.stateFile ?? stateFileFor(ctx.fleet) });
+            if (matches(ctx, found, status)) r = { ok: true, ...status };
+            else if (status.piloted && !status.attached && !status.transitioning) r = { error: e.message };
+            else return { ok: false, message: `Keeper release is unconfirmed: ${e.message}. Reclaim once the broker answers.` };
+          } catch { return { ok: false, message: `Keeper release is unconfirmed: ${e.message}. The gate will expire if the desk cannot recover it.` }; }
+        }
+        if (!r.ok || !r.automated) {
+          await proxy(port, '/ungate' + q, { holder });
+          return { ok: false, message: `Keeper release failed: ${r.error ?? 'broker did not confirm an attached keeper'}` };
+        }
+        ctx.desk.nextGateRenew = ctx.now + RENEW_MS; ctx.desk.keeperMissingAt = null;
+        ctx.control = 'keeper';
+        await observe(ctx, found, true);
+        return { ok: true, message: 'Released to the broker keeper. Bots and FleetScripts can run normally; reclaim to play.' };
+      }
+      if (entry === 'control.take') {
+        if (found.session.gate?.holder !== holder) return { ok: false, message: 'This client does not own the keeper gate.' };
+        // Establish the pilot hold and stop the keeper before opening native input.
+        const r = await callBroker({ action: 'reclaim', ...params(ctx, found) });
+        if (!r.ok) return { ok: false, message: r.error ?? 'Broker could not reclaim this client.' };
+        const released = await proxy(port, '/ungate' + q, { holder });
+        if (!released.ok) return { ok: false, message: released.why ?? released.error };
+        ctx.desk.nextGateRenew = null; ctx.keeperRegistered = false; ctx.control = 'none';
+        return { ok: true, message: 'Controls are yours again.' };
+      }
+      return { ok: false, message: `Unknown control entry ${entry}` };
+    },
+  };
+}
+export const provider = createControlProvider();

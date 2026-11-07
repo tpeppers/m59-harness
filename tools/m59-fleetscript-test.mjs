@@ -2226,7 +2226,7 @@ console.log('\nbusy ownership is established before the first errand walk');
     if(/127\.0\.0\.1:19\d\d\d\//.test(url))throw Error('connection refused');
     const b=o?.body?JSON.parse(o.body):null;
     if(b?.params?.name==='autopilot'&&b.params.arguments.action==='busy'){
-      const a=b.params.arguments;ap.declareBusy({kind:a.kind,label:a.label,leaseMs:a.lease_ms});
+      const a=b.params.arguments;ap.declareBusy({by:a.by,kind:a.kind,label:a.label,leaseMs:a.lease_ms});
     }
     return brokerFetch(u,o);
   };

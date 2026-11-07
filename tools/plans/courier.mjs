@@ -97,6 +97,8 @@ export const provider = {
   // their room (by the client's own room list), the proxy is told to accept the courier's offers;
   // and when the lap has said it is ready to collect a hold, the proxy offers the held goods.
   async tick(ctx) {
+    // A released viewer is served through the registered keeper's normal trade path.
+    if (ctx.control === 'keeper') return;
     const me = ctx.client.agent;
     if (!me || settingsFor(ctx.substrate, me).mode !== 'auto') return;
     const lap = lapState(ctx.substrate, ctx.fleet);

@@ -39,6 +39,7 @@ import { fleetName, stateFileFor, evidenceDirFor } from './m59-fleetpath.mjs';
 import { OVERLAY_DIR } from './m59-overlay.mjs';
 import { SIGNAL_PORT } from './m59-signal.mjs';
 import { processStartedAt, START_TIME_TOLERANCE_MS } from './runtime/process-identity.mjs';
+import { compareProxyAdverts, sameProxyServer } from './m59-plan-proxy.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -96,16 +97,20 @@ export function proxyFor(host, port, {
   dir = join(evidenceDirFor(), 'proxies'),
   isLive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } },
   startedAt = processStartedAt,
+  ports = null,
 } = {}) {
-  let names = [], found = null;
+  let names = [];
+  const found = [];
   try { names = readdirSync(dir); } catch { return null; }
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     let a;
     try { a = JSON.parse(readFileSync(join(dir, name), 'utf8')); } catch { continue; }
     if (!a?.listen || !a?.server) continue;
-    if (String(a.server.host) !== String(host)) continue;
-    if (Number(a.server.port) !== Number(port)) continue;
+    if (!sameProxyServer(a, host, port)) continue;
+    if (ports && ((ports.listen != null && Number(a.listen) !== Number(ports.listen)) ||
+        (ports.gate != null && Number(a.gate_control) !== Number(ports.gate)) ||
+        (ports.attach != null && Number(a.attach) !== Number(ports.attach)))) continue;
     // A FILE OUTLIVES THE PROCESS THAT WROTE IT. An advert with a dead pid is a leftover
     // from a proxy that was killed, and routing a client at it is a connection refused
     // wearing the costume of a feature.
@@ -114,14 +119,12 @@ export function proxyFor(host, port, {
       const started = Number.isFinite(a.at) ? startedAt(a.pid) : null;
       if (started && started > a.at + START_TIME_TOLERANCE_MS) continue;   // a recycled pid
     }
-    // A GATE-CAPABLE PROXY WINS (m59-proxy-gate.mjs). Two proxies can front one server: the
-    // swarm's observe-only shim and the PLAN tab's. Only the second can hand the controls to a
-    // keeper or do the courier's trade for you, so a client that has the choice takes it.
-    const hit = { listen: Number(a.listen), server: a.server, pid: a.pid ?? null, gate_control: a.gate_control ?? null };
-    if (hit.gate_control) return hit;
-    found ??= hit;
+    // Prefer a managed ridealong proxy, then gate support and freshness. An older proxy
+    // can keep existing sessions while a compatible one starts alongside it.
+    found.push({ listen: Number(a.listen), server: a.server, pid: a.pid ?? null,
+      gate_control: a.gate_control ?? null, attach: a.attach ?? null, ridealong: a.ridealong ?? null, at: a.at ?? null });
   }
-  return found;
+  return found.sort(compareProxyAdverts)[0] ?? null;
 }
 
 const matches = (e, want) => [e.agent, e.character, e.account]

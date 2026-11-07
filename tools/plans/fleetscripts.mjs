@@ -23,12 +23,11 @@
 // same process, the same checks, the same run locks — detached, with its output kept in
 // <substrate>/history/<fleet>/plan-desk/.
 
-import { readFileSync, readdirSync, existsSync, mkdirSync, openSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, mkdirSync, openSync, closeSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
-import { loadFleetScripts, asAgents } from '../m59-fleetlib.mjs';
+import { loadFleetScripts, asAgents, applyDefaults, checkParams } from '../m59-fleetlib.mjs';
 import { argsFor as kindArgs, argId } from '../m59-plan-kinds.mjs';
-import { readSpectateBeat, spectateHolds } from '../m59-spectate-route.mjs';
 import { parseArgs } from '../m59-plan-desk.mjs';
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -60,7 +59,7 @@ export function runningScripts(substrate, fleet) {
 // merchants, what a merchant sells, banks, nested scripts). `taskId` maps a script to its row id
 // for a nested-script picker.
 export function argsFor(script, ctx = {}, scripts = null) {
-  return kindArgs(script, ctx, { scripts, taskId: fsId });
+  return kindArgs(script, ctx, { scripts, taskId: fsId }).map(a => ({ ...a, required: !a.optional }));
 }
 
 // A value the REPL can take as one token. The REPL splits on whitespace and has no quoting, so a
@@ -124,25 +123,42 @@ export function launch(root, fleet, line, substrate, tag) {
   mkdirSync(dir, { recursive: true });
   const log = join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${tag}.log`);
   const out = openSync(log, 'a');
-  const child = spawn(process.execPath, [join(root, 'tools', 'm59-fleet-repl.mjs'), '--fleet', fleet === '' ? '-' : fleet],
-    { cwd: root, detached: true, windowsHide: true, stdio: ['pipe', out, out] });
+  let child;
+  try {
+    child = spawn(process.execPath, [join(root, 'tools', 'm59-fleet-repl.mjs'), '--fleet', fleet === '' ? '-' : fleet],
+      { cwd: root, detached: true, windowsHide: true, stdio: ['pipe', out, out] });
+  } finally { closeSync(out); }
   child.stdin.end(`${line}\nquit\n`);
   child.unref();
   return { pid: child.pid, log };
 }
 
-let cache = { key: '', scripts: new Map() };
 async function scriptsOf(substrate, harness) {
   const local = join(substrate, 'fleetscripts');
   const pub = join(dirname(substrate), 'tools', 'fleetscripts');
-  const key = `${pub}|${local}`;
   const { scripts } = await loadFleetScripts({ dirs: [['public', existsSync(pub) ? pub : join(harness, 'tools', 'fleetscripts')],
     ['local', local], ['pvp', join(local, 'pvp')]] });
-  cache = { key, scripts };
   return scripts;
 }
 
-export const provider = {
+// The typed line and the reflected form share the same pilot check. A bot's standing
+// claim is deliberately not a refusal: FleetScript takes its normal per-agent run lock,
+// busy window and keeper faculty lease while the bot steps aside. A person at the
+// keyboard must first release the character to an attached, broker-registered keeper.
+export function pilotRefusal(script, params, ctx) {
+  const agent = String(ctx.client?.agent ?? '').toLowerCase();
+  if (!agent) return null;
+  const values = applyDefaults(script, params);
+  const targets = [values.agents, ...Object.entries(script.params ?? {})
+    .filter(([key, spec]) => key !== 'agents' && spec?.type === 'agents').map(([key]) => values[key])];
+  const includesMe = targets.some(v => asAgents(v).some(a => a.toLowerCase() === agent || a === '*'));
+  if (!includesMe) return null;
+  if (ctx.control === 'keeper' && ctx.keeperRegistered === true) return null;
+  if (ctx.control === 'keeper') return `${ctx.client.agent} has been released, but its keeper is not registered with the broker yet — retry once it is attached`;
+  return `${ctx.client.agent} is the character you are piloting — release to Keeper before running a FleetScript on it`;
+}
+
+export const createFleetScriptsProvider = ({ launchScript = launch } = {}) => ({
   id: 'fleetscripts',
   async entries(ctx) {
     const scripts = await scriptsOf(ctx.substrate, ctx.harness);
@@ -160,9 +176,10 @@ export const provider = {
     const names = [...scripts.keys()].sort((a, b) => (running.has(b) - running.has(a)) || a.localeCompare(b));
     for (const name of names) {
       const s = scripts.get(name), r = running.get(name);
+      const extra = argsFor(s, ctx, scripts).slice(16).map(a => a.key);
       rows.push({ id: fsId(name), group: r ? 'FleetScript: running' : `FleetScript: ${s.source}`, icon: 'scroll',
         title: name, running: !!r,
-        describe: `${r ? r.join('; ') + '\n\n' : ''}${s.describe ?? ''}${s.unsafe ? `\n\nWAIVES: ${(s.unsafe.waives ?? []).join(', ')} — ${s.unsafe.reason ?? ''}` : ''}`,
+        describe: `${r ? r.join('; ') + '\n\n' : ''}${s.describe ?? ''}${extra.length ? `\n\nUse Run a FleetScript line to also set: ${extra.join(', ')}.` : ''}${s.unsafe ? `\n\nWAIVES: ${(s.unsafe.waives ?? []).join(', ')} — ${s.unsafe.reason ?? ''}` : ''}`,
         args: argsFor(s, ctx, scripts), _script: name });
       for (const p of Array.isArray(s.plans) ? s.plans : []) {
         if (!p?.id || typeof p.run !== 'function') continue;
@@ -176,9 +193,18 @@ export const provider = {
     const root = dirname(ctx.substrate);
     if (e._plan) return e._plan.run(args, ctx);
     if (entry === 'fs.line' || entry === 'fs.dry') {
-      const line = String(args.line ?? '').trim();
+      const line = String(args.line ?? '').trim().replace(/\s+/g, ' ');
       if (!/^[a-z0-9][\w.-]*(\s+[\w.-]+=\S+)*\s*$/i.test(line)) return { ok: false, message: 'expected `<script> key=value ...`' };
-      const r = launch(root, ctx.fleet, entry === 'fs.dry' ? `dry ${line}` : line, ctx.substrate, line.split(/\s/)[0]);
+      const [name, ...rest] = line.split(/\s+/);
+      const scripts = await scriptsOf(ctx.substrate, ctx.harness), script = scripts.get(name);
+      if (!script) return { ok: false, message: `no script named "${name}"` };
+      const unescape = v => { if (!/%[0-9a-f]{2}/i.test(v)) return v; try { return decodeURIComponent(v); } catch { return v; } };
+      const params = Object.fromEntries(rest.map(tok => { const at = tok.indexOf('='); return [tok.slice(0, at), unescape(tok.slice(at + 1))]; }));
+      const bad = checkParams(script, applyDefaults(script, params));
+      if (bad.length) return { ok: false, message: bad.join('; ') };
+      const why = entry === 'fs.dry' ? null : pilotRefusal(script, params, ctx);
+      if (why) return { ok: false, message: why };
+      const r = launchScript(root, ctx.fleet, entry === 'fs.dry' ? `dry ${line}` : line, ctx.substrate, name);
       return { ok: true, message: `${entry === 'fs.dry' ? 'dry run' : 'started'}: ${line} (pid ${r.pid}; log ${r.log})` };
     }
     const scripts = await scriptsOf(ctx.substrate, ctx.harness);
@@ -187,18 +213,14 @@ export const provider = {
     let values;
     try { values = valuesFor(s, args, scripts); }
     catch (err) { return { ok: false, message: `${e._script}: ${err.message}` }; }
-    const piloted = Object.entries(s.params ?? {}).filter(([, spec]) => spec?.type === 'agents')
-      .some(([key]) => asAgents(values[key]).includes(ctx.client.agent));
-    // RELINQUISHED IS NOT PLAYING. Once you hand the controls to Keeper (the Control row), a spectate keeper
-    // drives your character on your own connection and the broker routes a FleetScript's orders and lease
-    // to it (m59-spectate-route.mjs), so your own character may be in the run. Take control back and the
-    // run's lease ends with the spectate keeper.
-    const relinquished = piloted && spectateHolds(readSpectateBeat(ctx.client.agent), { agent: ctx.client.agent,
-      pidAlive: pid => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } } }).holds;
-    if (piloted && !relinquished)
-      return { ok: false, message: `${ctx.client.agent} is the character you are piloting — a FleetScript drives keepers, and yours is offline while you play. Relinquish control to Keeper first to include it.` };
+    const bad = checkParams(s, applyDefaults(s, values));
+    if (bad.length) return { ok: false, message: bad.join('; ') };
+    const why = pilotRefusal(s, values, ctx);
+    if (why) return { ok: false, message: why };
     const line = replLine(e._script, values);
-    const r = launch(root, ctx.fleet, line, ctx.substrate, e._script);
+    const r = launchScript(root, ctx.fleet, line, ctx.substrate, e._script);
     return { ok: true, message: `started: ${line} (pid ${r.pid}; log ${r.log})` };
   },
-};
+});
+
+export const provider = createFleetScriptsProvider();

@@ -37,6 +37,7 @@ import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
 import { resolve } from 'node:path';
 import { Session, Pacer } from './m59-session.mjs';
+import { disconnectKeeperClient } from './m59-keeper-disconnect.mjs';
 import {declaredJumpMoveOptions,prepareDeclaredJump} from './m59-jump-takeoff.mjs';
 // The addressing predicate, and WHY an order is not ours. Lifted out of this file so it can
 // be tested without starting a keeper — see m59-keeper-address.mjs.
@@ -232,6 +233,21 @@ console.error(`[keeper] ${agent} knows ${party.rosterCharacterNames(fleet).size}
 const { account, character } = entry.credentials;
 // An attached client never sends a password, and the spectate roster copy has none to give.
 const password = SPECTATE ? '(attached; never sent)' : entry.credentials.password;
+// Attached keepers still use the real roster, ownership guards and HTTP control surface.
+// A malformed attachment must fail closed BEFORE Session can fall back to a normal login.
+let keeperAttachment = null;
+if (process.env.M59_KEEPER_ATTACH && !SPECTATE) {
+  try {
+    keeperAttachment = JSON.parse(process.env.M59_KEEPER_ATTACH);
+    for (const [key, max] of [['port', 65535], ['gate_control', 65535], ['client_pid', 0x7fffffff], ['player', 0xffffffff]])
+      if (!Number.isInteger(keeperAttachment[key]) || keeperAttachment[key] < 1 || keeperAttachment[key] > max)
+        throw Error(`invalid ${key}`);
+    if (keeperAttachment.agent !== agent) throw Error('attachment names a different agent');
+  } catch (e) {
+    console.error(`[keeper] ${agent} refused malformed attachment: ${e.message}`);
+    process.exit(3);
+  }
+}
 const credHost = entry.credentials.host || host;
 const credPort = entry.credentials.port || serverPort;
 // THE BOOT ORDERS, AND THEY ARE RE-APPLIED ON EVERY REJOIN — so they are `let`, not
@@ -406,6 +422,16 @@ catch (error) {
 // ---------------------------------------------------------------- session
 
 const session = new Session(agent, { communicationStateFile: fleetPath });
+const attachmentView = () => keeperAttachment ? { agent,
+  client_pid: keeperAttachment.client_pid, attach_port: keeperAttachment.port,
+  gate_control: keeperAttachment.gate_control, player: session.client?.selfId ?? keeperAttachment.player } : null;
+// `save game` renumbers the player object. Every subsequent attach must use the last
+// player ID actually observed on this shared connection, not the original launch ID.
+const refreshAttachment = () => {
+  if (!keeperAttachment) return;
+  if (session.client?.selfId) keeperAttachment.player = session.client.selfId;
+  process.env.M59_KEEPER_ATTACH = JSON.stringify(keeperAttachment);
+};
 session.replayCaptureEnabled = process.env.M59_REPLAY_CAPTURE !== '0';
 session.pacer; // exists from constructor
 
@@ -473,6 +499,7 @@ session.cooperativeLoginAllowed = () => joinWanted && !dormancy && !handoffActiv
   if (rejoinOriginal) session.rejoin = async (...args) => {
     if (handoffActive()) throw new Error('keeper is handing off to its replacement; not reconnecting');
     if (dormancy) throw new Error(`keeper is dormant (${dormancy.reason}); not reconnecting`);
+    refreshAttachment();
     return rejoinOriginal(...args);
   };
 }
@@ -855,11 +882,23 @@ function releaseKeeper(why, token) {
 
 async function joinGenerationOnce(generation) {
   try {
+    refreshAttachment();
     await session.join({
       account, password, character,
       host: credHost, port: credPort,
     });
     assertJoinIntent(generation);
+    if (keeperAttachment) {
+      const c = session.client;
+      const observed = c?.rsc?.get?.(c?.self?.nameRsc) ?? c?.self?.name ?? c?.me?.name;
+      if (String(observed ?? '').normalize('NFKC').trim().toLowerCase() !==
+          String(character ?? '').normalize('NFKC').trim().toLowerCase()) {
+        try { c?.sock?.destroy(); } catch {}
+        throw Error('attached proxy player does not match the roster character');
+      }
+      c.me = { ...(c.me ?? {}), id: c.selfId, name: observed };
+      refreshAttachment();
+    }
     inGame = true;
     everJoined = true;
     connectionRevision++;
@@ -1337,6 +1376,7 @@ function state() {
     worldbook: session?.worldbook?.status?.() ?? { enabled: false },
     loot_policies: autopilot ? lootPolicyStatus(autopilot) : { protocol: 1, available: false, error: 'No running keeper autopilot' },
     connection_revision: connectionRevision,
+    ridealong: attachmentView(),
     // WHAT WE BELIEVE vs WHAT THE SOCKET SAYS.
     //
     // `inGame` is set true on a successful join and cleared ONLY by /leave and /rejoin —
@@ -1946,6 +1986,7 @@ const server = createServer(async (req, res) => {
         in_game: inGame,
         connected: !!session.live,
         connection_revision: connectionRevision,
+        ridealong: attachmentView(),
         // OUT ON PURPOSE. A dormant keeper is alive and deliberately not in the world; the record
         // says why and what ends it (m59-dormancy.mjs). null when it is not dormant.
         dormancy,
@@ -4783,9 +4824,7 @@ const server = createServer(async (req, res) => {
       writeAssignmentCarry('stop');
       changeJoinIntent(false);
       if (autopilot) autopilot.stop('keeper stop');
-      if (session.client) {
-        try { session.client.close(); } catch {}
-      }
+      try { disconnectKeeperClient(session.client); } catch {}
       saveFinalState();
       // Let the acknowledgement reach the verified caller before ending the process.
       json({ ok: true });
@@ -5660,9 +5699,7 @@ async function shutdown(why = 'SIGTERM') {
   changeJoinIntent(false);
   if (autopilot) autopilot.stop('SIGTERM');
   saveFinalState();
-  if (session.client) {
-    try { session.client.close(); } catch {}
-  }
+  try { disconnectKeeperClient(session.client); } catch {}
   try{await session.playerEvidence?.close?.();}finally{process.exit(0);}
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

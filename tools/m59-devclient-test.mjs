@@ -139,6 +139,12 @@ console.log('proxyFor prefers a gate-capable proxy');
     ok(find()?.listen === 5961, 'with only the swarm shim up, the client uses it');
     writeFileSync(join(pdir, '5962.json'), JSON.stringify({ listen: 5962, server: srv, pid: 2, at: 1, gate_control: 8931 }));
     ok(find()?.listen === 5962 && find().gate_control === 8931, 'a gate-capable proxy for the same server wins over the shim');
+    writeFileSync(join(pdir, '5963.json'), JSON.stringify({ listen: 5963, server: srv, pid: 3, at: 2, gate_control: 8933, attach: 8934, ridealong: 1 }));
+    ok(find()?.listen === 5963, 'a managed ridealong proxy wins while the legacy proxy remains available');
+    writeFileSync(join(pdir, '5964.json'), JSON.stringify({ listen: 5964, server: srv, pid: 4, at: 3, gate_control: 8935, attach: 8936, ridealong: 1 }));
+    ok(find()?.listen === 5964, 'the freshest compatible proxy wins instead of the first advert');
+    ok(proxyFor(srv.host, srv.port, { dir: pdir, isLive: () => true, startedAt: () => null,
+      ports: { listen: 5963, gate: 8933, attach: 8934 } })?.listen === 5963, 'explicit proxy ports can select an earlier compatible advert');
   } finally { rmSync(pdir, { recursive: true, force: true }); }
 }
 

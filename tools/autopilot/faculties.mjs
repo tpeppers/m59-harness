@@ -13,6 +13,7 @@
 //   inertStatus, static FACULTIES, static PROTECTED_FACULTIES, facultyOwner, facultyHeld,
 //   claimFaculties, releaseFaculties, heartbeatFaculties, facultyStatus
 import { describeCommitment } from '../m59-commitment.mjs';
+import { busyClaimRefusal } from '../m59-faculty-claim.mjs';
 import { claimantOrigin, journeyResumeOptions, keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
 import * as party from '../m59-party.mjs';
 import { recordShelterRun } from '../m59-shelter.mjs';
@@ -765,6 +766,8 @@ export class FacultiesPart {
                'the roster must name it in may_yield' });
         continue;
       }
+      const busyRefusal = busyClaimRefusal({ busy: this.busyStatus(), faculty: f, by });
+      if (busyRefusal) { refused.push(busyRefusal); continue; }
       // `at` is when this owner FIRST took it, not when the lease was last pushed out. A
       // heartbeat every thirty seconds would otherwise make every claim look ten seconds
       // old for ever, and "who has been driving this character for the last two hours" is

@@ -41,6 +41,7 @@ import { resolveFleet } from './m59-fleetpath.mjs';
 import { findClient, findClientExe, isSteamInstall, clientArgs, STEAM_APPID }
   from './m59-shortcuts.mjs';
 import { DEV_CLIENT, ensureUniversalLauncher, universalLauncherArgs, proxyFor } from './m59-devclient.mjs';
+import { ensureRidealongProxy, clientContextForDesk, deskMatchesRoster } from './m59-plan-proxy.mjs';
 import { DECK_CLIENT, launchUnderProton, winePath } from './m59-proton.mjs';
 import { localClients } from './m59-localclient.mjs';
 import { ensureServing, openBrowser, importUrl, COMPENDIUM_PORT } from './m59-compendium.mjs';
@@ -672,32 +673,32 @@ const PLAN_SUBSTRATE = env.M59_PLAN_SUBSTRATE || join(REPO, 'substrate');
 const PLAN_PROXY_PORT = Number(env.M59_PLAN_PROXY_PORT || 5962);
 const PLAN_GATE_PORT = Number(env.M59_PLAN_GATE_PORT || 8931);
 const PLAN_ATTACH_PORT = Number(env.M59_PLAN_ATTACH_PORT || 8932);   // spectate: the keeper attaches here
-const listeningOn = (port, ms = 400) => new Promise(res => {
-  const s = net.connect(port, '127.0.0.1');
-  s.once('connect', () => { s.destroy(); res(true); });
-  s.once('error', () => res(false));
-  setTimeout(() => { s.destroy(); res(false); }, ms);
-});
 async function ensurePlanProxy(host, port) {
-  if (await listeningOn(PLAN_PROXY_PORT)) return { started: false, ok: true };
-  const child = spawn(process.execPath,
-    [join(REPO, 'tools', 'm59-proxy.mjs'), '--listen', String(PLAN_PROXY_PORT), '--bind', '127.0.0.1',
-     '--server', `${host}:${port}`, '--observe', '--gate-control', String(PLAN_GATE_PORT), '--attach', String(PLAN_ATTACH_PORT), '--fleet-state', STATE_FILE, '--fleet', FLEET === '' ? '-' : FLEET],
-    { stdio: 'ignore', detached: true, windowsHide: true });
-  child.unref();
-  for (let i = 0; i < 20; i++) { if (await listeningOn(PLAN_PROXY_PORT, 300)) return { started: true, ok: true }; await new Promise(r => setTimeout(r, 250)); }
-  return { started: true, ok: false };
+  return ensureRidealongProxy({ host, port, listen: PLAN_PROXY_PORT, gate: PLAN_GATE_PORT, attach: PLAN_ATTACH_PORT,
+    explicit: { listen: !!env.M59_PLAN_PROXY_PORT, gate: !!env.M59_PLAN_GATE_PORT, attach: !!env.M59_PLAN_ATTACH_PORT },
+    find: ports => proxyFor(host, port, { ports }),
+    start: tuple => {
+      const child = spawn(process.execPath,
+        [join(REPO, 'tools', 'm59-proxy.mjs'), '--listen', String(tuple.listen), '--bind', '127.0.0.1',
+         '--server', `${host}:${port}`, '--observe', '--gate-control', String(tuple.gate), '--attach', String(tuple.attach), '--fleet-state', STATE_FILE, '--fleet', FLEET === '' ? '-' : FLEET],
+        { cwd: REPO, stdio: 'ignore', detached: true, windowsHide: true });
+      child.on('error', () => {}); child.unref();
+    },
+  });
 }
 function ensurePlanDesk() {
   // NORMALLY THE BROKER'S DESK IS ALREADY HERE (m59-broker.mjs startPlanDesk). This starts one only
   // when no desk is serving the client folder dev.bat points at -- a broker from before that, or
   // one started with M59_NO_PLAN_DESK=1 -- and the desk itself refuses to be a second.
   const dir = env.M59_CLIENT_CONTEXT_DIR || join(REPO, 'substrate', 'client-context');
-  if (liveDesk({ dir, substrate: PLAN_SUBSTRATE })) return { started: false };
+  const held = liveDesk({ dir, substrate: PLAN_SUBSTRATE });
+  // liveDesk also checks the substrate's compatibility heartbeat, whose client folder
+  // may be in another checkout. Always carry its advertised dir to the native launch.
+  if (held) return { started: false, ...(deskMatchesRoster(held, { fleet: FLEET, stateFile: STATE_FILE }) ? { elsewhere: held } : { mismatch: held }) };
   // A DESK FOR THIS FLEET IN ANOTHER CHECKOUT (the broker's, in prod-deploy) is the one whose loops
   // run; a second here, on this checkout's substrate, is the "two desks" problem again. That desk
   // answers this client with where it is running, and the status line says so here.
-  const elsewhere = desksIn(clientFolders(checkoutRoots(REPO))).find(d => (d.fleet || '') === (FLEET || ''));
+  const elsewhere = desksIn(clientFolders(checkoutRoots(REPO))).find(d => deskMatchesRoster(d, { fleet: FLEET, stateFile: STATE_FILE }));
   if (elsewhere) return { started: false, elsewhere };
   const child = spawn(process.execPath,
     [join(REPO, 'tools', 'm59-plan-desk.mjs'), '--fleet', FLEET === '' ? '-' : FLEET, '--substrate', PLAN_SUBSTRATE],
@@ -871,16 +872,20 @@ async function launchOnce(row, { viaProxy = false, extraEnv = null, creds: given
   if (devExe && WIN && !viaProxy && !GATE && !REMOTE && env.M59_TUI_NO_PLAN !== '1') {
     const pp = await ensurePlanProxy(realHost, realPort);
     const pd = ensurePlanDesk();
+    if (pd.mismatch) return refused(c.red('The MANAGE desk serving this client folder belongs to a different roster. Set M59_CLIENT_CONTEXT_DIR to a separate folder for this fleet.'));
+    extraEnv = { ...extraEnv, M59_CLIENT_CONTEXT_DIR: clientContextForDesk({
+      explicit: extraEnv?.M59_CLIENT_CONTEXT_DIR || env.M59_CLIENT_CONTEXT_DIR,
+      local: join(REPO, 'substrate', 'client-context'), desk: pd,
+    }) };
     const where = pd.elsewhere ? (pd.elsewhere.root ?? dirname(pd.elsewhere.substrate ?? '')) : null;
-    S.status = !pp.ok ? c.red(`PLAN proxy would not come up on ${PLAN_PROXY_PORT} — launching direct, no lock or Full Auto `)
-             : where ? c.yellow(`PLAN: the ${FLEET || 'unnamed'} desk runs from ${where}, not this checkout — ` +
-                                `the PLAN tab will say so; launch from there to use it… `)
-             : c.dim(`PLAN: proxy ${pp.started ? 'started' : 'up'} on ${PLAN_PROXY_PORT}, desk ${pd.started ? 'started' : 'up'}… `);
+    S.status = !pp.ok ? c.red(`PLAN proxy unavailable (${pp.why ?? 'startup failed'}) — launching direct, no lock or Full Auto `)
+             : where ? c.dim(`PLAN: proxy on ${pp.listen}, using the ${FLEET || 'unnamed'} desk from ${where}… `)
+             : c.dim(`PLAN: proxy ${pp.started ? 'started' : 'up'} on ${pp.listen}, desk ${pd.started ? 'started' : 'up'}… `);
     // AND CONNECT THROUGH IT. Starting the proxy is not enough: the client is launched with an
     // explicit host and port, so without this it went straight to the server and the PLAN tab
     // reported no gate-capable proxy carrying it. Only when 5962 fronts THIS character's server
     // (its advert says so): a proxy for another server would log the client into the wrong world.
-    if (pp.ok && proxyFor(realHost, realPort)?.listen === PLAN_PROXY_PORT) { host = '127.0.0.1'; port = String(PLAN_PROXY_PORT); }
+    if (pp.ok) { host = '127.0.0.1'; port = String(pp.listen); }
     draw();
   }
   // THE MANAGE TAB ON THE DECK BUILD. Under Proton there is no gate proxy (Full Auto and the

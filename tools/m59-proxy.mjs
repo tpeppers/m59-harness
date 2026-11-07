@@ -46,7 +46,7 @@ import { gateRefusal, newGate, gateLive, gateDrops, gateView } from './m59-proxy
 import { ProxyTrade } from './m59-proxy-trade.mjs';
 import { serveAttach } from './m59-proxy-attach.mjs';
 import { OpcodeToken } from './m59-proxy-token.mjs';
-import { writeFileSync, appendFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join as joinPath, dirname as dirnamePath } from 'node:path';
 
 import { dirname, join } from 'node:path';
@@ -503,10 +503,10 @@ export class ProxySession extends EventEmitter {
     //
     // The room therefore comes only from the client's own BP_REQ_MOVE, which is what
     // learn() does and what the original design got right.
-    if (this.inGame && payload[0] === BP_PLAYER && payload.length >= 5 &&
-        this.playerId === null) {
-      this.playerId = payload.readUInt32LE(1);
-      this.log(`learned playerId=${this.playerId} from BP_PLAYER`);
+    if (this.inGame && payload[0] === BP_PLAYER && payload.length >= 5) {
+      const id = payload.readUInt32LE(1);
+      if (this.playerId !== id) this.log(`learned playerId=${id} from BP_PLAYER`);
+      this.playerId = id;
     }
 
     // THE ROOM AND POSITION, WITHOUT ASKING A HUMAN TO WALK.
@@ -1020,7 +1020,7 @@ function serveControl(port, getSession) {
 //   GET  /gate                       every session's gate, by player object id
 //   POST /gate    {holder, reason, chat, ttl_ms, supersede}   ?player=<objId>
 //   POST /ungate  {holder}                                     ?player=<objId>
-export function serveGateControl(port, getSession) {
+export function serveGateControl(port, getSession, identity = {}) {
   return http.createServer((req, res) => {
     const send = (code, o) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -1029,7 +1029,7 @@ export function serveGateControl(port, getSession) {
       human_move_ms_ago: s.lastHumanMoveAt ? Date.now() - s.lastHumanMoveAt : null,
       attached: s.attached ? { agent: s.attached.agent, since: s.attached.since, ...s.attached.stats } : null }));
     if (req.method === 'GET' && (url.pathname === '/gate' || url.pathname === '/status'))
-      return send(200, { sessions: sessions() });
+      return send(200, { ...identity, gate_control: port, sessions: sessions() });
     if (req.method !== 'POST' || !['/gate', '/ungate', '/trade/accept-from', '/trade/give'].includes(url.pathname))
       return send(405, { error: 'GET /gate | POST /gate | /ungate | /trade/accept-from | /trade/give' });
     let body = '';
@@ -1074,7 +1074,9 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
     return [...sessions].find(s => s.playerId === sel) ?? null;
   };
   if (control) serveControl(control, pick);
-  if (gateControl) serveGateControl(gateControl, pick);
+  if (gateControl) serveGateControl(gateControl, pick, {
+    pid: process.pid, listen, server: { host, port }, attach_port: attachPort, ridealong: 1,
+  });
   // SPECTATE: a keeper attaches here and drives while it holds the gate (m59-proxy-attach.mjs).
   if (attachPort) serveAttach(attachPort, pick, m => console.error(m));
   // RECORD WHERE A HUMAN ACTUALLY WALKS. One file per proxy run — see the note on
@@ -1137,7 +1139,7 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
   //
   // The pid is in the file for the same reason the broker's is: a file outlives the process
   // that wrote it, and a reader has to be able to tell a live proxy from a leftover.
-  try {
+  const advertise = () => { try {
     const advert = joinPath(evidenceDirFor(), 'proxies', String(listen) + '.json');
     mkdirSync(dirnamePath(advert), { recursive: true });
     writeFileSync(advert, JSON.stringify({
@@ -1145,13 +1147,16 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
       // Where the plan desk takes and releases the controls (m59-proxy-gate.mjs).
       gate_control: arg('--gate-control') ? Number(arg('--gate-control')) : null,
       attach: arg('--attach') ? Number(arg('--attach')) : null,
+      ridealong: 1,
     }, null, 1));
-    const drop = () => { try { unlinkSync(advert); } catch { /* already gone */ } };
+    const drop = () => { try {
+      if (JSON.parse(readFileSync(advert, 'utf8')).pid === process.pid) unlinkSync(advert);
+    } catch { /* gone or replaced by a successor */ } };
     process.on('exit', drop);
     for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { drop(); process.exit(0); });
-  } catch { /* an unadvertised proxy still works; it just cannot be found automatically */ }
+  } catch { /* an unadvertised proxy still works; it just cannot be found automatically */ } };
 
-  serveProxy({
+  const server = serveProxy({
     listen, host, port, communicationStateFile,
     observe: process.argv.includes('--observe'),
     control: arg('--control') ? Number(arg('--control')) : null,
@@ -1162,4 +1167,6 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
     gateControl: arg('--gate-control') ? Number(arg('--gate-control')) : null,
     attachPort: arg('--attach') ? Number(arg('--attach')) : null,
   });
+  // Publish only after binding: a competing startup must never replace a live advert.
+  server.once('listening', advertise);
 }

@@ -1,5 +1,51 @@
 # The MANAGE tab (once PLAN): the fleet as a spellbook, and who holds the controls
 
+## Debug client ride-along
+
+The toolbar's robot button and MANAGE's **Release to Keeper** / **Reclaim from
+Keeper** rows use the same transfer. Release registers a normal broker keeper
+on the client's existing proxy connection. The character stays an automated
+fleet member: DUM orders, keeper HTTP controls and FleetScripts address it
+normally. Reclaim restores the native client's pilot claim before stopping
+that keeper. The button disables while a transfer is pending or the desk
+cannot be reached.
+
+MANAGE → **Keeper debug log** enables a local text-window copy of this
+character's keeper output. It defaults off per client and starts at the end
+of the log. It never sends log lines as game speech. The normal
+`substrate/keeper-<agent>.log` continues. Each viewer has its own cursor;
+reads and displayed output are bounded, including across log rotation.
+Updated clients advertise log support; older clients keep their protocol.
+
+FleetScript forms and `fs <script> key=value` accept running automated
+fleetmates, including the released watched character after the broker
+confirms its attachment. Normal run locks and keeper leases still apply.
+A live DUM errand remains busy and is refused by name; standing DUM claims
+can be borrowed and resumed afterward. A DUM heartbeat cannot retake
+faculties during another holder's busy operation.
+
+The desk renews the input gate while the registered keeper is available.
+Gate expiry or loss restores native pilot protection. Closing the client
+lets the broker resume an ordinary connection after the shared proxy
+session closes. An unconfirmed release is reported as such.
+
+This replaces the standalone spectate process described in the historical
+sections below. Reclaim old spectate sessions and relaunch their clients
+when updating. Install both patched `meridian.exe` and
+`resource/merintr.dll` together for the new toolbar API.
+
+L checks the proxy's running capability and server identity. If the old proxy
+still carries clients, a compatible proxy starts beside it on free ports
+(usually listen `5963`, gate `8933`, attach `8934`). Existing sessions stay
+connected. Explicit port and context-directory settings are honored. A new
+client follows its roster-matched desk's actual context directory.
+
+Offline regressions: `m59-plan-control-test.mjs`,
+`m59-plan-fleetscripts-test.mjs`, `m59-ridealong-test.mjs`,
+`m59-faculty-busy-test.mjs`, plus the existing MANAGE, FleetScript,
+proxy-gate and spectate suites. The native client has a matching
+`module/merintr/planpane_test.cpp` Win32 UI regression test.
+
 **Renamed 2026-10-21** (client `70a2b8dc`). Only what a person reads changed: the button says
 MANAGE, the chat command is `manage` (`plan` still works). The files, ids, desk and this doc's name
 keep PLAN, so a desk and a client of either age still find each other. The whole client is described
