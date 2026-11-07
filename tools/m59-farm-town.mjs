@@ -43,7 +43,13 @@
 import { itemNameKey } from './m59-items.mjs';
 
 export const FARM_TOWN_KINDS = Object.freeze(['food', 'weapons', 'armor', 'reagents']);
-const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep']);
+const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep', 'hall', 'uncurse']);
+// The public door to the Barloque guild halls (the reagent coop enters the hall from here, m59-reagent-coop-runtime.mjs) and
+// Frular's room (the rent, m59-tithe.mjs FRULAR_ROOM). A farm town's `hall` road may leave the confinement for these three.
+export const NORTH_BARLOQUE = 101;
+export const FRULAR_ROOM = 700;
+export const HALL_DEFAULTS = Object.freeze({ magicWeapons: true, weaponsTripAt: 3 });
+export const REMOVE_CURSE_POTION = 'remove curse potion';
 const words = s => String(s ?? '').toLowerCase().replace(/[’`]/g, "'").split(/[^a-z0-9']+/).filter(Boolean);
 
 function room(what, v) {
@@ -76,9 +82,9 @@ const plain = v => v !== null && typeof v === 'object' && !Array.isArray(v);
  */
 export function normalizeFarmTown(v, { resolveItem = null } = {}) {
   if (v === null || v === undefined) return null;
-  if (!plain(v)) throw new Error('town must be { name?, sell, buy, bank?, keep? } or null');
+  if (!plain(v)) throw new Error('town must be { name?, sell, buy, bank?, keep?, hall?, uncurse? } or null');
   for (const k of Object.keys(v)) if (!TOP_KEYS.includes(k)) throw new Error(`town: unrecognised key ${k} (known: ${TOP_KEYS.join(', ')})`);
-  const out = { name: null, sell: [], buy: {}, bank: null, keep: [] };
+  const out = { name: null, sell: [], buy: {}, bank: null, keep: [], hall: null, uncurse: null };
   if (v.name != null) { if (typeof v.name !== 'string' || !v.name.trim()) throw new Error('town.name must be a word'); out.name = v.name.trim(); }
   if (v.sell != null) {
     if (!Array.isArray(v.sell)) throw new Error('town.sell must be a list of { seller, room }');
@@ -116,7 +122,30 @@ export function normalizeFarmTown(v, { resolveItem = null } = {}) {
       ? v.bank.name.trim() : `bank (room ${room('town.bank.room', v.bank.room)})` };
   }
   if (v.keep != null) out.keep = itemList('town.keep', v.keep, resolveItem);
-  if (!out.sell.length && !Object.keys(out.buy).length && !out.bank)
+  // THE GUILD HALL INSTEAD OF A BANK (operator 2026-11-07: "let them deposit in the guild chest instead of banking").
+  if (v.hall != null) {
+    if (!plain(v.hall)) throw new Error('town.hall must be { room, magicWeapons?, weaponsTripAt? } or null');
+    for (const k of Object.keys(v.hall)) if (!['room', 'magicWeapons', 'weaponsTripAt'].includes(k)) throw new Error(`town.hall: unrecognised key ${k}`);
+    const h = { room: room('town.hall.room', v.hall.room), ...HALL_DEFAULTS };
+    if (v.hall.magicWeapons != null) {
+      if (typeof v.hall.magicWeapons !== 'boolean') throw new Error('town.hall.magicWeapons must be true or false');
+      h.magicWeapons = v.hall.magicWeapons;
+    }
+    if (v.hall.weaponsTripAt != null) {
+      const n = Number(v.hall.weaponsTripAt);
+      if (!Number.isInteger(n) || n < 1 || n > 20) throw new Error('town.hall.weaponsTripAt must be a whole number from 1 to 20');
+      h.weaponsTripAt = n;
+    }
+    out.hall = h;
+  }
+  // A CURSED WEAPON IS LIFTED IN TOWN (operator 2026-11-07): sell, buy a remove curse potion here, drink, drop, then buy.
+  if (v.uncurse != null) {
+    if (!plain(v.uncurse)) throw new Error('town.uncurse must be { seller, room, item? } or null');
+    for (const k of Object.keys(v.uncurse)) if (!['seller', 'room', 'item'].includes(k)) throw new Error(`town.uncurse: unrecognised key ${k}`);
+    const item = v.uncurse.item == null ? REMOVE_CURSE_POTION : itemList('town.uncurse.item', [v.uncurse.item], resolveItem)[0];
+    out.uncurse = { seller: seller('town.uncurse.seller', v.uncurse.seller), room: room('town.uncurse.room', v.uncurse.room), item };
+  }
+  if (!out.sell.length && !Object.keys(out.buy).length && !out.bank && !out.hall)
     throw new Error('town names no counter at all (sell, buy or bank); use null for "no farm town"');
   return out;
 }
@@ -222,4 +251,82 @@ export function farmTownOutfit(town, wants = []) {
                room: named.room, seller: named.seller });
   }
   return { wants: out, dropped, room: out[0]?.room ?? null, seller: out[0]?.seller ?? null };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// THE HALL ROAD, THE HALL CARGO AND THE CURSE ERRAND (operator, 2026-11-07, of the Farol farmers: "let them deposit in the
+// guild chest instead of banking, also set them to tithe for the guild rent" and "pick up magic weapons and deposit them in
+// the guild chest if they are not cursed. If they are cursed they should go sell in Marion, then buy a remove curse potion
+// from the potion shop and drop their cursed weapon before doing any buying they need and going back out farming").
+
+/** Rooms a hall trip may walk to past the confinement: the public door, the hall, Frular. [] without a hall. */
+export function farmTownRoadRooms(town) {
+  if (!town?.hall) return [];
+  return [...new Set([NORTH_BARLOQUE, town.hall.room, FRULAR_ROOM])];
+}
+
+/**
+ * Is this pack object LOOT MAGIC that belongs in the guild hall? A weapon the server grades as carrying a hidden attribute
+ * (100, unidentified) or an identified magic grade (1 uncommon, 2 rare, 4 legendary; GetRarity item.kod:714-730) -- never 0
+ * (mundane, and every Kraanan dedication, whose rarity modifier is 0), never 200 (graded cursed), never a stack. Never what
+ * is in hand or worn, never one the server has called cursed, never one this keeper holds back (its own dedicated weapon, a
+ * delivery), never its own conjured weapon. `isWeapon(name)` is the session's weapon classifier, handed in.
+ */
+export function isHallBoundWeapon({ o, name, equipped = null, cursed = false, held = null, ownSummon = false, isWeapon }) {
+  if (!o || typeof isWeapon !== 'function' || !isWeapon(name)) return false;
+  if ((Number(o.amount) || 0) > 1) return false;
+  if (![100, 1, 2, 4].includes(Number(o.rarity))) return false;
+  if (equipped?.has?.(o.id) || cursed || ownSummon || held?.has?.(Number(o.id))) return false;
+  return true;
+}
+
+/**
+ * Should a hall visit happen on THIS trip, and what goes in? `purse` and `keep` in shillings (keep = walking money plus the
+ * posted shopping bill); `bankAbove` the policy threshold (0/null: never for money alone); `weapons` the hall-bound weapon
+ * count. Money goes only when the purse is over bank_above -- the same trigger as a bank walk -- and then everything above
+ * `keep`; weapons go when there are `weaponsTripAt` of them, and ride along with any money visit.
+ *   -> { go, shillings, weapons, why }
+ */
+export function hallDepositPlan(town, { purse = 0, keep = 0, bankAbove = null, weapons = 0 } = {}) {
+  const h = town?.hall;
+  if (!h) return { go: false, shillings: 0, weapons: 0, why: 'no hall on this farm town' };
+  const rich = Number(bankAbove) > 0 && purse > Number(bankAbove);
+  const shillings = rich ? Math.max(0, Math.floor(purse - keep)) : 0;
+  const w = h.magicWeapons ? Math.max(0, Math.floor(Number(weapons) || 0)) : 0;
+  if (!shillings && w < h.weaponsTripAt)
+    return { go: false, shillings: 0, weapons: 0,
+             why: (rich ? 'over bank_above but nothing above the keep' : `purse ${purse} not over bank_above ${bankAbove ?? 'off'}`) +
+               (w ? `; ${w} hall weapon(s), under ${h.weaponsTripAt}` : '') };
+  return { go: true, shillings, weapons: w,
+           why: [shillings ? `purse ${purse} over bank_above ${bankAbove}: ${shillings} to the chests` : null,
+                 w ? `${w} magic weapon(s) for the chests` : null].filter(Boolean).join('; ') };
+}
+
+/**
+ * THE CURSE ERRAND, IN THE OPERATOR'S ORDER, AS A STATE MACHINE. Each call answers the ONE next thing to do; the keeper
+ * does it, reads the world back and asks again. Buying (food, axe, armour) waits for 'done' or 'stuck', so it cannot
+ * happen first.
+ *
+ *   cursed   { id, name, wielded } | null   the weapon (null: no curse, the errand is 'none')
+ *   sold     the Marion sale for this trip has run (the cursed weapon and everything equipped held out of every offer)
+ *   potions  remove curse potions in the pack
+ *   inPack   the cursed weapon is still in the pack (re-read, by id)
+ *   tries    { buy, drink, drop } attempts so far; CURSE_TRIES of any one is 'stuck', never a loop
+ *   -> { step: 'none'|'sell'|'buy_potion'|'drink'|'drop'|'done'|'stuck', why }
+ */
+export const CURSE_TRIES = 3;
+export function curseErrandNext({ cursed = null, sold = false, potions = 0, inPack = true, tries = {} } = {}) {
+  if (!cursed) return { step: 'none', why: 'no cursed weapon' };
+  if (!inPack) return { step: 'done', why: `the ${cursed.name ?? 'cursed weapon'} is gone from the pack` };
+  if (!sold) return { step: 'sell', why: 'sell first, with the cursed weapon and everything equipped held out of the offer' };
+  if (cursed.wielded) {
+    if (potions > 0) {
+      if ((tries.drink ?? 0) >= CURSE_TRIES) return { step: 'stuck', why: `drank ${tries.drink} potion(s) and the hand still holds it` };
+      return { step: 'drink', why: 'a remove curse potion unuses every cursed item (RemoveCurseAllItems)' };
+    }
+    if ((tries.buy ?? 0) >= CURSE_TRIES) return { step: 'stuck', why: `asked for a remove curse potion ${tries.buy} time(s) and got none` };
+    return { step: 'buy_potion', why: (tries.drink ?? 0) ? 'the potion did not free the hand: another' : 'the hand will not let go: buy the cure' };
+  }
+  if ((tries.drop ?? 0) >= CURSE_TRIES) return { step: 'stuck', why: `dropped it ${tries.drop} time(s) and it is still in the pack` };
+  return { step: 'drop', why: 'out of the hand: drop it (the curse stays on the item after a remove curse)' };
 }

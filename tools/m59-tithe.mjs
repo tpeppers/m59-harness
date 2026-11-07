@@ -63,6 +63,30 @@ export function localDayKey(at = Date.now()) {
     String(d.getDate()).padStart(2, '0')].join('-');
 }
 
+/**
+ * A strategy's `guildTithe` (m59-strategy-schema.mjs), the broker's `guild_tithe`: null -> null (off); a whole number ->
+ * that daily amount; `{ enabled?: true, dailyAmount | daily_amount }` -> `{ enabled: true, daily_amount }`. The keeper
+ * pays at most this much a day, from verified town-sale proceeds only, to Frular (guildTitheFromSale). Throws on a bad
+ * shape -- a misspelt key that silently meant "tithe nothing" is the failure this refuses.
+ */
+export const GUILD_TITHE_MAX = 100_000;
+export function normalizeGuildTithe(v) {
+  if (v === null || v === undefined || v === false) return null;
+  let amount;
+  if (typeof v === 'number') amount = v;
+  else if (v && typeof v === 'object' && !Array.isArray(v)) {
+    for (const k of Object.keys(v)) if (!['enabled', 'dailyAmount', 'daily_amount'].includes(k))
+      throw new Error(`guildTithe: unrecognised key ${k} (known: enabled, dailyAmount)`);
+    if (v.enabled === false) return null;
+    if (v.enabled !== undefined && v.enabled !== true) throw new Error('guildTithe.enabled must be true or false');
+    amount = v.dailyAmount ?? v.daily_amount;
+  } else throw new Error('guildTithe is null, a daily amount, or { dailyAmount }');
+  const n = Number(amount);
+  if (typeof amount === 'boolean' || !Number.isInteger(n) || n < 1 || n > GUILD_TITHE_MAX)
+    throw new Error(`guildTithe.dailyAmount must be a whole number of shillings from 1 to ${GUILD_TITHE_MAX}`);
+  return { enabled: true, daily_amount: n };
+}
+
 export function tithePaymentPlan({ dailyAmount, paidToday = 0, saleProceeds = 0,
                                    purse = 0, walkingMoney = 0 } = {}) {
   const target = Math.max(0, Math.floor(Number(dailyAmount) || 0));

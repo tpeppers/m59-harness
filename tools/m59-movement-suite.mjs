@@ -219,6 +219,8 @@ const SUITES = [
    'travel_guard: what a journey may interrupt itself for, on which clock'],
   ['m59-travel-hunt-test.mjs',
    'travelHunt: a keeper work journey stops its walk for an in-band monster in reach, never on an order it did not give or below the flee line'],
+  ['m59-farm-hall-test.mjs',
+   'the uncapped road: a road hunt never spends the attempts of a resumed journey; the hall road leaves the confinement for its own rooms only'],
   ['m59-safespot-test.mjs',
    'a wall is the two grids disagreeing, and the spot book stays a book'],
   ['m59-impossible-test.mjs',

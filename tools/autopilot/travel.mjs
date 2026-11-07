@@ -12,6 +12,7 @@
 //   travelHoldCandidate, travelHold, travelRestAtSanctuary, restBeforeSettingOut,
 //   travelInterrupted, recoveryTravel, travel
 import { findPath } from '../m59-map.mjs';
+import { farmTownRoadRooms } from '../m59-farm-town.mjs';
 import { folRoomsOf } from '../m59-chalice.mjs';
 import * as grudge from '../m59-grudge.mjs';
 import { recordSightings } from '../m59-intel.mjs';
@@ -793,7 +794,7 @@ export class TravelPart {
     // an existing suspended objective, even if they use ordinary travel().
     const { holdBetweenRooms = true, recoveryDetour = !!this.suspendedJourney, onHop,
             chalice: _chalice, chaliceRoom: _chaliceRoom, explicitOrder = false,
-            approachLeg = false, deskRide = true, ...sessionOpts } = opts ?? {};
+            approachLeg = false, deskRide = true, townRoad = false, ...sessionOpts } = opts ?? {};
     // Capture the issuer before a nested shelter walk replaces the live cell order.
     const capturedTravelOrigin = sessionOpts.origin ?? (Number(this.inert?.to) === Number(room) ? this.inert?.origin : null)
       ?? (Number(liveMoveOrder(this.s)?.to) === Number(room) ? liveMoveOrder(this.s)?.origin : null);
@@ -948,8 +949,22 @@ export class TravelPart {
         why: survivalEdge.why, room: this.s.world?.room?.num ?? null });
     }
     const survivalExitLeg = survivalEdge?.allowed === true;
+    // A FARM TOWN'S HALL ROAD (m59-farm-town.mjs `hall`; operator 2026-11-07: "let them deposit in the guild chest instead
+    // of banking ... tithe for the guild rent"). Like chalice duty, an exception for named rooms only: the hall, its public
+    // door and Frular, and only when the caller says this IS the hall trip (`townRoad`). The road there is let through the
+    // step guard by an edge pass naming the rooms the route crosses into, for this journey only.
+    const hallRoadRooms = townRoad ? farmTownRoadRooms(this.policy?.farmTown) : [];
+    const hallRoad = outsideConfine && hallRoadRooms.includes(Number(room));
+    let hallEdgePass = null;
+    if (hallRoad) {
+      let crossed = [];
+      try { const r = this.s.world?.route?.(Number(room)); if (r?.found) crossed = (r.hops ?? []).map(h => Number(h.to)).filter(Number.isFinite); } catch {}
+      hallEdgePass = { to: Number(room), why: 'farm town hall road', rooms: [...new Set([...crossed, Number(room)])] };
+      this.note('hall road leaves the confinement', { wanted: Number(room), confined_to: confine.map(Number),
+        crosses: hallEdgePass.rooms, why: 'the farm town names a guild hall; its road and Frular are town trips' });
+    }
     if (outsideConfine && !chaliceRooms.includes(Number(room))
-        && !approachRoom && !survivalExitLeg) {
+        && !approachRoom && !survivalExitLeg && !hallRoad) {
       this.note('refused to leave the confinement', {
         wanted: Number(room), confined_to: confine.map(Number),
         here: this.s.world?.room?.num ?? null, doing: this.doing,
@@ -1267,7 +1282,8 @@ export class TravelPart {
         movementGeneration,
         ...(wantSide ? { arriveNear: wantSide } : {}),
         // THE STEP GUARD'S PASS for a survival exit allowed out of the confinement above: this one room, this journey.
-        ...(survivalExitLeg ? { edgePass: { to: Number(room), why: survivalEdge.why } } : {}),
+        ...(survivalExitLeg ? { edgePass: { to: Number(room), why: survivalEdge.why } }
+          : hallEdgePass ? { edgePass: hallEdgePass } : {}),
         // A ROOM THAT IS WORKED RATHER THAN WALKED ends the walk on arrival and hands the body
         // to the keeper (passLeverPuzzle). Only 2600 on the way to 2601 today.
         handOffAt: (here, to) => puzzleBlocksJourney(here, to),

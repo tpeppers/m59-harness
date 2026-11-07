@@ -141,8 +141,19 @@ fight, and disengages at the flee line. What it never does, one gate each:
 - below the flee line it does nothing; it OPENS a fight only at `engageAt` and the vigor floor, and answers one already on
   us between the flee line and `engageAt`;
 - never under an errand, never a player, never a crowd (`maxThreats` within eight squares), never in a wall-to-wall room
-  (Ukgoth), at most `maxPerJourney` fights a destination -- under the resume cap, so it cannot turn a road into a loop;
+  (Ukgoth), at most `maxPerJourney` fights a destination -- or none at all: `maxPerJourney: null` is UNCAPPED (operator,
+  2026-11-07: "Uncap fights per trip, we want the max for those farmers");
 - `travel_guard: { clear_path: false }` switches it off with every other road swing.
+
+**Why uncapping is safe: a road fight is not a resume attempt.** The old ceiling of 11 existed only because a road fight
+cancels the walk, and a RESUMED journey that ends short is re-suspended with `attempts + 1` -- so a twelfth road fight on a
+resumed journey would trip the runaway guard (`resumeTravelAttempts`, 12) and drop the objective. Rather than keep a fight
+cap under that, the coupling is cut: `roadHuntResume` re-suspends a resume that a road hunt stopped (a road fight since
+THAT resume set out, `travelHuntRoad.lastAt >= resumedAt`) with its attempts UNCHANGED and counts `road_hunt_pauses`
+instead. Every other short ending still counts. The runaway guard keeps two backstops on the road-hunt path: the
+suspension's thirty-minute staleness, measured from the first suspension (a re-suspension keeps `at`), and
+`ROAD_HUNT_PAUSE_CAP` (200) road-hunt pauses, after which they count again. A non-resumed keeper journey (a town trip leg)
+never had an attempt budget: its leg is re-issued five seconds later.
 
 `node tools/m59-travel-hunt-test.mjs` is the guard.
 

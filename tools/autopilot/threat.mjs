@@ -906,7 +906,7 @@ export class ThreatPart {
     this.note('ROAD HUNT — stopping the walk for a fight', {
       target: d.pick.name, distance: +d.pick.d.toFixed(1), attacking: !!d.pick.attacking, why: d.why,
       journey_to: to, origin: origin ? `${origin.source}:${origin.name}` : null, room,
-      road_fights: this.travelHuntRoad.fights, of: cfg.maxPerJourney,
+      road_fights: this.travelHuntRoad.fights, of: cfg.maxPerJourney ?? 'unlimited',
       health: hp ? `${hp.value}/${hp.max}` : null, interrupted: broke?.interrupted ?? null,
     });
     return this.fightBackDue;

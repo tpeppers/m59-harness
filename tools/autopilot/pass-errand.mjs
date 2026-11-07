@@ -17,6 +17,7 @@ import { keeperOrigin, moveOrigin } from '../m59-move-origin.mjs';
 import { opensFightFromWall } from '../m59-policydiff.mjs';
 import * as skills from '../m59-skills.mjs';
 import { scriptedDeviationResumeCandidate, scriptedTrafficResumeReady } from '../m59-traffic-resume.mjs';
+import { roadHuntResume } from '../m59-travel-hunt.mjs';
 import { CONTINUE, HANDLED, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, RESUME_FLAT_SAMPLES, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorPct } from '../m59-autopilot.mjs';
 
 export class PassErrandPart {
@@ -614,6 +615,7 @@ export class PassErrandPart {
       why: 'the survival ladder ended the movement, not the objective',
     });
     recordEvent(this.who(), 'travel_resumed', { to: j.to, trigger: j.trigger, attempts: j.attempts });
+    const resumedAt = Date.now();
     this.goTravelling(`travelling to ${j.to} (resumed)`, { to: j.to, attempts: j.attempts, guard: j.guard, origin: j.origin, resume: j.resume });
     const ours = this.inert;
     let outcome = null;
@@ -636,9 +638,11 @@ export class PassErrandPart {
         if (!ours.cancelled && outcome?.arrived !== true && here !== Number(j.to)
             && !outcome?.refused && here !== 1 && !this.recoverUntilWhole
             && (this.tally?.deaths ?? 0) === j.deaths_at) {
-          this.suspendedJourney = { ...j, attempts: (j.attempts ?? 0) + 1,
-            trigger: outcome?.reason ?? outcome?.outcome ?? 'resumed journey ended short',
-            next_try_at: Date.now() + 5000 };
+          // A ROAD HUNT IS NOT AN ATTEMPT (m59-travel-hunt.mjs roadHuntResume): the keeper stopped its own walk to fight
+          // something beside the road, so this resume keeps its attempts and the road can be hunted without a cap.
+          this.suspendedJourney = roadHuntResume(j, {
+            roadHunted: Number(this.travelHuntRoad?.lastAt ?? 0) >= resumedAt,
+            trigger: outcome?.reason ?? outcome?.outcome ?? 'resumed journey ended short' });
         }
         this.revive('resumed journey ended');
       }

@@ -601,7 +601,68 @@ armor and axe, and buys weapons and shields only; **Tova** (`mrbart.kod`, 202) s
 `MOB_RECEIVE` without `MOB_BUYER` -- she takes an item and pays nothing; **Morrigan** (`mrinnk.kod`, 202, the innkeeper)
 buys sundries, food, reagents and wearables and sells herbs, elderberry, pants and a torch; Lady Aftyn (205) and the
 elder (200) take and pay nothing. **There is no bank in Marion.** `m59-merchants.mjs show 202` prints Tova only; Morrigan
-appears under `show MarionInnKeeper`.
+appears under `show MarionInnKeeper`. **Lady Aftyn** (`mrhealer.kod`, 205) sells the purify, remove curse, cure poison and
+cure disease potions and a flask.
+
+### The guild hall instead of a bank, the rent, magic weapons and a cursed weapon (`town.hall`, `town.uncurse`, `guildTithe`)
+
+Operator, 2026-11-07, of the same farmers: *"let them deposit in the guild chest instead of banking, also set them to tithe
+for the guild rent"*, then *"pick up magic weapons and deposit them in the guild chest if they are not cursed. If they are
+cursed they should go sell in Marion, then buy a remove curse potion from the potion shop and drop their cursed weapon
+before doing any buying they need and going back out farming"*, and *"make sure they don't try to sell the cursed weapon
+while it's equipped or it cancels the transaction"*.
+
+```js
+town: { ..., bank: null,
+  hall: { room: 714, magicWeapons: true, weaponsTripAt: 3 },              // the Bookmaker's Guild House
+  uncurse: { seller: 'Lady Aftyn', room: 205, item: 'remove curse potion' } },
+guildTithe: { dailyAmount: 800 },
+```
+
+- **The trip, in order.** A Marion trip runs: sell (Morrigan, Colhorr) -> **lift the curse** -> **guild tithe** (Frular,
+  700) -> **hall deposit** (714) -> back to Marion -> the buying (bread, axe, leather armour) -> home. Each is a town-trip
+  step (`continueTownTrip`), resumable after a survival pause, and a no-op without its key.
+- **Money goes to the hall when the purse is over `bank_above`** (`hallDepositPlan`), the same trigger as a bank walk, and
+  then everything above walking money plus the posted shopping bill. A purse over `bank_above` OPENS a Marion trip by
+  itself (`farmTownErrand`, at most once in 30 minutes) -- sell first, then the hall.
+- **How coins actually get into a chest.** `hall_withdraw` with `deposit: ['shilling']` was measured moving no coins
+  (2026-11-07). The reagent coop's cash tithe does move them -- a put with an explicit amount, verified by BOTH the pack and
+  the chest delta, with receipts on prod (`substrate/stockpile/prod.coop.ndjson`, `deposit shilling` rows). So the hall
+  visit IS that visit (`runReagentCoop(..., 'tithe')` with `hallVisitConfig(714)`: 100% of the bank-bound money, the 75,000
+  chest cap, guild secrecy, the hall password and rank check, the guild passage) -- without switching the reagent coop on.
+  The same visit puts the loot weapons in, by id, one chest at a time, each verified the same way.
+- **The road leaves the confinement as a town trip, and only to three rooms**: North Barloque (101, the hall's public door),
+  the hall, and Frular (700) -- `farmTownRoadRooms`. `Autopilot.travel({ townRoad: true })` lets those destinations past the
+  confinement gate (like chalice duty), and hands the edge step guard a pass naming the rooms the route crosses into, for
+  that journey's movement generation only (`edgePass.rooms`, twenty minutes at most). Every other journey is confined as
+  before. Marion -> Barloque is about ten rooms (200 > 535 > 545 > 554 > 564 > 563 > 583 > 593 > 102 > 101), and `travelHunt`
+  hunts it (origins `hall_deposit`, `guild_tithe`).
+- **The rent is paid to Frular, never into a chest.** A guild's rent account is credited only by
+  `GuildCreator.ReqOffer` (`gcreator.kod:325`); coins in a chest are the guild's savings, not its rent. So `guildTithe`
+  is the existing `guild_tithe` policy (`m59-tithe.mjs`: at most `daily_amount` a day per character, from VERIFIED sale
+  proceeds only, recorded by the purse delta) as a strategy key, and with a hall the walk to 700 uses the hall road. The
+  Bookmaker's hall costs 12,000 a day (`guildh14.kod:191`), so fifteen farmers at 800 a day cover it alone.
+- **Magic weapons are cargo** (`hall.magicWeapons`, default on with a hall). `isHallBoundWeapon`: a weapon the server grades
+  unidentified (100) or magic (1, 2, 4) -- never grade 0 (mundane, and every Kraanan dedication), never 200 (cursed), never
+  what is in hand, never the keeper's own dedicated weapon (`heldBackIds`) or conjured one. They are held back from the
+  sale, the field weapon cap, sharing and the loot cap's count, and an unread one is NEVER WIELDED (`c._noUnreadWield`,
+  `weaponRanking`), overriding the 2026-10-23 rule that unread weapons are candidates. `lootUnrevealedWeapons: 'always'` in
+  the strategy says out loud that they are picked up. Three of them open a trip by themselves (`weaponsTripAt`).
+- **A cursed weapon** (the server's "seems to cling to your hand", a certain curse suspect, or graded 200) opens a Marion
+  trip (at most once in 15 minutes) and the trip's `lift the curse` step runs a state machine (`curseErrandNext`): **sell
+  first**, then walk to Lady Aftyn (`MarionHealer`, `mrhealer.kod`, room 205, `MOB_SELLER`), buy one **remove curse
+  potion** (`rmcursep.kod`, `viValue_average` 60, sold at `MERCHANT_DISCOUNT`), drink it (`apply` on self: `SID_REMOVE_CURSE`,
+  RemoveCurseAllItems unuses every cursed item and leaves the attribute on it), **drop** the weapon and read the pack back --
+  and only then the buying. A potion fills 10 of a 100 stomach (`potion.kod` `viFilling`, `player.kod` ReqEatSomething), so
+  "too full to drink" waits a minute rather than spending an attempt -- which is also why the buying comes after the drink.
+  Three failed buys, drinks or drops is `stuck`: the shopping goes on and the errand waits an hour.
+- **The sale never offers a cursed weapon in hand, the hall cargo, or anything equipped.** A cursed item in the use list
+  refuses to leave (`wacursed.kod` ItemReqLeaveOwner) and cancels the trade. `sellAll` takes `exclude` (the keeper's
+  `saleExcludeIds`: the cursed weapon and the hall cargo), and re-reads the use list before EVERY offer, so an item equipped
+  between the plan and the counter is refused at the counter, never offered. A cursed weapon out of the hand is offered as
+  before (it can leave).
+
+`node tools/m59-farm-hall-test.mjs` is the guard.
 
 ## Per-creature loot: `loot_only`
 

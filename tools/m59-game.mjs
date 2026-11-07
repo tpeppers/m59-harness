@@ -2073,10 +2073,15 @@ class Session {
   // into one where we died to a player within the PvP hold) and hands travel `edgePass: {to}`. It opens exactly one
   // crossing: from the room the journey set out from, into that room, while the journey's movement generation is live.
   // A cancel, a new order, arrival, or two minutes ends it -- nothing else the body does is let out.
+  // A FARM TOWN'S HALL ROAD (m59-farm-town.mjs `hall`) is the other pass: `rooms` names every room the planned road crosses
+  // into, and any crossing INTO one of them is let out, from whichever confined room the walk leaves by, for this journey's
+  // movement generation only (a cancel, a new order or arrival ends it; twenty minutes at most).
   edgePassAllows(to) {
     const p = this.edgePass;
-    if (!p || Number(to) !== p.to) return false;
+    if (!p) return false;
     if (Date.now() > p.until || this.movementGeneration !== p.generation) { this.edgePass = null; return false; }
+    if (Array.isArray(p.rooms)) return p.rooms.includes(Number(to));
+    if (Number(to) !== p.to) return false;
     return Number(this.world?.room?.num) === p.from;
   }
   // Would the guard below refuse a step over an EDGE from the room we stand in into room `to`? Go exits are not guarded.
@@ -5282,7 +5287,10 @@ class Session {
       cands = cands.filter(o => {
         const name = c.rsc.get(o.nameRsc) || '';
         if ((shed?.get?.(o.id) ?? 0) > now - 1_800_000) { shedSkipped.push(name); return false; }
-        if (!this.lootDisposition?.(o)?.pickup && cap && Number.isFinite(cap.max) && skills.weaponScore(name) > 0) {
+        // A farm town's hall takes loot magic weapons (m59-farm-town.mjs `hall.magicWeapons`, set on the client as
+        // `_noUnreadWield`): a graded one is cargo for the chests, not a spare against the cap.
+        const hallCargo = c._noUnreadWield === true && (Number(o.amount) || 0) <= 1 && [100, 1, 2, 4].includes(Number(o.rarity));
+        if (!hallCargo && !this.lootDisposition?.(o)?.pickup && cap && Number.isFinite(cap.max) && skills.weaponScore(name) > 0) {
           if (spares >= cap.max) { shedSkipped.push(name); return false; }
           spares++;
         }
@@ -5797,7 +5805,8 @@ class Session {
   } = {}) {
     this.edgePass = edgePass && Number.isFinite(Number(edgePass.to))
       ? { to: Number(edgePass.to), from: Number(this.world?.room?.num), generation: movementGeneration,
-          until: Date.now() + 120_000, why: edgePass.why ?? null }
+          ...(Array.isArray(edgePass.rooms) ? { rooms: edgePass.rooms.map(Number).filter(Number.isFinite) } : {}),
+          until: Date.now() + (Array.isArray(edgePass.rooms) ? 1_200_000 : 120_000), why: edgePass.why ?? null }
       : null;
     if (allowRescue) {
       const {tryRescueTravel} = await import('./m59-rescue-travel.mjs');

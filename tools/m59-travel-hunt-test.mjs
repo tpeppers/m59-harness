@@ -37,7 +37,13 @@ console.log('\nthe setting');
   ok('enabled:false is off', normalizeTravelHunt({ enabled: false }) === null);
   ok('an unrecognised key is refused, never ignored', throws(() => normalizeTravelHunt({ reech: 3 })));
   ok('a reach past 8 is a detour, refused', throws(() => normalizeTravelHunt({ reach: 12 })));
-  ok('a budget at or over the resume cap (12) is refused', throws(() => normalizeTravelHunt({ maxPerJourney: 12 })));
+  // UNCAPPED since 2026-11-07 (operator: "Uncap fights per trip"): road fights no longer spend a resumed journey's
+  // attempts (roadHuntResume, m59-farm-hall-test.mjs), so the old ceiling of 11 under the resume cap is gone.
+  ok('null / "unlimited" is no per-destination cap', normalizeTravelHunt({ maxPerJourney: null }).maxPerJourney === null
+     && normalizeTravelHunt({ maxPerJourney: 'unlimited' }).maxPerJourney === null);
+  ok('a number past the old resume-cap ceiling is accepted now', normalizeTravelHunt({ maxPerJourney: 40 }).maxPerJourney === 40);
+  ok('zero, a fraction or a word is still refused', throws(() => normalizeTravelHunt({ maxPerJourney: 0 }))
+     && throws(() => normalizeTravelHunt({ maxPerJourney: 2.5 })) && throws(() => normalizeTravelHunt({ maxPerJourney: 'lots' })));
   ok('origins must be keeper origin names', throws(() => normalizeTravelHunt({ origins: ['fleetscript:x'] })));
   ok('the default origins are work, and leave out survival, rescue and PvP',
      TRAVEL_HUNT_ORIGINS.includes('town_trip') && TRAVEL_HUNT_ORIGINS.includes('station_return') &&

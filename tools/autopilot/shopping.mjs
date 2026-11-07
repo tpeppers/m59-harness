@@ -459,6 +459,10 @@ export class ShoppingPart {
     const poor = this.poorFarmingActive();
     const supplyShort = !poor && sellCall.sell && sellCall.trigger === 'supply';
     const packFull = sellCall.sell && sellCall.trigger !== 'supply';
+    // A FARM TOWN'S OWN ERRANDS (m59-farm-town.mjs): a cursed weapon to lift, or money over bank_above / loot magic weapons
+    // for the guild hall. Each opens a trip to the town's counters -- sell first, as the operator ordered -- and the trip's
+    // own steps do the rest ('lift the curse', 'hall deposit'). Silence (no farm town, or neither key) is null.
+    const farmErrand = this.farmTownErrand?.(carried, above) ?? null;
 
     // AND AN EMPTY LARDER IS THE THIRD REASON, FOR EXACTLY THE REASON THE PACK WAS THE
     // SECOND: the food is in town and the only doors to town were money and a full pack.
@@ -542,7 +546,7 @@ export class ShoppingPart {
 
     // NO "BROKE WITH GOODS" DOOR: being broke never opens a sell trip (operator, 2026-10-06; see
     // checkIfShouldSell). A heavy pack is the only reason to go and sell.
-    if (poor && !packFull) return false;
+    if (poor && !packFull && !farmErrand) return false;
     if (starving && !this.notedStarving) {
       this.notedStarving = true;
       this.note('out of food and cannot cook — going to town for some', {
@@ -552,7 +556,7 @@ export class ShoppingPart {
     }
     if (!starving) this.notedStarving = false;
 
-    if (carried <= above && !packFull && !starving && !supplyTrip) {
+    if (carried <= above && !packFull && !starving && !supplyTrip && !farmErrand) {
       // Say what we saw, occasionally. A threshold that never trips is indistinguishable
       // from one that is never checked, and that cost an eight-minute run to find out.
       if (carried > 0 && (!this.notedPurse || Date.now() - this.notedPurse > 120_000)) {
@@ -575,7 +579,7 @@ export class ShoppingPart {
     // rich or also full has business at the counter that pays, and buyFoodInTown runs at
     // the end of that trip anyway, so it gets both out of one walk.
     // THE COUNTERS FOR WHERE WE STAND: the island's on the island, so a trip from it never plans a route off it.
-    const destinations = townDestinations({ needsCashFirst, supplyTrip, starving, packFull,
+    const destinations = townDestinations({ needsCashFirst, supplyTrip, starving, packFull: packFull || !!farmErrand,
                                             // A bank visit that banked nothing does not reopen for half an hour (the sell
                                             // circuit's rule): it cannot fix what opened it until something changes.
                                             richEnoughToBank: carried > above && !(Date.now() - (this._bankedNothingAt ?? 0) < 1_800_000),
@@ -665,9 +669,12 @@ export class ShoppingPart {
     // THE CIRCUIT IS ATTACHED ON THE PACK, NOT ON WHICHEVER NEED OPENED THE TRIP. A reagent
     // run and a full pack are not alternatives — a character is routinely both, and it is
     // already walking past the specialists. See `packWantsMarket`.
-    const wantsMarket = packFull || this.packWantsMarket();
-    this.openTownTrip(target, { sellCall, errand, wantsMarket, supplyTrip, starving,
-      needsCashFirst });
+    const wantsMarket = packFull || !!farmErrand || this.packWantsMarket();
+    if (farmErrand?.trigger === 'curse') this._curseTripAt = Date.now();
+    if (farmErrand?.trigger === 'hall') this._hallTripAt = Date.now();
+    this.openTownTrip(target, { sellCall: farmErrand && !packFull ? { trigger: farmErrand.trigger, why: farmErrand.why } : sellCall,
+      errand: farmErrand && !packFull ? `going to ${this.policy?.farmTown?.name ?? 'town'} (${farmErrand.trigger})` : errand,
+      wantsMarket, supplyTrip, starving, needsCashFirst });
     if (wantsMarket && !packFull)
       this.note('carrying enough to be worth the circuit while we are here', {
         trigger: sellCall.trigger, stops: townTable(this.s.world?.room?.num, this.policy).MARKET_STOPS.map(m => m.name),

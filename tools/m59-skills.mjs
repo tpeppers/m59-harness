@@ -678,6 +678,9 @@ export function weaponRanking(c, { priority = null, banned = null,
                  // only loses a TIE to a read twin (see `unread` in the sorts below).
                  // `allowUnrevealed` is still accepted and no longer narrows anything.
                  !isMagicGrade(x.o) &&
+                 // UNLESS THE OWNER SAYS AN UNREAD WEAPON IS CARGO (`c._noUnreadWield`, a farm town whose hall takes the
+                 // loot magic weapons, m59-farm-town.mjs): then it is carried to the chests and never wielded on the way.
+                 !(c._noUnreadWield === true && isUnrevealed(x.o) && !isOwnSummon(c, x.o)) &&
                  (trollMystic(x.name) || !isBannedWeapon(x.name, banned)) &&
                  weaponScore(x.name) > 0 && !broken.has(x.o.id))
     .map(x => {
@@ -4158,14 +4161,17 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
 // ABSENCE of the argument that now means "use the fleet's answer" rather than "use no answer".
 export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], minPrice = 1,
                                    loadout = null, maxWeapons = null,
-                                   weaponPriority = null, maxStack = null } = {}) {
+                                   weaponPriority = null, maxStack = null, exclude = null } = {}) {
   const c = s.need();
   await s.pacer.submit('read', () => c.requestInventory());
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
 
   const selection=inventorySalePlan(s,{keep,protect,loadout,maxWeapons,weaponPriority});
   const held=selection.held;
-  let items=selection.items.filter(x=>x.queued);
+  // `exclude`: ids the caller holds out of every offer (a farm town's hall cargo and its cursed weapon, Autopilot
+  // saleExcludeIds). Silence excludes nothing.
+  const excluded=new Set([...(exclude??[])].map(Number));
+  let items=selection.items.filter(x=>x.queued&&!excluded.has(Number(x.id)));
 
   // DO NOT OFFER A SMITH A MUSHROOM. Every merchant class declares what it deals in
   // (`ObjectDesired`), a refusal is a sentence spoken to the room rather than an error,
@@ -4205,6 +4211,13 @@ export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], mi
     while(left>0) {
       const live=c.inventory.find(o=>o.id===it.id);
       if(!live)break;
+      // NEVER AN EQUIPPED OR A CURSED ITEM IN AN OFFER, asked again at the counter (operator 2026-11-07: "make sure they
+      // don't try to sell the cursed weapon while it's equipped or it cancels the transaction"). The plan already reads
+      // `worn` as unsellable; this re-reads the use list per offer, because a hand can change between plan and counter.
+      const usingNow=equippedNow(c);
+      // (A cursed weapon OUT of the hand is offered as before -- ItemReqLeaveOwner refuses only while it is in use.)
+      if(!usingNow||usingNow.has(live.id)||excluded.has(Number(live.id))){
+        refused.push({name:it.name,why:!usingNow?'equipment is not known':usingNow.has(live.id)?'equipped: never offered':'held out of the offer by the caller'});break;}
       const disposition=s.lootDisposition?.(live);
       if(disposition && disposition.action!=='sell'){refused.push({name:it.name,why:disposition.reason});break;}
       const amount=Math.min(left,live.amount||1,saleAllowance(loadout,it.name,packNow()).amount,maxStack||Infinity);

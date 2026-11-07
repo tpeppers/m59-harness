@@ -16,9 +16,9 @@ import { contributionPlan, guildPlan } from '../m59-guildwants.mjs';
 import { MARKET_KEEP } from '../m59-items.mjs';
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
-import { affordances } from '../m59-parse.mjs';
+import { affordances, buyLines } from '../m59-parse.mjs';
 import { purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
-import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
+import { hallVisitConfig, runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
 import * as skills from '../m59-skills.mjs';
 import { farmSourcesFor, loadSpawns } from '../m59-spawns.mjs';
 import { StockpileBook } from '../m59-stockpile.mjs';
@@ -27,7 +27,7 @@ import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan } from '../m59-
 import { TICKETS_FILE, TicketBook, readDeskOpen } from '../m59-vault-broker.mjs';
 import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP as REAGENT_SHOP_MAINLAND, SPAWN_FILE, TITHE_FLEET, onIsland, purchaseEnabled, reagentTargetFor, sleep , townTable } from '../m59-autopilot.mjs';
 import { inspectDispositionQuality } from '../m59-loot-policy-runtime.mjs';
-import { farmTownKeep, farmTownSeller, sellerMatches } from '../m59-farm-town.mjs';
+import { curseErrandNext, farmTownKeep, farmTownSeller, hallDepositPlan, isHallBoundWeapon, sellerMatches } from '../m59-farm-town.mjs';
 
 export class TownShopsPart {
   // @part 1
@@ -374,7 +374,9 @@ export class TownShopsPart {
                                        // `protect`, so a kept reagent is still a spare a fleet-mate may be handed.
                                        protect: farmTown && seller ? farmTownKeep(farmTown, this.saleProtectedNames()) : this.saleProtectedNames(),
                                        maxWeapons: this.policy.maxWeapons,
-                                       weaponPriority: this.weaponPriorityNow(), maxStack })
+                                       weaponPriority: this.weaponPriorityNow(), maxStack,
+                                       // A FARM TOWN'S HALL CARGO AND CURSED WEAPON are never offered (saleExcludeIds).
+                                       exclude: this.saleExcludeIds?.() ?? null })
                           .catch(e => ({ error: e.message }));
     if (r.error) { this.note('could not sell in town', { why: r.error }); return null; }
     if (r.sold?.length) {
@@ -705,7 +707,10 @@ export class TownShopsPart {
     }
 
     this.doing = 'travelling';
-    const trip = await this.travel(700, { origin: keeperOrigin('guild_tithe'), maxHops: 12 })
+    // A FARM TOWN WITH A HALL walks to Frular on the hall road (past the confinement, m59-farm-town.mjs farmTownRoadRooms);
+    // from Marion it is 11 rooms, not 12-or-fewer from Barloque's own streets.
+    const trip = await this.travel(700, { origin: keeperOrigin('guild_tithe'),
+      maxHops: this.policy?.farmTown?.hall ? 20 : 12, ...(this.policy?.farmTown?.hall ? { townRoad: true } : {}) })
       .catch(error => ({ arrived: false, reason: error.message }));
     if (!trip.arrived) {
       this.note('could not reach the guildmaster for tithe', { amount: plan.amount,
@@ -847,5 +852,211 @@ export class TownShopsPart {
       this.progress('banked money');
     }
   }
+  // ================================================================== A FARM TOWN'S HALL AND CURSE ERRAND
+  //
+  // Operator, 2026-11-07, of the Farol farmers: "let them deposit in the guild chest instead of banking, also set them to
+  // tithe for the guild rent", then "pick up magic weapons and deposit them in the guild chest if they are not cursed. If
+  // they are cursed they should go sell in Marion, then buy a remove curse potion from the potion shop and drop their cursed
+  // weapon before doing any buying they need and going back out farming", and "make sure they don't try to sell the cursed
+  // weapon while it's equipped or it cancels the transaction". The decisions are pure (m59-farm-town.mjs); these read the
+  // world, act, and read it back.
+
+  /** The cursed weapon this body carries -- wielded first -- as { id, name, wielded }, or null. */
+  cursedWeaponCarried(c = this.s?.client) {
+    if (!c?.inventory) return null;
+    const worn = skills.equippedNow(c);
+    const suspect = this._curseSuspect?.certain ? this._curseSuspect : null;
+    const rows = (c.inventory || []).map(o => ({ o, name: c.rsc?.get?.(o.nameRsc) || '' }))
+      .filter(({ o, name }) => skills.weaponScore(name) > 0 && (Number(o.amount) || 0) <= 1 &&
+        (skills.isCursedItem(c, o, name) || Number(o.rarity) === 200 || (suspect && suspect.id === o.id)))
+      .map(({ o, name }) => ({ id: o.id, name, wielded: !!worn?.has?.(o.id) }))
+      .sort((a, b) => Number(b.wielded) - Number(a.wielded));
+    return rows[0] ?? null;
+  }
+
+  /** Loot magic weapons bound for the farm town's guild hall (isHallBoundWeapon), by id. [] without a hall. */
+  hallBoundWeaponIds(c = this.s?.client, held = null) {
+    const hall = this.policy?.farmTown?.hall;
+    if (!hall?.magicWeapons || !c?.inventory) return [];
+    const worn = skills.equippedNow(c);
+    if (!worn) return [];                                // unknown equipment is not "nothing in hand"
+    let keep = held;
+    if (!keep) { keep = new Set(); try { const book = this.weaponMagicBook(); book.reconcile?.(this.packWeapons(c)); for (const id of book.keepIds()) keep.add(Number(id)); } catch {} }
+    return (c.inventory || []).filter(o => {
+      const name = c.rsc?.get?.(o.nameRsc) || '';
+      return isHallBoundWeapon({ o, name, equipped: worn, held: keep, isWeapon: n => skills.weaponScore(n) > 0,
+        cursed: skills.isCursedItem(c, o, name) || (this._curseSuspect?.certain && this._curseSuspect.id === o.id),
+        ownSummon: skills.isOwnSummon(c, o) });
+    }).map(o => Number(o.id));
+  }
+
+  /** What a farm town's sale must never offer: the cursed weapon and the hall's cargo (equipped gear is the sale's own rule). */
+  saleExcludeIds() {
+    const town = this.policy?.farmTown;
+    if (!town?.hall && !town?.uncurse) return null;
+    const out = new Set(this.hallBoundWeaponIds());
+    const cursed = this.cursedWeaponCarried();
+    if (cursed) out.add(Number(cursed.id));
+    return out;
+  }
+
+  /**
+   * Does a farm town errand open a trip by itself? { trigger: 'curse' | 'hall', why } or null. Each is bounded by a
+   * cooldown, because a trip that cannot fix what opened it must not open again on the next pass.
+   */
+  farmTownErrand(carried = this.purseNow(), above = this.bankAboveNow(), now = Date.now()) {
+    const town = this.policy?.farmTown;
+    if (!town) return null;
+    if (town.uncurse && now - (this._curseTripAt ?? 0) > 15 * 60_000 && now >= (this._curseStuckUntil ?? 0)) {
+      const cursed = this.cursedWeaponCarried();
+      if (cursed) return { trigger: 'curse', why: `${cursed.name} is cursed${cursed.wielded ? ' and in hand' : ''}: sell, then lift it in ${town.name ?? 'town'}` };
+    }
+    if (town.hall && now - (this._hallTripAt ?? 0) > 30 * 60_000) {
+      const plan = hallDepositPlan(town, { purse: carried, keep: this.walkingFloat(), bankAbove: above,
+        weapons: this.hallBoundWeaponIds().length });
+      if (plan.go) return { trigger: 'hall', why: plan.why };
+    }
+    return null;
+  }
+
+  /** The hall road: every leg of a hall visit is a town trip past the confinement (Autopilot.travel townRoad). */
+  hallJourney(origin = 'hall_deposit') {
+    return (room, opts = {}) => this.travel(room, { ...opts, townRoad: true, origin: keeperOrigin(origin) });
+  }
+
+  /** The town trip's curse step: sold first (the 'sell' step ran), then potion, drink, drop -- and only then buying. */
+  async farmTownCurseErrand(trip) {
+    const town = this.policy?.farmTown;
+    if (!town?.uncurse) return null;
+    const s = this.s, c = s.need();
+    const st = trip.curse ??= { tries: {}, started: Date.now() };
+    if (st.finished) return null;
+    const read = async () => {
+      await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
+    };
+    const potionRe = new RegExp(`^${town.uncurse.item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?$`, 'i');
+    for (let guard = 0; guard < 10; guard++) {
+      if (this.travelInterrupted()) return { pending: true };
+      if (st.fullUntil && Date.now() < st.fullUntil) return { pending: true };
+      await read();
+      const cursed = st.id != null
+        ? (() => { const o = (c.inventory || []).find(x => x.id === st.id); return o ? { id: o.id, name: c.rsc.get(o.nameRsc) || st.name, wielded: !!skills.equippedNow(c)?.has?.(o.id) } : null; })()
+        : this.cursedWeaponCarried(c);
+      if (cursed && st.id == null) { st.id = cursed.id; st.name = cursed.name; }
+      const potions = (c.inventory || []).filter(o => potionRe.test(c.rsc.get(o.nameRsc) || ''));
+      const next = curseErrandNext({ cursed: st.id != null ? (cursed ?? { id: st.id, name: st.name, wielded: false }) : null,
+        sold: true, potions: potions.reduce((n, o) => n + (o.amount || 1), 0),
+        inPack: st.id != null && !!cursed, tries: st.tries });
+      if (next.step === 'none') { st.finished = true; return null; }
+      if (next.step === 'done' || next.step === 'stuck') {
+        st.finished = true;
+        if (next.step === 'stuck') this._curseStuckUntil = Date.now() + 60 * 60_000;
+        this.note(next.step === 'done' ? 'CURSED WEAPON GONE — on to the shopping' : 'curse errand stuck — shopping anyway, retry in an hour',
+          { weapon: st.name, why: next.why, tries: st.tries });
+        try { this.ledgerEvent('farm_town_curse', { outcome: next.step, weapon: st.name, why: next.why, tries: st.tries,
+          room: this.hereRoom?.() ?? null }); } catch {}
+        if (next.step === 'done') this.clearCurseSuspect?.('the cursed weapon was dropped in town');
+        return null;
+      }
+      if (next.step === 'buy_potion') {
+        st.tries.buy = (st.tries.buy ?? 0) + 1;
+        if (Number(s.world?.room?.num) !== town.uncurse.room) {
+          const walked = await this.travel(town.uncurse.room, { origin: keeperOrigin('town_trip'), maxHops: 12 })
+            .catch(e => ({ arrived: false, reason: e.message }));
+          if (!walked?.arrived) { if (this.travelInterrupted()) return { pending: true }; continue; }
+        }
+        const pick = await this.sellerHere({ want: potionRe, named: town.uncurse.seller }).catch(() => null);
+        const entry = pick?.items?.find(i => potionRe.test(String(i.name ?? '').trim()));
+        if (!entry) { this.note('no remove curse potion on offer', { room: town.uncurse.room, seller: town.uncurse.seller }); continue; }
+        if (entry.cost > 0 && this.purseNow() < entry.cost) {
+          st.tries.buy = 99;
+          this.note('cannot afford a remove curse potion', { cost: entry.cost, purse: this.purseNow() });
+          continue;
+        }
+        const start = c.evSeq;
+        await s.pacer.submit('buy', () => c.buy(pick.seller.id)).catch(() => {});
+        const ev = await c.waitFor({ since: start, kinds: ['shop'], timeoutMs: 4000 }).catch(() => ({ events: [] }));
+        const shop = ev.events?.find(e => e.kind === 'shop');
+        const line = shop?.items?.find(i => potionRe.test(String(i.name ?? '').trim()));
+        if (!line) continue;
+        for (const l of buyLines([{ id: line.id, amount: 1 }]))
+          await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [l])).catch(() => {});
+        await new Promise(r => setTimeout(r, 700));
+        this.recordPurchase?.(line.name, line.cost, { why: `remove curse for the ${st.name}` });
+        continue;
+      }
+      if (next.step === 'drink') {
+        st.tries.drink = (st.tries.drink ?? 0) + 1;
+        const since = c.evSeq;
+        await s.pacer.submit('act', () => c.apply(potions[0].id, c.selfId)).catch(() => {});
+        const ev = await c.waitFor({ since, kinds: ['message'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
+        const said = (ev.events ?? []).map(e => String(e.text ?? '')).filter(Boolean);
+        // TOO FULL TO DRINK (player.kod ReqEatSomething: a potion fills 10 of a 100 stomach). Not an attempt: wait.
+        if (said.some(t => /too full/i.test(t))) {
+          st.tries.drink--; st.full = (st.full ?? 0) + 1;
+          if (st.full > 5) { st.tries.drink = 99; continue; }
+          st.fullUntil = Date.now() + 60_000;
+          this.note('too full to drink the remove curse potion — waiting a minute', { said: said.slice(0, 2) });
+          return { pending: true };
+        }
+        await new Promise(r => setTimeout(r, 800));
+        continue;
+      }
+      if (next.step === 'drop') {
+        st.tries.drop = (st.tries.drop ?? 0) + 1;
+        const o = (c.inventory || []).find(x => x.id === st.id);
+        if (o) await s.pacer.submit('drop', () => c.drop([this.dropSpec(o)])).catch(() => {});
+        await new Promise(r => setTimeout(r, 700));
+        continue;
+      }
+    }
+    return { pending: true };
+  }
+
+  /** The town trip's hall step: shillings over bank_above and the loot magic weapons into the guild hall's chests. */
+  async farmTownHallVisit(trip) {
+    const town = this.policy?.farmTown;
+    if (!town?.hall) return null;
+    // A visit already under way (survival paused it, or the keeper restarted mid-road) is finished first, on its own config.
+    if (this.coopVisit?.cfg?.farmTownHall) {
+      const r = await runReagentCoop(this, 'tithe', {}, TITHE_FLEET, this.hallJourney());
+      if (r?.pending) return r;
+      trip.hallVisitDone = true;
+      return this.noteHallVisit(r);
+    }
+    if (trip.hallVisitDone) return null;
+    const c = this.s.need();
+    await this.s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+    await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
+    const keep = Math.max(this.walkingFloat() + this.standingOrderReserve(), this.shoppingPlan?.().required_purse ?? 0,
+      trip.purchasePlan?.required_purse ?? 0);
+    const ids = this.hallBoundWeaponIds(c);
+    const plan = hallDepositPlan(town, { purse: this.purseNow(), keep, bankAbove: this.bankAboveNow(), weapons: ids.length });
+    // On the way already (the rent tithe walked to Frular): weapons ride along whatever their count.
+    const passing = [101, 700, town.hall.room].includes(Number(this.s.world?.room?.num)) && ids.length > 0;
+    if (!plan.go && !passing) { trip.hallVisitDone = true; return null; }
+    if (Date.now() < (this._hallNothingUntil ?? 0)) { trip.hallVisitDone = true; return null; }
+    const returnTo = town.buy?.food?.[0]?.room ?? town.sell?.[0]?.room ?? Number(this.s.world?.room?.num);
+    this.note('HALL VISIT — the guild chests instead of a bank', { why: plan.why || 'passing the hall with magic weapons',
+      shillings: plan.shillings, weapons: ids.length, hall: town.hall.room, then: returnTo });
+    const r = await runReagentCoop(this, 'tithe', { bankable: plan.shillings, returnTo, depositIds: ids,
+      requestId: `farm-hall:${trip.startedAt}`, config: { ...hallVisitConfig(town.hall.room), farmTownHall: true } },
+      TITHE_FLEET, this.hallJourney());
+    if (r?.pending) return r;
+    trip.hallVisitDone = true;
+    return this.noteHallVisit(r);
+  }
+
+  noteHallVisit(r) {
+    const moved = Number(r?.shillings ?? 0), weapons = r?.deposited ?? [];
+    if (!moved && !weapons.length) this._hallNothingUntil = Date.now() + 30 * 60_000;
+    this.note(moved || weapons.length ? 'deposited in the guild hall' : 'hall visit moved nothing', {
+      shillings: moved, weapons: weapons.map(w => w.name), reason: r?.reason ?? null, deferred: !!r?.deferred });
+    try { this.ledgerEvent('farm_town_hall', { shillings: moved, weapons: weapons.map(w => w.name),
+      reason: r?.reason ?? null, deferred: !!r?.deferred }); } catch {}
+    return r;
+  }
+
   // @end 1
 }

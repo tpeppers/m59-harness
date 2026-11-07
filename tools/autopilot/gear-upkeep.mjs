@@ -481,6 +481,9 @@ export class GearUpkeepPart {
     // Reconciled against the pack AS IT IS NOW first: a server save between sweeps renumbers every id, and keepIds over
     // the old ones protects nothing (Clifford's dedicated mace, dropped 2026-10-27 sixteen minutes after a save).
     try { const book = this.weaponMagicBook(); book.reconcile?.(this.packWeapons(c)); for (const id of book.keepIds()) out.add(Number(id)); } catch {}
+    // AND A FARM TOWN'S HALL CARGO (hallBoundWeaponIds): loot magic weapons on their way to the guild chests are not spares
+    // for the field cap to drop, the sharing rule to give away, or the loot cap to count.
+    try { for (const id of this.hallBoundWeaponIds?.(c, new Set(out)) ?? []) out.add(Number(id)); } catch {}
     try {
       const left = new Map(protectedReceived(this.s?.name ?? ''));
       for (const o of c?.inventory ?? []) {
@@ -615,6 +618,9 @@ export class GearUpkeepPart {
       ? new Set(sum.weapons.filter(w => w.bypasses_nonmagic === true).map(w => w.id)) : null;
     c._preferMundane = wantMundane;
     c._magicFor = forMode;
+    // A FARM TOWN'S HALL TAKES THE LOOT MAGIC WEAPONS (m59-farm-town.mjs `hall.magicWeapons`): an unread one is cargo,
+    // never a weapon to wield on the way (weaponRanking). Silence is the old ranking.
+    c._noUnreadWield = this.policy?.farmTown?.hall?.magicWeapons === true;
     return sum;
   }
 

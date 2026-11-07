@@ -27,7 +27,17 @@
 //     (inReachOfUs-style filtering drops PLAYER objects: a bump on a shared road must not start a war).
 //   * never in a crowd (`maxThreats` attackable monsters within CROWD_SQUARES), never in a wall-to-wall crossing room
 //     (`skipRooms`, Ukgoth 599 by default -- m59-safelegs.mjs), and at most `maxPerJourney` fights per destination, so a
-//     road full of spiders cannot turn one town trip into an afternoon or push a resumed journey over its attempt cap.
+//     road full of spiders cannot turn one town trip into an afternoon.
+//
+// UNCAPPED (operator, 2026-11-07: "Uncap fights per trip, we want the max for those farmers"). `maxPerJourney: null` (or
+// 'unlimited') removes the per-destination count. The old ceiling of 11 existed for ONE reason: a road fight cancels the
+// walk, and a RESUMED journey that ends short is re-suspended with `attempts + 1` (resumeSuspendedJourney), so twelve road
+// fights on a resumed journey would have tripped the runaway guard (`resumeTravelAttempts`, 12) and DROPPED the objective.
+// That coupling is cut instead of respected: a resumed journey that ended short because a road hunt stopped it is
+// re-suspended with its attempts UNCHANGED (roadHuntResume below). A road fight is the keeper's own choice, not the road
+// refusing it, so it is no evidence of a loop. The runaway guard still has its two backstops on that path: the thirty-
+// minute staleness of the suspension (resumeTravelWithinMs, measured from the FIRST suspension, which a re-suspension
+// keeps), and ROAD_HUNT_PAUSE_CAP road-hunt pauses on one suspension. Every other short ending still counts.
 //
 // PURE. The keeper gathers the inputs; this decides and says why.
 
@@ -38,7 +48,8 @@ export const TRAVEL_HUNT_DEFAULTS = Object.freeze({
   reach: 4,
   // At or above this many attackable monsters within CROWD_SQUARES, walk on: a crowd is the road's problem, not quarry.
   maxThreats: 4,
-  // Fights per destination before the rest of the road is walked. Under the resume cap (resumeTravelAttempts, 12).
+  // Fights per destination before the rest of the road is walked; null = no cap (road fights do not spend a resumed
+  // journey's attempts -- roadHuntResume).
   maxPerJourney: 6,
   // After a road fight, this long before the next is opened, so the leg makes progress between fights.
   cooldownS: 8,
@@ -53,7 +64,14 @@ export const TRAVEL_HUNT_ORIGINS = Object.freeze([
   'town_trip', 'sell_circuit', 'food_shopping', 'reagent_shopping', 'purchase_funds', 'vault_run',
   'town_favor_buy', 'town_favor_deliver', 'farm_supply_buy', 'farm_supply_delivery', 'provision',
   'station_return', 'station_approach', 'hunt_relocation', 'spawn_cap_relocation', 'roam', 'roam_home',
+  // A farm town's hall road (m59-farm-town.mjs `hall`): the walk to the guild hall and to Frular for the rent.
+  'hall_deposit', 'guild_tithe',
 ]);
+/** The highest numeric maxPerJourney; above it, say null ("no cap"). */
+export const MAX_PER_JOURNEY_LIMIT = 999;
+/** Road-hunt pauses one suspension may take before a resume ending short counts as an attempt again. */
+export const ROAD_HUNT_PAUSE_CAP = 200;
+const UNLIMITED = new Set(['unlimited', 'none', 'max', 'uncapped']);
 const KEYS = Object.keys(TRAVEL_HUNT_DEFAULTS);
 
 /** true | false | null | { ...TRAVEL_HUNT_DEFAULTS } -> null (off) or the full settings. Throws on a bad shape. */
@@ -71,7 +89,12 @@ export function normalizeTravelHunt(v) {
       throw new Error(`travelHunt.${k} must be a${int ? ' whole' : ''} number from ${lo} to ${hi}`);
     out[k] = n;
   };
-  num('reach', 1, 8); num('maxThreats', 1, 20, true); num('maxPerJourney', 1, 11, true); num('cooldownS', 0, 600);
+  // null / 'unlimited' / Infinity: no per-destination cap. A whole number from 1 to MAX_PER_JOURNEY_LIMIT otherwise.
+  if (v.maxPerJourney === null || v.maxPerJourney === Infinity
+      || (typeof v.maxPerJourney === 'string' && UNLIMITED.has(v.maxPerJourney.trim().toLowerCase())))
+    out.maxPerJourney = null;
+  else num('maxPerJourney', 1, MAX_PER_JOURNEY_LIMIT, true);
+  num('reach', 1, 8); num('maxThreats', 1, 20, true); num('cooldownS', 0, 600);
   for (const k of ['skipRooms', 'origins']) {
     if (v[k] === undefined) continue;
     if (v[k] === null) { out[k] = k === 'origins' ? null : Object.freeze([]); continue; }
@@ -121,7 +144,7 @@ export function travelHuntDecision({ cfg, journey = {}, health = {}, vigor = {},
   const { frac, fleeAt = 0, engageAt = 1 } = health;
   if (frac == null || !Number.isFinite(frac)) return no('health unknown');
   if (frac < fleeAt) return no('below the flee line: survival owns the body');
-  if (Number(budget.fights ?? 0) >= cfg.maxPerJourney) return no(`already fought ${budget.fights} times on the road to ${journey.to ?? '?'}`);
+  if (cfg.maxPerJourney != null && Number(budget.fights ?? 0) >= cfg.maxPerJourney) return no(`already fought ${budget.fights} times on the road to ${journey.to ?? '?'}`);
   if (budget.lastAt && now - budget.lastAt < cfg.cooldownS * 1000) return no('the last road fight was moments ago: walk on first');
   if (threats >= cfg.maxThreats) return no(`a crowd (${threats} within ${CROWD_SQUARES} squares): the road is walked, not hunted`);
   const live = candidates.filter(c => c && c.name && !c.refused && Number.isFinite(c.d) && c.d <= cfg.reach)
@@ -142,4 +165,19 @@ export function travelHuntDecision({ cfg, journey = {}, health = {}, vigor = {},
 export function travelHuntBudget(prev, to, now = Date.now()) {
   if (!prev || prev.to !== to || now - (prev.since ?? 0) > 30 * 60_000) return { to, fights: 0, lastAt: 0, since: now };
   return prev;
+}
+
+/**
+ * A RESUMED JOURNEY ENDED SHORT: what goes back on the keeper as its suspension. `j` is the suspension that was resumed,
+ * `roadHunted` whether a road hunt (travelHuntCheck) stopped THIS resume's walk. A road hunt keeps `attempts` and counts
+ * `road_hunt_pauses` instead (up to ROAD_HUNT_PAUSE_CAP, past which it counts as an attempt like anything else); every
+ * other ending is `attempts + 1`, as it always was. `at` -- the staleness clock -- is the first suspension's and is kept.
+ */
+export function roadHuntResume(j, { roadHunted = false, trigger = null, now = Date.now() } = {}) {
+  const pauses = Number(j?.road_hunt_pauses ?? 0);
+  const free = !!roadHunted && pauses < ROAD_HUNT_PAUSE_CAP;
+  return { ...j, attempts: (Number(j?.attempts) || 0) + (free ? 0 : 1),
+           ...(roadHunted ? { road_hunt_pauses: pauses + 1 } : {}),
+           trigger: free ? 'travel_hunt' : (trigger ?? 'resumed journey ended short'),
+           next_try_at: now + 5000 };
 }

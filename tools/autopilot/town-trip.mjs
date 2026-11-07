@@ -496,7 +496,13 @@ export class TownTripPart {
         if (result?.pending) return result;
         trip.sale = result;
       }],
+      // A FARM TOWN'S CURSED WEAPON (m59-farm-town.mjs `uncurse`): AFTER the sale -- which held it and everything equipped
+      // out of every offer -- and BEFORE any buying: potion, drink, drop, read back. Operator 2026-11-07.
+      ['lift the curse', () => this.farmTownCurseErrand(trip)],
       ['guild tithe', () => this.guildTitheFromSale(trip.sale)],
+      // A FARM TOWN'S GUILD HALL (m59-farm-town.mjs `hall`): money over bank_above and the loot magic weapons go into the
+      // hall's chests, then the walk comes back to the town's counters for the shopping. No hall: nothing happens here.
+      ['hall deposit', () => this.farmTownHallVisit(trip)],
       ['bank surplus', () => this.bankSurplus()],
       // AFTER banking, which keeps the order's price back (`standingOrderReserve`), so the
       // chest is only asked for what the purse genuinely lacks.

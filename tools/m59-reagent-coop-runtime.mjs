@@ -127,6 +127,29 @@ async function transfer(k, box, item, amount, direction, cfg, receipt) {
   return moved;
 }
 
+// ONE NON-STACK ITEM INTO A CHEST, BY ID (a farm town's hall cargo). `transfer` sums `amount`, which a container reply
+// files as 0 for a non-stack, so its receipt would read a weapon that moved as one that did not. Here the receipt is the
+// id gone from the pack AND one more of that name in the chest (each entry counted once).
+async function depositOne(k, box, live, cfg, receipt) {
+  if (interrupted(k)) return 0;
+  await approach(k, box);
+  const c = k.s.need();
+  const name = coopKey(c.rsc.get(live.nameRsc) ?? live.name);
+  const entries = items => (items ?? []).filter(i => coopKey(i.name ?? i.item) === name)
+    .reduce((n, i) => n + Math.max(1, Number(i.amount) || 0), 0);
+  const before = entries(box.items);
+  await k.s.pacer.submit('trade', () => c.put(dropSpec(live), box.id));
+  await inventory(k);
+  await readBox(k, box, cfg);
+  const gone = !c.inventory.some(i => Number(i.id) === Number(live.id));
+  const intoBox = entries(box.items) - before;
+  const moved = gone && intoBox >= 1 ? 1 : 0;
+  receipt({ direction: 'deposit', slot: box.slot, item: name, item_id: Number(live.id), requested: 1, amount: moved,
+    pack_delta: gone ? 1 : 0, chest_delta: intoBox });
+  if (moved) try { k.tradeFact?.({ guild_deposited: [{ name, amount: 1 }] }); } catch { /* bookkeeping only */ }
+  return moved;
+}
+
 async function transact(k, state, cfg, fleet) {
   await k.coopSecrecy?.fresh();
   const s = k.s, c = s.need();
@@ -205,6 +228,7 @@ async function transact(k, state, cfg, fleet) {
     }
     if (['tithe', 'town'].includes(state.mode)) {
       // Re-read all chests immediately before deciding the global cap.
+      // (A hall visit with no money to put in still carries its weapons: the cap below then reads 0.)
       for (const box of boxes) await readBox(k, box, cfg);
       const stored = boxes.reduce((n, b) => n + coopCount(b.items, 'shilling'), 0);
       const available = Math.max(0, k.purseNow() - state.keep);
@@ -216,6 +240,19 @@ async function transact(k, state, cfg, fleet) {
       const money = c.inventory.find(i => coopKey(c.rsc.get(i.nameRsc)) === 'shilling');
       if (money && target.amount) state.result.shillings += await transfer(k, box, money,
         target.amount, 'deposit', cfg, receipt);
+      // AND THE HALL CARGO, ONE WEAPON AT A TIME, BY ID: the first configured chest that takes it (the receipt is the
+      // pack and chest deltas, as for the money; a full chest moves nothing and the next is tried).
+      for (const id of state.depositIds ?? []) {
+        const item = c.inventory.find(i => Number(i.id) === Number(id));
+        if (!item) continue;
+        for (const b of boxes.filter(x => cfg.chest_keys.includes(x.slot))) {
+          await readBox(k, b, cfg);
+          const live = c.inventory.find(i => Number(i.id) === Number(id));
+          if (!live) break;
+          const moved = await depositOne(k, b, live, cfg, receipt);
+          if (moved) { (state.result.deposited ??= []).push({ id: Number(id), name: c.rsc.get(live.nameRsc), slot: b.slot }); break; }
+        }
+      }
     }
     return { done: true };
   } finally { lock.release(); }
@@ -223,20 +260,36 @@ async function transact(k, state, cfg, fleet) {
 
 // Travel is resumable separately from transfers: a survival interruption on the
 // return leg must never repeat a completed withdrawal or charge the tithe twice.
+/**
+ * THE FARM TOWN'S HALL VISIT CONFIG (m59-farm-town.mjs `hall`): the reagent coop's own defaults and its deposit -- a put
+ * with an explicit amount, verified by the pack AND the chest delta, which has receipts on prod (stockpile/prod.coop.ndjson,
+ * `deposit shilling` rows), where `hall_withdraw deposit: ['shilling']` was measured on 2026-11-07 moving nothing -- aimed
+ * at that hall and taking 100% of the bank-bound money. Not the coop itself: no reagents move, and the character's own
+ * `reagent_coop` (on or off) is not consulted.
+ */
+export function hallVisitConfig(hallRoom) {
+  return { ...coopConfig({ enabled: true, shilling_tithe_pct: 100 }), hall_room: Number(hallRoom) };
+}
+
 export async function runReagentCoop(k, mode, options = {}, fleet, journey = null) {
   if (k.coopRunning) return pending('reagent coop visit is already executing');
   k.coopRunning = true;
   try {
-    const cfg = coopConfig(k.policy.reagentCoop);
+    // A VISIT IN FLIGHT KEEPS THE CONFIG IT STARTED WITH, and a farm town's hall deposit hands its own (hallVisitConfig)
+    // without the character having the reagent coop switched on.
+    const cfg = k.coopVisit?.cfg ?? options.config ?? coopConfig(k.policy.reagentCoop);
     if (!cfg) return { plan: options.plan ?? null, skipped: true };
     return await withGuildSecrecy(k, cfg, () => executeCoop(k, mode, options, fleet, journey));
   }
   finally { k.coopRunning = false; }
 }
-async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = null, nextRoom = null, first = false } = {}, fleet, journey = null) {
-  const cfg = coopConfig(k.policy.reagentCoop);
+async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = null, nextRoom = null, first = false,
+                                     config = null, returnTo = null, depositIds = null } = {}, fleet, journey = null) {
+  const cfg = k.coopVisit?.cfg ?? config ?? coopConfig(k.policy.reagentCoop);
   if (!cfg) return { plan, skipped: true };
   let state = k.coopVisit;
+  // A farm town hall visit carries its own road (the hall road past the confinement); a resume without one still walks it.
+  if (!journey && state?.journey) journey = state.journey;
   if (!state) {
     const key = `${mode}:${requestId ?? k.townTrip?.startedAt ?? 'outside'}`;
     // Town retries are opportunities on the route to the NEXT business stop.
@@ -249,7 +302,7 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
     if (Date.now() < (k.coopAttempts?.[key] ?? 0)) return { plan, skipped: true };
     if (mode === 'supply' && ![...plan.lines, ...plan.unpriced].some(l => cfg.reagents.includes(coopKey(l.item))))
       return { plan, skipped: true };
-    if (mode === 'tithe' && bankable <= 0) return { skipped: true };
+    if (mode === 'tithe' && bankable <= 0 && !depositIds?.length) return { skipped: true };
     if (['contribute', 'town'].includes(mode) && !(mode === 'town' && bankable > 0) &&
         !sale(k).some(i => cfg.reagents.includes(coopKey(i.name)))) return { skipped: true };
     // ONLY A SURVEYED HALL. The co-op crosses the hall by m59-guild-passage.mjs, which knows only the
@@ -268,8 +321,10 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
       k.note('reagent coop unavailable', { reason: 'guild rank or hall key unavailable' });
       return { plan, skipped: true };
     }
-    state = k.coopVisit = { mode, key, origin: mode === 'town' ? NORTH_BARLOQUE : room(k), started: Date.now(), stage: 'outbound',
+    state = k.coopVisit = { mode, key, origin: returnTo ?? (mode === 'town' ? NORTH_BARLOQUE : room(k)), started: Date.now(), stage: 'outbound',
       keep: k.purseNow() - bankable, target: null,
+      // A farm town's hall visit (hallVisitConfig): its config, and the loot weapons (by id) it carries in.
+      ...(config ? { cfg, ...(journey ? { journey } : {}) } : {}), ...(depositIds?.length ? { depositIds: depositIds.map(Number) } : {}),
       result: { plan, took: [], shillings: 0, moved: true } };
   }
   if (state.mode !== mode) {

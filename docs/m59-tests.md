@@ -551,12 +551,21 @@ through a nested shelter order.
   counter sells only what it lists for itself (Tova's bread, not apples); a sale goes to the named seller; `keep` joins the
   sale protection only there; the outfit errand buys the axe and leather armour at Colhorr and no shield; no bank defers
   a purchase rather than walking to Tos; every keeper `townTable` call passes the policy.
-- `m59-travel-hunt-test.mjs` (62): hunt on the road (`travelHunt`, `m59-travel-hunt.mjs`): off by default; only the
+- `m59-travel-hunt-test.mjs` (64): hunt on the road (`travelHunt`, `m59-travel-hunt.mjs`): off by default; only the
   keeper's own work journeys (never a FleetScript recall, an operator order, a shelter or retreat walk); it arms UNDER a
   journey hold, where clear_path cannot; never a player, never an errand, never below the flee line, a new fight only at the
   engage line and vigor floor while an attacker is answered between; never a crowd or Ukgoth; a budget per destination;
   `travel_guard` clear_path off switches it off; the pass fights the watchdog's pick beyond melee reach, stands down if
   health fell meanwhile, and records `road_hunt`.
+- `m59-farm-hall-test.mjs` (85): a farm town's hall, rent and curse errand, and the uncapped road: `maxPerJourney: null`
+  is no cap and survives a JSON round trip; a resumed journey a road hunt stopped keeps its attempts (forty road fights stay
+  under the resume cap) while every other short ending counts, and the staleness clock and ROAD_HUNT_PAUSE_CAP backstops
+  stand; `town.hall` / `town.uncurse` / `guildTithe` shapes and refusals; hall cargo is loot grades only (never the dedicated
+  weapon, never what is in hand); money goes over bank_above, everything above the keep; the hall road's pass lets only its
+  own rooms through the edge guard; the curse errand on a fake body walks to 205, buys, drinks, drops, then finishes -- a
+  full stomach waits without spending an attempt; the trip's steps run sell, curse, tithe, hall, then buying; the sale never
+  offers the cursed weapon in hand, the hall cargo or worn armour, and refuses at the counter an item equipped since the plan;
+  an unread weapon is never wielded while the hall takes them; what opens a trip, and its cooldowns.
 - `m59-cook-food-test.mjs` (27): cook from the road (`cookFood`, `m59-cook-food.mjs`): off by default; cooks only below the
   ceiling and while the food aboard will not reach it; never with something in reach, just after a hit, or under the
   spell's mana; a character without the spell is asked once in half an hour; provision cooks before it eats and the
