@@ -37,10 +37,10 @@ console.log('every town-trip site reads the table for where it stands');
 {
   const { readToolSource } = await import('./autopilot/source.mjs');
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-  ok('the keeper-opened trip passes the table', /richEnoughToBank: carried > above[^\n]*\n\s*table: townTable\(s\.world\?\.room\?\.num\)/.test(src));
-  ok('a requested trip passes it too', /supplyTrip: town === 'supply',\s*table: townTable\(this\.s\.world\?\.room\?\.num\)/.test(src));
-  ok('the sell circuit is the table\'s', /marketStops: wantsMarket \? townTable\(this\.s\.world\?\.room\?\.num\)\.MARKET_STOPS/.test(src));
-  ok('so are the food shops', /const town = townTable\(s\.world\?\.room\?\.num\);\s*const shops = town\.FOOD_SHOPS/.test(src));
+  ok('the keeper-opened trip passes the table', /richEnoughToBank: carried > above[^\n]*\n\s*table: townTable\(s\.world\?\.room\?\.num, this\.policy\)/.test(src));
+  ok('a requested trip passes it too', /supplyTrip: town === 'supply',\s*table: townTable\(this\.s\.world\?\.room\?\.num, this\.policy\)/.test(src));
+  ok('the sell circuit is the table\'s', /marketStops: wantsMarket \? townTable\(this\.s\.world\?\.room\?\.num, this\.policy\)\.MARKET_STOPS/.test(src));
+  ok('so are the food shops', /const town = townTable\(s\.world\?\.room\?\.num, this\.policy\);\s*const shops = town\.FOOD_SHOPS/.test(src));
   ok('the travel gate asks the guard before walking', /let gate = this\.kocatanGateRefusal\?\.\(room\);/.test(src));
   ok('and clears the pack (sell / vault / drop) before refusing, at most every ten minutes, then asks again',
      /this\.policy\.kocatanGateClear !== false && !this\.townTrip\s*&& Date\.now\(\) - \(this\._gateClearAt \?\? 0\) > 600_000\)[\s\S]{0,300}await this\.kocatanGateClear\?\.\(\{ trigger: 'gate refusal', room \}\)[\s\S]{0,200}gate = this\.kocatanGateRefusal\?\.\(room\);/.test(src));

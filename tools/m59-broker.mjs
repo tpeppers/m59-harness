@@ -38,6 +38,9 @@ import {movementRegionSpec} from './m59-movement-region.mjs';
 import{createDeliveryNoticeTool,receiveDeliveryNotice}from'./m59-delivery-notices.mjs';
 import { identifiedAs } from './m59-item-signature.mjs';
 import { normalizeMagicFor } from './m59-magic-for.mjs';
+import { normalizeFarmTown } from './m59-farm-town.mjs';
+import { normalizeTravelHunt } from './m59-travel-hunt.mjs';
+import { normalizeCookFood } from './m59-cook-food.mjs';
 import {exactDrop,executeExactDrop} from './m59-inventory-drop.mjs';
 import {declaredJumpMoveOptions,prepareDeclaredJump} from './m59-jump-takeoff.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
@@ -12574,6 +12577,15 @@ const TOOLS = [
         'never a bribe. Default true; false keeps only the old sell-then-vault refusal ladder' },
       chase_on_foot: { type: 'boolean', description: 'CHASE ON FOOT (m59-chase.mjs): rank quarry by steps on foot and walk the ' +
         'route to a quarry round a ledge or past local range. Default false; a farm strategy (chaseOnFoot) turns it on' },
+      farm_town: { description: 'THE TOWN OF THIS FARM (m59-farm-town.mjs): { name?, sell: [{seller, room}], buy: { food|weapons|armor|' +
+        'reagents: [{seller, room, items}] }, bank: {room} | null, keep: [items] }, or null. Every mainland town trip uses these ' +
+        'counters only, buys only the listed items (a kind with no counter is not bought), sells to the named sellers and never ' +
+        'offers `keep` there. Whole item names ("loaf of bread"). null (default) is the town by room, as before' },
+      travel_hunt: { description: 'HUNT ON THE ROAD (m59-travel-hunt.mjs): true | false | { reach, maxThreats, maxPerJourney, ' +
+        'cooldownS, skipRooms, origins }. On the keeper own work journeys, fight in-band monsters within reach, then walk on; ' +
+        'never on another issuer order, never below the flee line. Default off' },
+      cook_food: { description: 'COOK FROM THE ROAD (m59-cook-food.mjs): true | false | { first, reserveCasts }. Cast create food ' +
+        'from carried elderberry and herbs before eating carried food while below the vigor ceiling. Default off' },
       second_wind_farming: { description: 'SECOND WIND FARMING (m59-second-wind.mjs): "off" (default), "auto", "on"/true, "off"/false, or ' +
         '{ mode, prey_ratio, eat }. Auto: a farmer that knows Second Wind, in a room whose worst huntable prey is at most ' +
         '1/prey_ratio (default 2) of its max health, keeps NO vigor floor and eats NOTHING -- it fights down to 25 vigor, where ' +
@@ -13674,6 +13686,18 @@ const TOOLS = [
       if (a.kocatan_gate_clear !== undefined) p.policy.kocatanGateClear = a.kocatan_gate_clear !== false;
       if (a.lock_no_combat !== undefined) p.policy.lockNoCombat = a.lock_no_combat === true;
       if (a.chase_on_foot !== undefined) p.policy.chaseOnFoot = a.chase_on_foot === true;
+      if (a.farm_town !== undefined) {
+        try { p.policy.farmTown = normalizeFarmTown(a.farm_town, { resolveItem: n => resolveItemName(n) }); }
+        catch (e) { return { started: false, reason: `farm_town refused: ${e.message}`, note: 'nothing was changed' }; }
+      }
+      if (a.travel_hunt !== undefined) {
+        try { p.policy.travelHunt = normalizeTravelHunt(a.travel_hunt); }
+        catch (e) { return { started: false, reason: `travel_hunt refused: ${e.message}`, note: 'nothing was changed' }; }
+      }
+      if (a.cook_food !== undefined) {
+        try { p.policy.cookFood = normalizeCookFood(a.cook_food); }
+        catch (e) { return { started: false, reason: `cook_food refused: ${e.message}`, note: 'nothing was changed' }; }
+      }
       if (a.second_wind_farming !== undefined) {
         try { normSecondWindFarming(a.second_wind_farming); p.policy.secondWindFarming = a.second_wind_farming; }
         catch (e) { return { started: false, reason: `second_wind_farming refused: ${e.message}`, note: 'nothing was changed' }; }

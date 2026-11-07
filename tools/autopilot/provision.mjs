@@ -8,9 +8,10 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 1 methods: provision
+// 2 methods: provision, cookFirst
 import * as skills from '../m59-skills.mjs';
-import { EAT_TO_AT_LEAST, overdriveDigest, overdriveReachable, overdriveSettings, shouldWaitForProvision } from '../m59-autopilot.mjs';
+import { cookFirstDecision, cookFoodSettings } from '../m59-cook-food.mjs';
+import { CREATE_FOOD_MANA, EAT_TO_AT_LEAST, overdriveDigest, overdriveReachable, overdriveSettings, shouldWaitForProvision } from '../m59-autopilot.mjs';
 
 export class ProvisionPart {
   // @part 1
@@ -151,6 +152,9 @@ export class ProvisionPart {
     if (this.climbing) {
       this.doing = 'recovering';
       if (vigor < (ceiling || floor)) {
+        // COOK FROM THE ROAD FIRST (m59-cook-food.mjs, a strategy's `cookFood`): looted elderberry and herbs become a
+        // meal before the bought bread is touched. Off unless asked for; one cast a pass, and the pass ends on it.
+        if (await this.cookFirst(v, ceiling || floor, larder).catch(() => false)) return 'ate';
         const e = await skills.eat(s, { stomach: this.stomach, upToVigor: ceiling || undefined,
                                        exclude: this.notOursToEat() })
                               .catch(() => ({ ate: [] }));
@@ -261,6 +265,26 @@ export class ProvisionPart {
           : undefined });
     }
     return false;
+  }
+
+  // COOK BEFORE EATING, WHEN A STRATEGY SAYS SO (m59-cook-food.mjs). True when a cast made something, so the pass is spent.
+  // A character seen NOT to know the spell is not asked again for half an hour: cookSomething reads the spell list on
+  // every call, and a farmer without Kraanan would otherwise pay that read every pass for ever.
+  async cookFirst(v, ceiling, larder = []) {
+    const cfg = cookFoodSettings(this.policy?.cookFood);
+    if (!cfg) return false;
+    const now = Date.now();
+    const knows = this._cookNoSpellAt && now - this._cookNoSpellAt < 1_800_000 ? false : null;
+    const nutrition = (larder ?? []).reduce((n, x) => n + (Number(x?.food?.nutrition) || 0) * (x?.o?.amount || 1), 0);
+    const a = this.watch?.attack;
+    const danger = !!(this.inReachOfUs?.() ?? []).length || !!(a && now - (a.lastHitAt ?? 0) < 6_000);
+    const d = cookFirstDecision({ cfg, vigor: v?.vigor?.value ?? 0, ceiling, larder: nutrition,
+      reagents: this.reagentCount(), mana: v?.mana?.value ?? null, manaCost: CREATE_FOOD_MANA, danger, knows });
+    if (!d.cook) return false;
+    const made = await this.cookSomething('cooking road reagents before eating carried food: ' + d.why);
+    if (!made && this.lastDeclinedCast?.spell === 'create food' && /does not have the spell/.test(this.lastDeclinedCast.why ?? ''))
+      this._cookNoSpellAt = now;
+    return !!made;
   }
   // @end 1
 }

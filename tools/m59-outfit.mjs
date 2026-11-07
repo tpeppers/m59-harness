@@ -51,6 +51,7 @@ import { BANKERS, accountOf } from './m59-bank.mjs';
 import { loadoutFor } from './m59-loadout.mjs';
 import { armourKind, armourScore } from './m59-skills.mjs';
 import { armOwnership, brokerDriver } from './m59-atomics.mjs';
+import { farmTownOutfit } from './m59-farm-town.mjs';
 
 const arg = (name, def = null) => {
   const i = process.argv.indexOf('--' + name);
@@ -350,9 +351,15 @@ async function outfit(row) {
   // `row.character`, not `who` — `who` falls back to the agent handle for a character that
   // is not in game, and a loadout is looked up by the character's name.
   const loadout = row.character ? loadoutFor(row.character) : null;
-  const wants = wantsFor(loadout);
+  let wants = wantsFor(loadout);
   const purchaseStatus = await call('autopilot', { agent: row.agent, action: 'status' }).catch(() => null);
   const mayBuyWeapons = purchaseStatus?.policy?.buyWeapons !== false;
+  // A FARM TOWN (m59-farm-town.mjs, a strategy's `town`) DECIDES WHERE AND WHAT. Operator 2026-11-07: "allowed: axes &
+  // leather armor from colhorr" -- so each slot is cut to the town's listed items for it, a slot it lists nothing for (a
+  // shield, in Marion) is not bought at all, and the shop is the listed counter rather than the nearest smith. An explicit
+  // --at still wins. No farm town: the errand exactly as before.
+  const farmPlan = farmTownOutfit(purchaseStatus?.policy?.farmTown ?? null, wants);
+  if (farmPlan) wants = farmPlan.wants;
   // DEFENCE FIRST, WHATEVER ORDER THE LIST CAME IN.
   //
   // The header of this file states the principle — "a weapon changes how fast something
@@ -453,8 +460,9 @@ async function outfit(row) {
   try {
     // Where to shop. An explicit room wins; otherwise ask which merchants sell what we
     // lack and take the fewest hops, which is the same question gear-buying always is.
-    let shopRoom = AT;
-    let candidates = AT != null ? [AT] : [];
+    let shopRoom = AT ?? farmPlan?.room ?? null;
+    let candidates = shopRoom != null ? [shopRoom] : [];
+    if (farmPlan?.dropped?.length) log.push(`farm town: ${farmPlan.dropped.map(d => d.why).join('; ')}`);
     if (shopRoom == null) {
       const seen = new Map();
       // WHEN THERE IS SOMETHING TO LEARN, THE TRIP IS TO THE TEACHER. Gear is sold in
@@ -892,8 +900,9 @@ async function outfit(row) {
     // So the weapon slot, and only the weapon slot, is stocked to a depth. Armour is not
     // treated this way on purpose: it wears but is not destroyed the same way, and a spare
     // suit is dead weight in a pack that is already the binding constraint.
-    if (WEAPON_SPARES > 0 && !DRY) {
-      const want = missing.find(w => w.slot === 'weapon') ??
+    // A farm town that lists no weapon buys no spare either (the fallback below is a mace).
+    if (WEAPON_SPARES > 0 && !DRY && (!farmPlan || wants.some(w => w.slot === 'weapon'))) {
+      const want = missing.find(w => w.slot === 'weapon') ?? (farmPlan ? wants.find(w => w.slot === 'weapon') : null) ??
                    { re: /mace|hammer/i, fallback: /mace|hammer|axe/i, what: 'weapon', slot: 'weapon' };
       const held = (await call('inventory', { agent: row.agent }).catch(() => ({ items: [] }))).items || [];
       const haveBlunt = held.filter(i => want.re.test(String(i.name || ''))).length;

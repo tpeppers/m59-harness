@@ -121,6 +121,31 @@ or not anything is travelling, because the question is *what will this character
 journey takes it* and an answer that only exists once one has is an answer arriving too
 late. `node tools/m59-travelling-test.mjs` (64) is the guard.
 
+### A journey may hunt on the road (`travelHunt`), and only its own
+
+Operator, 2026-11-07: *"Have the farmers also clear monsters they come across while traveling"*. Nothing above covered it:
+`clear_path` swings only at a creature that has PINNED the walk for six seconds, and it returns early under `this.inert`
+-- which is the travel hold on every keeper journey; `fight_back` is the PvP exemption; the fight-back edict answers being
+hit, and only when an operator turned it on.
+
+`travelHunt` (a strategy key, `m59-travel-hunt.mjs`) is a third trigger beside those two, on the same two clocks. The
+WATCHDOG (`travelHuntCheck`) decides only "now": it cancels the WALK -- never the objective; a town trip re-issues its leg
+five seconds later, a keeper journey resumes from its suspension -- and hands `passFightBack` a due with reason
+`travel_hunt`. The PASS picks the target through the same engagement band, spare list and karma rule as every other
+fight, and disengages at the flee line. What it never does, one gate each:
+
+- **it runs only on the keeper's own WORK journeys** (`TRAVEL_HUNT_ORIGINS`: town trips, the sell circuit, the walk back
+  to the station, a relocation). An operator's or FleetScript's travel, a red-alert recall, a PvP flight, a shelter walk,
+  a rescue: never. That is the line between this and "fight everything on the road", which this repository spent months
+  removing;
+- below the flee line it does nothing; it OPENS a fight only at `engageAt` and the vigor floor, and answers one already on
+  us between the flee line and `engageAt`;
+- never under an errand, never a player, never a crowd (`maxThreats` within eight squares), never in a wall-to-wall room
+  (Ukgoth), at most `maxPerJourney` fights a destination -- under the resume cap, so it cannot turn a road into a loop;
+- `travel_guard: { clear_path: false }` switches it off with every other road swing.
+
+`node tools/m59-travel-hunt-test.mjs` is the guard.
+
 ### Owning a character and being busy with it are different facts
 
 This is the distinction the whole split runs on, and conflating it deadlocks the bot that

@@ -23,7 +23,7 @@ import { BACKOFF_MS, ejectBatch, ejectTarget, normalizeLootEject, noteGone, over
 import * as autobalance from '../m59-reagent-autobalance.mjs';
 import { floorDrop, sessionFloorIo, overflowVerdict, readAccepts, readRefusal } from '../m59-floor-cache.mjs';
 import { addStashClaim, dibsFile } from '../m59-dibs.mjs';
-import { REAGENT_SHOP, claimFarmDelivery, purchaseEnabled, reagentTargetFor, releaseFarmDelivery } from '../m59-autopilot.mjs';
+import { REAGENT_SHOP as REAGENT_SHOP_MAINLAND, claimFarmDelivery, purchaseEnabled, reagentTargetFor, releaseFarmDelivery, townTable } from '../m59-autopilot.mjs';
 
 export class DeliveryPart {
   // @part 1
@@ -243,6 +243,8 @@ export class DeliveryPart {
     }
     const funded = await this.ensurePurchaseFunds(this.shoppingPlan({ kind: 'delivery' }));
     if (!funded.ready) return funded;
+    // A farm town's apothecary when a strategy names one (m59-farm-town.mjs); otherwise the one this always used.
+    const REAGENT_SHOP = (this.policy?.farmTown ? townTable(s.world?.room?.num, this.policy).REAGENT_SHOP : null) ?? REAGENT_SHOP_MAINLAND;
     if (s.world?.room?.num !== REAGENT_SHOP.room) {
       const walked = await this.travel(REAGENT_SHOP.room, { origin: keeperOrigin('farm_supply_buy'), maxHops: 12 })
         .catch(error => ({ arrived: false, reason: error.message }));

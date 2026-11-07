@@ -13,14 +13,15 @@
 //   noteCrowdRefusal, travelDivertAt, shelterForwardAndMend, exitTest, reachTest,
 //   noteUnreachableSpot, noteUnreachablePrey, unreachablePreyIn, preyAvoid, noteFailedRestSpot,
 //   restSpotRefused, spotExclusions, bansDestination, unreachableIn, strangersInReach, fightBackAfterMs,
-//   fightBackCheck, clearPathCheck, karmaForbids, refuseEngagement, recentText, mortalDanger,
-//   healthRate
-import { keeperOrigin } from '../m59-move-origin.mjs';
+//   fightBackCheck, clearPathCheck, travelHuntCandidates, travelHuntCheck, karmaForbids, refuseEngagement,
+//   recentText, mortalDanger, healthRate
+import { keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
+import { CROWD_SQUARES, travelHuntBudget, travelHuntDecision, travelHuntSettings } from '../m59-travel-hunt.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import { creatureByName, karmaSafe, loadSpawns } from '../m59-spawns.mjs';
 import { recordTactic } from '../m59-tactics.mjs';
-import { CLEAR_PATH_MS, FIGHT_BACK_GAP_MS, GOING_STATES, PULSE_MS, REACH, SPAWN_FILE, UNREACHABLE_SPOT_MS, advancesUs, crowdedSquares, engagementRefusal, pct } from '../m59-autopilot.mjs';
+import { CLEAR_PATH_MS, FIGHT_BACK_GAP_MS, GOING_STATES, PULSE_MS, REACH, SPAWN_FILE, STARVED_FIGHT_VIGOR, UNREACHABLE_SPOT_MS, advancesUs, crowdedSquares, engagementRefusal, pct } from '../m59-autopilot.mjs';
 
 export class ThreatPart {
   // @part 1
@@ -817,6 +818,96 @@ export class ThreatPart {
       why: 'a journey that is covering no ground with a creature inside melee reach is being ' +
            'BLOCKED, not merely travelling slowly. The walk is cancelled so the next pass can ' +
            'kill what is in the way — this keeper picks no target and decides nothing here',
+    });
+    return this.fightBackDue;
+  }
+
+  // WHAT IS WITHIN `reach` SQUARES THAT A ROAD FIGHT COULD PICK: attackable, NOT a player (the same structural exclusion
+  // as inReachOfUs -- a bump on a shared road must not start a war), nearest first, each with the verdict passFightBack
+  // will reach (spared, the engagement band, karma_strict). `attacking` marks one in melee reach while we are being hit.
+  travelHuntCandidates(reach, now = Date.now()) {
+    const c = this.s?.client, me = c?.self;
+    if (!me || !c?.room) return [];
+    const a = this.watch?.attack;
+    const hit = !!(a && now - (a.lastHitAt ?? 0) < FIGHT_BACK_GAP_MS);
+    return [...c.room.objects.values()].filter(o =>
+      o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER) &&
+      Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row) <= reach)
+      .map(o => {
+        const name = c.rsc?.get?.(o.nameRsc) || '';
+        const d = Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row);
+        return { o, id: o.id, name, d, attacking: hit && d <= REACH,
+                 refused: !name ? { why: 'it has no name' }
+                   : this.sparedHere?.(o) ? { why: 'spared (spare_creatures)' }
+                   : this.refuseEngagement(name) };
+      }).sort((x, y) => x.d - y.d);
+  }
+
+  // HUNT ON THE ROAD (m59-travel-hunt.mjs; policy.travelHunt, a strategy's `travelHunt`). The third trigger beside the
+  // damage edict and clear_path, and like them it DECIDES NOTHING ABOUT THE TARGET: it says "now", cancels the walk so
+  // the blind await ends, and hands passFightBack a due with reason 'travel_hunt'. Every gate is in travelHuntDecision.
+  //
+  // UNLIKE clear_path IT RUNS UNDER A JOURNEY HOLD. `this.inert` is the travel hold on every keeper journey (goTravelling
+  // reuses it), so `if (this.inert) return null` -- right for an errand -- would make this dead code on the only roads it
+  // is for. A hold that is NOT a journey (an errand) still refuses, inside the decision.
+  travelHuntCheck(w, hp, now = Date.now()) {
+    if (!w) return null;
+    const cfg = travelHuntSettings(this.policy?.travelHunt);
+    if (!cfg) return null;
+    // travel_guard {clear_path: false} switches every road swing off; this is one.
+    if (!this.travelAllows('clear_path')) return null;
+    if (this.fightBackDue) return null;                 // something already asked this pass a question
+    if (w.travelHuntPass === this.passes) return null;
+    const order = liveMoveOrder(this.s);
+    const origin = order?.origin ?? (this.inert?.travelling ? this.inert.origin : null) ?? null;
+    const to = order?.to ?? this.inert?.to ?? null;
+    const room = this.s?.world?.room?.num ?? null;
+    const journey = {
+      travelling: !!this.inert?.travelling || GOING_STATES.includes(this.doing ?? null),
+      errand: !!(this.inert && !this.inert.travelling),
+      fighting: this.doing === 'fighting',
+      origin, to, room,
+    };
+    if (!journey.travelling) return null;              // cheap exit: nothing below is worth computing off the road
+    const v = this.s?.client?.vitals?.();
+    const safety = this.safety();
+    const all = this.travelHuntCandidates(CROWD_SQUARES, now);
+    const candidates = all.filter(x => x.d <= cfg.reach);
+    // The fight floor WITHOUT fightFloor()'s bookkeeping (it counts a starved pass every call, and this runs every tick):
+    // the wanted floor, or what resting reaches when the larder is empty -- the same fallback fightFloor makes.
+    let floor = 0;
+    try {
+      const wanted = this.wantedFightFloor?.() ?? 0;
+      floor = (this.larder?.(this.s?.client) ?? [1]).length ? wanted : Math.min(wanted, STARVED_FIGHT_VIGOR);
+    } catch { floor = 0; }
+    this.travelHuntRoad = travelHuntBudget(this.travelHuntRoad, to, now);
+    const d = travelHuntDecision({ cfg, journey, now,
+      health: { frac: pct(hp), fleeAt: safety.fleeAt, engageAt: safety.engageAt },
+      vigor: { value: v?.vigor?.value ?? null, floor },
+      candidates, threats: all.length, budget: this.travelHuntRoad });
+    if (!d.hunt) {
+      // Said once per reason per minute, so a long road with nothing to hunt is not a log of refusals.
+      if (candidates.length && (this._travelHuntWhy !== d.why || now - (this._travelHuntWhyAt ?? 0) > 60_000)) {
+        this._travelHuntWhy = d.why; this._travelHuntWhyAt = now;
+        this.note('road hunt declined', { why: d.why, in_reach: candidates.map(x => x.name || '?').slice(0, 4), room });
+      }
+      return null;
+    }
+    w.travelHuntPass = this.passes;
+    this.tally.travel_hunts = (this.tally.travel_hunts || 0) + 1;
+    this.travelHuntRoad = { ...this.travelHuntRoad, fights: (this.travelHuntRoad.fights ?? 0) + 1, lastAt: now };
+    this.fightBackDue = { since: now, hits: 0, lost: 0, at: now, reason: 'travel_hunt',
+                          targetId: d.pick.id, reach: cfg.reach };
+    // END THE WALK, NOT THE OBJECTIVE: a town trip re-issues its leg, a keeper journey resumes from its suspension.
+    let broke = null;
+    try { broke = this.s.cancelMovement(null, 'a monster within reach of the road — travel_hunt',
+                                         { origin: keeperOrigin('travel_hunt') }); }
+    catch (e) { broke = { cancelled: false, why: e.message }; }
+    this.note('ROAD HUNT — stopping the walk for a fight', {
+      target: d.pick.name, distance: +d.pick.d.toFixed(1), attacking: !!d.pick.attacking, why: d.why,
+      journey_to: to, origin: origin ? `${origin.source}:${origin.name}` : null, room,
+      road_fights: this.travelHuntRoad.fights, of: cfg.maxPerJourney,
+      health: hp ? `${hp.value}/${hp.max}` : null, interrupted: broke?.interrupted ?? null,
     });
     return this.fightBackDue;
   }

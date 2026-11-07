@@ -451,6 +451,10 @@ export class WatchdogPart {
     // the damage edict on purpose: being hit is the stronger signal and should win the pass.
     this.clearPathCheck(w, hp, now);
 
+    // 1b'''. THE ROAD HUNT — an in-band monster within reach of a keeper journey (m59-travel-hunt.mjs). Off unless a strategy
+    // turned it on; after the other two, which answer being hit and being blocked and so are the stronger signals.
+    this.travelHuntCheck?.(w, hp, now);
+
     // 1c. TAKE THE CHARACTER BACK FROM A DRIVER THAT HAS STOPPED DRIVING IT.
     //
     // The handbrake below cannot reach this case and never could: it is armed by the

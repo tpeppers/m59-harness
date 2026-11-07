@@ -544,6 +544,23 @@ through a nested shelter order.
   one, it walks to the nearest by hops, locked there first so the confinement gate lets it go, and adopts it on arrival;
   never from the Underworld, never over a moving journey, at most every 20 s; the pass adopts before combat and
   survival and shepherds after the ladder; the broker carries the key.
+- `m59-farm-town-test.mjs` (60): a farm's own town (`town`, `m59-farm-town.mjs`): whole item names ("bread" is refused for
+  "loaf of bread") and a refusal for every unrecognised key; no policy and no farmTown give the old mainland table object
+  for object, and the island and the Avar Village keep their own towns with one set; a full pack goes to the sell
+  counters, a hungry farmer to Tova, a reagent trip and a bank trip nowhere; a kind with no counter is not bought; a
+  counter sells only what it lists for itself (Tova's bread, not apples); a sale goes to the named seller; `keep` joins the
+  sale protection only there; the outfit errand buys the axe and leather armour at Colhorr and no shield; no bank defers
+  a purchase rather than walking to Tos; every keeper `townTable` call passes the policy.
+- `m59-travel-hunt-test.mjs` (62): hunt on the road (`travelHunt`, `m59-travel-hunt.mjs`): off by default; only the
+  keeper's own work journeys (never a FleetScript recall, an operator order, a shelter or retreat walk); it arms UNDER a
+  journey hold, where clear_path cannot; never a player, never an errand, never below the flee line, a new fight only at the
+  engage line and vigor floor while an attacker is answered between; never a crowd or Ukgoth; a budget per destination;
+  `travel_guard` clear_path off switches it off; the pass fights the watchdog's pick beyond melee reach, stands down if
+  health fell meanwhile, and records `road_hunt`.
+- `m59-cook-food-test.mjs` (27): cook from the road (`cookFood`, `m59-cook-food.mjs`): off by default; cooks only below the
+  ceiling and while the food aboard will not reach it; never with something in reach, just after a hit, or under the
+  spell's mana; a character without the spell is asked once in half an hour; provision cooks before it eats and the
+  empty-larder cook is unchanged.
 - `m59-island-town-test.mjs` (50): on the island every town destination is a Ko'catan counter and nothing routes off it;
   the mainland is unchanged; a journey across the East Tower gate is refused when the guard would refuse the pack, naming
   what; a strategy can say sellAtLoad; arrivals carry one spare weapon; every avar clan name resolves; a cup whose station is

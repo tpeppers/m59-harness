@@ -25,8 +25,9 @@ import { StockpileBook } from '../m59-stockpile.mjs';
 import { BOOKMAKERS_HALL_ROOM, StorageCache, chestFullness, chestKey } from '../m59-storage.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan } from '../m59-tithe.mjs';
 import { TICKETS_FILE, TicketBook, readDeskOpen } from '../m59-vault-broker.mjs';
-import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP, SPAWN_FILE, TITHE_FLEET, onIsland, purchaseEnabled, reagentTargetFor, sleep , townTable } from '../m59-autopilot.mjs';
+import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP as REAGENT_SHOP_MAINLAND, SPAWN_FILE, TITHE_FLEET, onIsland, purchaseEnabled, reagentTargetFor, sleep , townTable } from '../m59-autopilot.mjs';
 import { inspectDispositionQuality } from '../m59-loot-policy-runtime.mjs';
+import { farmTownKeep, farmTownSeller, sellerMatches } from '../m59-farm-town.mjs';
 
 export class TownShopsPart {
   // @part 1
@@ -132,6 +133,10 @@ export class TownShopsPart {
     if (!plan.lines.length && !plan.unpriced.length) return;
     const funded = await this.ensurePurchaseFunds(plan);
     if (!funded.ready) return funded;
+    // THE FARM TOWN'S APOTHECARY when a strategy names one (townTable); otherwise the one this always used. A farm town
+    // that names none never gets here: purchaseEnabled has already said no.
+    const REAGENT_SHOP = (this.policy?.farmTown ? townTable(s.world?.room?.num, this.policy).REAGENT_SHOP : null)
+      ?? REAGENT_SHOP_MAINLAND;
     if (s.world?.room?.num !== REAGENT_SHOP.room) {
       const r = await this.travel(REAGENT_SHOP.room, { origin: keeperOrigin('reagent_shopping'), maxHops: 12 })
                           .catch(e => ({ arrived: false, reason: e.message }));
@@ -140,7 +145,7 @@ export class TownShopsPart {
         return { pending: true, reason: r?.reason ?? 'apothecary journey still pending' };
       }
     }
-    const pick = await this.sellerHere({ want: /elder\s?berry|^herbs?$/i }).catch(() => null);
+    const pick = await this.sellerHere({ want: /elder\s?berry|^herbs?$/i, named: REAGENT_SHOP.seller ?? null }).catch(() => null);
     if (!pick) {
       this.note('nobody at the apothecary opened a reagent list', { room: REAGENT_SHOP.name });
       return { pending: true, reason: 'waiting for the reagent merchant' };
@@ -217,10 +222,12 @@ export class TownShopsPart {
   // extra call in the room where it matters and none where the first merchant is the right
   // one. `want` lets a caller insist on a merchant stocking a particular kind — the food
   // leg does not want the reagent counter and vice versa.
-  async sellerHere({ want = null, trusted = false } = {}) {
+  async sellerHere({ want = null, trusted = false, named = null } = {}) {
     const c = this.s.need();
+    // `named`: a farm town's counter (m59-farm-town.mjs) -- only that NPC, whoever else stands in the room.
     const cands = [...(c.room?.objects?.values() ?? [])]
       .filter(o => affordances(o.flags).includes('buy'))
+      .filter(o => !named || sellerMatches(c.rsc.get(o.nameRsc), named))
       .filter(o => !trusted || skills.trustedBuyer(c.rsc.get(o.nameRsc)));
     for (const o of cands) {
       const before = c.evSeq;
@@ -281,7 +288,7 @@ export class TownShopsPart {
     // THE NEAREST ROUTABLE SHOP, then the next. Three attempts across them, as before.
     const hops = shop => { try { const r = s.world?.route?.(shop.room); return r?.found ? (r.hops?.length ?? 99) : Infinity; } catch { return Infinity; } };
     // THE FOOD SHOPS FOR WHERE WE STAND (the island has its own: m59-autopilot.mjs townTable).
-    const town = townTable(s.world?.room?.num);
+    const town = townTable(s.world?.room?.num, this.policy);
     const shops = town.FOOD_SHOPS.map(sh => ({ ...sh, hops: hops(sh) })).filter(sh => Number.isFinite(sh.hops))
       .sort((a, b) => a.hops - b.hops);
     const atShop = () => town.FOOD_SHOPS.some(sh => sh.room === s.world?.room?.num);
@@ -312,7 +319,10 @@ export class TownShopsPart {
     // A bare /mushroom/ therefore matched every herbalist's stock and could pick the
     // REAGENT seller as "the one that actually sells FOOD", which is the exact thing the
     // line below this was written to avoid.
-    const pick = await this.sellerHere({ want: /cheese|pie|bread|apple|grape|edible mushroom|inky.?cap|stew|drumstick/i })
+    // A FARM TOWN'S BREAD SHOP IS ITS NAMED COUNTER (Tova, not whoever else stands in the inn); what is bought there is
+    // cut to the listed items by restockReagents (farmTownMenu).
+    const pick = await this.sellerHere({ want: /cheese|pie|bread|apple|grape|edible mushroom|inky.?cap|stew|drumstick/i,
+                                         named: town.farmTown ? (shopHere()?.seller ?? null) : null })
                         .catch(() => null);
     if (!pick) {
       this.note('nobody in the bread shop opened a food list', {
@@ -332,7 +342,7 @@ export class TownShopsPart {
   // protect its reagents and the fleet register was doing all the work alone. Both are
   // consulted now: either one saying "keep" is enough, which is what makes it safe to
   // sell everything else.
-  async sellInTown({ maxStack = null } = {}) {
+  async sellInTown({ maxStack = null, seller = null } = {}) {
     const s = this.s, c = s.need();
     await inspectDispositionQuality(this);
     // "BUYS ANYTHING" IS USUALLY A TRICK, AND IT NEARLY COST THE FLEET EVERYTHING.
@@ -346,13 +356,23 @@ export class TownShopsPart {
     // So a sale is made only to a merchant on the trusted list. Anyone else is left alone
     // however generous their flags look — being wrong about a buyer costs the whole pack,
     // and being wrong about a walk costs a walk. See SELL_TO in m59-skills.mjs.
-    const buyer = [...c.room.objects.values()]
-      .find(o => affordances(o.flags).includes('buy') && skills.trustedBuyer(c.rsc.get(o.nameRsc)));
+    //
+    // A FARM TOWN NAMES ITS BUYER (m59-farm-town.mjs), and that is the one exception: the stop's `seller`, which SELL_TO
+    // need not list (neither Marion man is on it). Never a NEVER_SELL_TO name, and sellAll still refuses a sale with no
+    // quoted price, so a named counter that pays nothing costs a refused offer, never the item.
+    const farmTown = this.policy?.farmTown ?? null;
+    const buyers = [...c.room.objects.values()].filter(o => affordances(o.flags).includes('buy'));
+    const buyer = seller
+      ? farmTownSeller({ seller }, buyers.filter(o => !skills.NEVER_SELL_TO.some(re => re.test(c.rsc.get(o.nameRsc) || ''))),
+                       o => c.rsc.get(o.nameRsc))
+      : buyers.find(o => skills.trustedBuyer(c.rsc.get(o.nameRsc)));
     if (!buyer) return null;
     this.doing = 'trading';
     // saleLoadout: the character's own loadout, plus on Ko'catan the island-reagent ceilings (m59-island-sale.mjs).
     const r = await skills.sellAll(s, { merchant: buyer.id, loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(), keep: MARKET_KEEP,
-                                       protect: this.saleProtectedNames(),
+                                       // A farm town's `keep` is never offered at its counters: a sale exclusion, not
+                                       // `protect`, so a kept reagent is still a spare a fleet-mate may be handed.
+                                       protect: farmTown && seller ? farmTownKeep(farmTown, this.saleProtectedNames()) : this.saleProtectedNames(),
                                        maxWeapons: this.policy.maxWeapons,
                                        weaponPriority: this.weaponPriorityNow(), maxStack })
                           .catch(e => ({ error: e.message }));
@@ -386,7 +406,7 @@ export class TownShopsPart {
         const result = await this.travel(stop.room, { origin: keeperOrigin('sell_circuit'), maxHops: 20 });
         if (!result.arrived || this.travelInterrupted()) return { pending: true };
       }
-      const sale = await this.sellInTown({ maxStack: stop.maxStack });
+      const sale = await this.sellInTown({ maxStack: stop.maxStack, seller: stop.seller ?? null });
       if (this.travelInterrupted()) return { pending: true };
       // A STOP THAT CANNOT SELL COMPLETES AS "SOLD NOTHING" AND THE CIRCUIT MOVES ON. Prod, 2026-10-27: every island sell
       // trip hung for ever at the Ko'catan smithy -- no counter there was on SELL_TO, so sellInTown answered null and this
@@ -395,7 +415,8 @@ export class TownShopsPart {
       if (!sale || sale.error) {
         const c = this.s.client;
         const buyerHere = c?.room?.objects && [...c.room.objects.values()]
-          .some(o => affordances(o.flags).includes('buy') && skills.trustedBuyer(c.rsc.get(o.nameRsc)));
+          .some(o => affordances(o.flags).includes('buy') &&
+                     (stop.seller ? sellerMatches(c.rsc.get(o.nameRsc), stop.seller) : skills.trustedBuyer(c.rsc.get(o.nameRsc))));
         trip.marketStopTries ??= {};
         const tries = trip.marketStopTries[trip.marketIndex] = (trip.marketStopTries[trip.marketIndex] ?? 0) + 1;
         if (buyerHere && tries < 2) return { pending: true };
@@ -760,7 +781,7 @@ export class TownShopsPart {
     const teller = [...c.room.objects.values()]
       .find(o => BANKER_NAME.test(c.rsc.get(o.nameRsc) || '') ||
                  affordances(o.flags).includes('bank'));
-    const bankRoom = townTable(room.num).BANKS.some(b => Number(b.room) === Number(room.num));
+    const bankRoom = townTable(room.num, this.policy).BANKS.some(b => Number(b.room) === Number(room.num));
     // Only when we happen to be standing in a bank — a special trip is not worth the
     // walk, and the trader/wellfed loops already pass through town.
     if (!teller && !bankRoom && !/bank/i.test(room.name || '')) return;

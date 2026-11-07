@@ -21,6 +21,7 @@ import { bankAboveOf, leaseCarry, walkingFloatOf } from '../m59-purse-lease.mjs'
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
+import { farmTownMenu } from '../m59-farm-town.mjs';
 import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
 import { countsOf, overlayRequests } from '../m59-reagent-autobalance.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -110,7 +111,7 @@ export class ShoppingPart {
       (this.policy.vigorWant ?? 0.9) * max - (v?.value ?? max) - food);
   }
 
-  shoppingPlan({ kind = 'all', items = null } = {}) {
+  shoppingPlan({ kind = 'all', items = null, seller = null } = {}) {
     // A FOOD CARRY FLOOR IS A FOOD LINE, NOT A REAGENT ONE. purchaseRequests() lists every loadout
     // floor, and they all used to ride the reagent gate and the guild-plan sourcing below — so a
     // courier with reagent buying off (or bread chest-sourced) walked to a bread shop on its bread
@@ -138,13 +139,20 @@ export class ShoppingPart {
     const foodGap = purchaseEnabled(this.policy, 'food') && ['all', 'food', 'restock'].includes(kind)
       ? this.purchaseFoodGap() : 0;
     const defaults = { elderberry: 28, herb: 14, 'loaf of bread': 108 };
-    const menu = items ?? [...new Set([...requests.map(r => r.item), 'loaf of bread'])].map(name => {
+    const menu = items ?? [...new Set([...requests.map(r => r.item), 'loaf of bread',
+      // A farm town's own food, priced from what we have seen at its counter, so an estimate can fund it.
+      ...(this.policy?.farmTown?.buy?.food ?? []).flatMap(c => c.items)])].map(name => {
       const key = purchaseKey(name);
       const value = ITEM_VALUE[norm(name)] ?? ITEM_VALUE[key];
       return { name, cost: this.purchasePrices?.get(key) ?? defaults[key]
         ?? (value > 0 ? Math.ceil(value * 2) : null) };
     });
-    return purchasePlan({ requests, menu, foodGap, estimated: items == null,
+    // A FARM TOWN (m59-farm-town.mjs) BUYS ONLY ITS LISTED ITEMS: the shelf, or the estimated menu, is cut to them --
+    // from the counter we are standing at when it is one of ours (restockReagents passes `seller`), from any listed
+    // counter otherwise. With no farm town the menu is untouched.
+    const farmTown = this.policy?.farmTown ?? null;
+    const shopMenu = farmTown ? farmTownMenu(farmTown, menu, seller) : menu;
+    return purchasePlan({ requests, menu: shopMenu, foodGap, estimated: items == null,
       reserve: requests.length || foodGap > 0 ? Math.max(0, this.policy.shopFloor ?? 0,
         ['all', 'delivery'].includes(kind) && this.pendingFarmDelivery ? this.walkingFloat() : 0) : 0 });
   }
@@ -282,7 +290,16 @@ export class ShoppingPart {
       return { ready: true, moved: false };
     }
     const known = s.bankKnown?.() ?? null;
-    const options = PURCHASE_BANKS.filter(b => !this.bansDestination(b.room)).map(b => {
+    // A FARM TOWN BANKS ONLY WHERE IT SAYS (its `bank`, or nowhere). With none, a purchase the purse cannot cover is
+    // deferred the way poor farming defers one -- never a walk to Tos for the price of a loaf.
+    const farmTown = this.policy?.farmTown ?? null;
+    const banks = farmTown ? PURCHASE_BANKS.filter(b => farmTown.bank && Number(b.room) === Number(farmTown.bank.room)) : PURCHASE_BANKS;
+    if (farmTown && !banks.length) {
+      this.note('farm town has no bank: shopping waits for the purse', {
+        town: farmTown.name ?? null, shortfall: funding.shortfall, purse: funding.purse, required_purse: plan.required_purse });
+      return this.deferUnaffordableShopping(plan, { room: null, account: null }, 0);
+    }
+    const options = banks.filter(b => !this.bansDestination(b.room)).map(b => {
       const here = Number(s.world?.room?.num) === b.room;
       const route = here ? { found: true, hops: [] } : s.world?.route?.(b.room);
       return { ...b, hops: route?.found ? route.hops.length : Infinity,
@@ -375,7 +392,7 @@ export class ShoppingPart {
     if (!above) return false;                       // 0 or null turns the trips off
     const s = this.s, c = s.need();
     const room = s.world?.room;
-    if (!room || townTable(room.num).BANKS.some(b => b.room === room.num)) return false;   // already there
+    if (!room || townTable(room.num, this.policy).BANKS.some(b => b.room === room.num)) return false;   // already there
     // Wait for the reply, not just the request. Reading c.inventory straight after
     // submitting reads the PREVIOUS snapshot, which is the whole family of bugs this
     // file keeps re-learning.
@@ -562,9 +579,22 @@ export class ShoppingPart {
                                             // A bank visit that banked nothing does not reopen for half an hour (the sell
                                             // circuit's rule): it cannot fix what opened it until something changes.
                                             richEnoughToBank: carried > above && !(Date.now() - (this._bankedNothingAt ?? 0) < 1_800_000),
-                                            table: townTable(s.world?.room?.num) })
+                                            table: townTable(s.world?.room?.num, this.policy) })
       .filter(b => !this.bansDestination(b.room));
     if (!destinations.length) {
+      // A FARM TOWN WITH NO COUNTER FOR THIS ERRAND (no bank, usually: Marion has none) is not a ban. Say so once and
+      // let the purse ride, as the Avar Village does.
+      const t = townTable(s.world?.room?.num, this.policy);
+      if (t?.region === 'farm-town') {
+        if (!this.warnedFarmTownTrip) {
+          this.warnedFarmTownTrip = true;
+          this.note('the farm town has no counter for this errand: not making the trip', {
+            town: t.name ?? null, carrying: carried, banks: t.BANKS.length, markets: t.MARKETS.length,
+            food_shops: t.FOOD_SHOPS.length, reagent_shop: t.REAGENT_SHOP?.room ?? null,
+            why: 'a strategy named the town for this farm and it has no counter that answers this; the purse rides until one does' });
+        }
+        return false;
+      }
       if (!this.warnedBannedTrip) {
         this.warnedBannedTrip = true;
         this.note('not making this trip — every destination for it is banned for this character', {
@@ -576,6 +606,7 @@ export class ShoppingPart {
       return false;
     }
     this.warnedBannedTrip = false;
+    this.warnedFarmTownTrip = false;
     const options = destinations
       .map(b => { const r = s.world?.route?.(b.room);
                   return { ...b, hops: r?.found ? r.hops.length : Infinity }; })
@@ -639,7 +670,7 @@ export class ShoppingPart {
       needsCashFirst });
     if (wantsMarket && !packFull)
       this.note('carrying enough to be worth the circuit while we are here', {
-        trigger: sellCall.trigger, stops: townTable(this.s.world?.room?.num).MARKET_STOPS.map(m => m.name),
+        trigger: sellCall.trigger, stops: townTable(this.s.world?.room?.num, this.policy).MARKET_STOPS.map(m => m.name),
         why: 'the trip was opened by something other than the pack, and the pack is at its ' +
              'ceiling anyway — the equipment and gem counters are on the way' });
     this.postShoppingPlan(this.shoppingPlan());

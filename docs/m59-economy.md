@@ -556,6 +556,53 @@ event. Both halves are blind to the same unpriced items, so the COMPARISON holds
 the absolute shillings are an estimate off `viValue_average`; the row says `estimated: true`
 and the number must never be reported as takings.
 
+## A farm's own town (`town`): shop where the farm is
+
+Operator, 2026-11-07, of the Farol mollusk farmers: *"buy/sell in marion for shopping (allowed: axes & leather armor from
+colhorr, bread from tova in the inn ...)"*. Until then the keeper's town was decided by where it stood
+(`townTable(room)`): the Avar Village's trading post, Ko'catan, and Barloque/Tos/Jasper everywhere else -- so a farmer two
+rooms from Marion walked to Barloque to sell and to Tos for bread. A farm strategy's `town` (policy `farmTown`, broker
+`farm_town`, `m59-farm-town.mjs`) names the counters instead:
+
+```js
+town: {
+  name: 'Marion',
+  sell: [{ seller: 'Morrigan', room: 202 }, { seller: 'Colhorr', room: 201 }],
+  buy: { food: [{ seller: 'Tova', room: 202, items: ['loaf of bread'] }],
+         weapons: [{ seller: 'Colhorr', room: 201, items: ['axe'] }],
+         armor: [{ seller: 'Colhorr', room: 201, items: ['leather armor'] }] },
+  bank: null,
+  keep: ['elderberry', 'herbs', 'edible mushroom'],
+},
+```
+
+- **Every mainland town trip uses these counters and no others.** `townTable(room, policy)` returns the farm town's table
+  (sell circuit = `sell` in order, food shops = `buy.food`, apothecary = `buy.reagents[0]`, bank = `bank`). The island and
+  the Avar Village keep their own towns: a trip from there never crosses back. Every keeper call passes `this.policy`, so
+  a missed call site is a test failure, not a quiet Barloque walk.
+- **It is an allowlist.** A kind with no counter is not bought at all (`purchaseEnabled`), anywhere: no `reagents` line
+  means no reagent purchase. A counter sells us only what it lists for IT (`farmTownMenu` cuts the shelf before the food
+  gap picks the cheapest vigor -- apples are cheaper than bread and are not allowed). The outfit errand
+  (`m59-outfit.mjs`) shops at the listed counter, buys only the listed armour and weapon, and drops a slot with nothing
+  listed (no shield in Marion, and no mace spares).
+- **A sale goes to the named seller**, not to `SELL_TO` (which names neither Marion man), and never to a `NEVER_SELL_TO`
+  name. `sellAll` still refuses an unquoted sale, so a named counter that pays nothing costs a refused offer, never the
+  item.
+- **`keep` is a sale exclusion at these counters, not `protect`.** Morrigan buys reagents and food; a kept elderberry is
+  still a spare the sharing path (`m59-sharing.mjs`) may hand a fleet-mate who ran out, which `protect` would forbid.
+- **No bank means the purse rides.** A deposit trip has no destination (one note, not a "banned" warning), and a
+  purchase the purse cannot cover is deferred the way poor farming defers one -- never a walk to Tos for the price of a
+  loaf. `bank: { room }` names one that is in `PURCHASE_BANKS`.
+- **The confinement still rules.** A farm confined to its room refuses every town trip; the strategy has to confine the
+  road and the counters too (546 > 545 > 535 > 200 > 201/202 for Farol).
+
+Marion, from the kod (`towns/marntwn`): **Colhorr** (`MrSmith.kod`, 201) sells mace, short sword, metal shield, leather
+armor and axe, and buys weapons and shields only; **Tova** (`mrbart.kod`, 202) sells bread and meat pie and is
+`MOB_RECEIVE` without `MOB_BUYER` -- she takes an item and pays nothing; **Morrigan** (`mrinnk.kod`, 202, the innkeeper)
+buys sundries, food, reagents and wearables and sells herbs, elderberry, pants and a torch; Lady Aftyn (205) and the
+elder (200) take and pay nothing. **There is no bank in Marion.** `m59-merchants.mjs show 202` prints Tova only; Morrigan
+appears under `show MarionInnKeeper`.
+
 ## Per-creature loot: `loot_only`
 
 `loot_only: {"spider": ["purple mushroom"]}` — after killing a listed creature the keeper takes

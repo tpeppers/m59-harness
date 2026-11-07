@@ -777,7 +777,9 @@ export class CooperativePart {
     for (const item of shop.items ?? [])
       if (Number.isFinite(item.cost) && item.cost >= 0)
         this.purchasePrices.set(purchaseKey(item.name), item.cost);
-    const plan = this.shoppingPlan({ kind: 'restock', items: shop.items ?? [] });
+    // THE NAME OF THE COUNTER WE ARE AT, so a farm town buys from it only what it lists for IT (m59-farm-town.mjs).
+    const sellerName = seller?.nameRsc != null ? c.rsc.get(seller.nameRsc) : null;
+    const plan = this.shoppingPlan({ kind: 'restock', items: shop.items ?? [], seller: sellerName });
     this.postShoppingPlan(plan);
     if (plan.unpriced.length) return pending('merchant price unreadable');
     if (!plan.lines.length) return [];

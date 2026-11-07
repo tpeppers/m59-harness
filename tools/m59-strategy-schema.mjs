@@ -45,6 +45,9 @@ import { normNeedle } from './m59-needle-farm.mjs';
 import { normalizeGangUp } from './m59-gang-up.mjs';
 import { unrevealedWeaponMode } from './m59-unrevealed-weapons.mjs';
 import { normalizeMagicFor } from './m59-magic-for.mjs';
+import { normalizeFarmTown } from './m59-farm-town.mjs';
+import { normalizeTravelHunt } from './m59-travel-hunt.mjs';
+import { normalizeCookFood } from './m59-cook-food.mjs';
 
 // A name is also a file name, so it is a strict slug: no path, no dot-dot, no surprises.
 export const STRATEGY_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -244,6 +247,21 @@ export const STRATEGY_FIELDS = Object.freeze([
   // the roster live in this machine's substrate/needles/<site>.json (orders, not code). Elsewhere nothing changes. `work`,
   // like patrol; the walks still yield when a bot or lease holds `movement`. Operator 2026-11-05, 2143 Deep in the Jungle.
   { path: 'needle', keys: ['needle'], faculty: 'work', arg: 'needle', normalize: v => normNeedle(v) },
+  // THIS FARM'S TOWN (m59-farm-town.mjs): { name?, sell: [{ seller, room }], buy: { food|weapons|armor|reagents:
+  // [{ seller, room, items }] }, bank: { room } | null, keep: [items] }. Every mainland town trip goes to these counters
+  // and only these, buys only the listed items (a kind with no counter is not bought at all), sells to the named sellers,
+  // and never offers `keep` at them. The island and the Avar Village keep their own towns. `economy`, like lootOnly.
+  // Operator 2026-11-07, the Farol mollusk farmers: shop in Marion.
+  { path: 'town', keys: ['farmTown'], faculty: 'economy', arg: 'farm_town',
+    normalize: (v, o = {}) => normalizeFarmTown(v, { resolveItem: o.resolveItem ?? null }) },
+  // HUNT ON THE ROAD (m59-travel-hunt.mjs): true | { reach, maxThreats, maxPerJourney, cooldownS, skipRooms, origins }. On
+  // the keeper's OWN work journeys (town trips, the walk back to the station), fight in-band monsters within reach, then
+  // walk on. Never on anybody else's order, never below the flee line, never opening a fight below the engage line. WHAT
+  // to fight, so `work`; the survival ladder is untouched. Operator 2026-11-07: "clear monsters they come across".
+  { path: 'travelHunt', keys: ['travelHunt'], faculty: 'work', arg: 'travel_hunt', normalize: v => normalizeTravelHunt(v) },
+  // COOK FROM THE ROAD (m59-cook-food.mjs): true | { first, reserveCasts }. A create-food knower casts from looted
+  // elderberry and herbs before eating carried food while below its vigor ceiling. Off: cook only with an empty larder.
+  { path: 'cookFood', keys: ['cookFood'], faculty: 'work', arg: 'cook_food', normalize: v => normalizeCookFood(v) },
 ]);
 
 /** { room, squares } -> { room, squares: [[row, col], ...] } (deduplicated), or null. */

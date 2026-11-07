@@ -77,6 +77,7 @@ import * as grudge from './m59-grudge.mjs';
 import { refusedHere, refusedTargets } from './m59-refused-targets.mjs';
 import {quarryApproachSignature} from './m59-pocket-rails.mjs';
 import { isFood, foodValue, weighItem, weighPack, foodSurplusOf, MARKET_KEEP, isWeaponName } from './m59-items.mjs';
+import { farmTownTable, farmTownAllowsKind } from './m59-farm-town.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield, farmSourcesFor,
          FORGIVING_RATING as GENTLE_RATING, creatureByName } from './m59-spawns.mjs';
@@ -1843,9 +1844,11 @@ export const REAGENT_SHOP = reagentShopFor();
 // Independent purchase permissions owned by DUM strategies. `undefined` means the
 // historical behaviour (enabled), so an older roster or a standalone keeper does not
 // silently lose maintenance merely because it predates these switches.
+// A FARM TOWN (m59-farm-town.mjs) IS AN ALLOWLIST: a kind it names no counter for is not bought at all, wherever the
+// character stands -- "allowed: axes & leather armor from colhorr, bread from tova" (operator 2026-11-07) buys no herbs.
 export const purchaseEnabled = (policy, kind) => policy?.[{
   food: 'buyFood', weapons: 'buyWeapons', reagents: 'buyReagents',
-}[kind]] !== false;
+}[kind]] !== false && (!policy?.farmTown || farmTownAllowsKind(policy.farmTown, kind));
 // The retreat line is intentionally independent of engageAt and vigor. Those decide
 // whether to open a fight and whether to eat; neither means a healthy character should
 // abandon a monster room. Exported because 89% vs a 90% engagement preference is the
@@ -1928,10 +1931,15 @@ export const VILLAGE_TOWN = Object.freeze({
 // cap was leaving 545 nerudite armours on the floor of 2143 in two days -- and stopping a farmer in leather from looting the
 // suit that would replace it. Everywhere else on the island the cap stands.
 export const gateCapApplies = room => onIsland(room) && !VILLAGE_ROOMS.includes(Number(room));
-/** The counters for wherever this room is: the trading post in the Avar Village, the island's on the island, the mainland's everywhere else. */
-export function townTable(room) {
+/**
+ * The counters for wherever this room is: the trading post in the Avar Village, the island's on the island, the mainland's
+ * everywhere else -- unless `policy.farmTown` names this farm's own town (m59-farm-town.mjs; a strategy's `town`), which
+ * replaces the MAINLAND table only. Callers in the keeper pass `this.policy`; no policy, or no farm town, is the old answer.
+ */
+export function townTable(room, policy = null) {
   if (VILLAGE_ROOMS.includes(Number(room))) return VILLAGE_TOWN;
   if (onIsland(room)) return ISLAND_TOWN;
+  if (policy?.farmTown) return farmTownTable(policy.farmTown);
   return { region: 'mainland', BANKS, MARKET_STOPS, MARKETS, FOOD_SHOPS, FOOD_SHOP, REAGENT_SHOP };
 }
 
@@ -1942,7 +1950,7 @@ export function townDestinations({ needsCashFirst = false, supplyTrip = false, s
   if (needsCashFirst) return t.BANKS;
   if (packFull || brokeWithGoods) return t.MARKETS;
   if (richEnoughToBank) return t.BANKS;
-  if (supplyTrip) return [t.REAGENT_SHOP];
+  if (supplyTrip) return t.REAGENT_SHOP ? [t.REAGENT_SHOP] : [];   // a farm town may have no apothecary
   if (starving && !packFull) return [...t.FOOD_SHOPS];   // 103 alone is fenced (2026-09-28)
   return t.BANKS;
 }
@@ -2438,6 +2446,16 @@ export class Autopilot {
       // CHASE ON FOOT (m59-chase.mjs): rank quarry by steps on foot and walk the planner's route to a quarry round a ledge.
       // OFF until a farm strategy asks (`chaseOnFoot`), for the same staged rollout. Off is origin/main's behaviour exactly.
       chaseOnFoot: false,
+      // THIS FARM'S OWN TOWN (m59-farm-town.mjs; a strategy's `town`): the counters every mainland town trip uses and the
+      // items it may buy there. null is townTable's answer by room, exactly as before.
+      farmTown: null,
+      // HUNT ON THE ROAD (m59-travel-hunt.mjs; a strategy's `travelHunt`): on the keeper's own journeys, fight in-band
+      // monsters in reach, then walk on. null is off: a journey swings only at what blocks it (clear_path).
+      travelHunt: null,
+      // COOK FROM THE ROAD (m59-cook-food.mjs; a strategy's `cookFood`): cast create food from looted
+      // reagents before eating bought food while below the vigor ceiling. null keeps the old rule: cook only when the
+      // larder is empty.
+      cookFood: null,
       // AN ERRAND'S PURSE LEASE (m59-purse-lease.mjs): { carry, until, owner }. While live, no banking rule takes it.
       purseLease: null,
       // Weapons never to draw. null means no prohibition, which is what every doctrine

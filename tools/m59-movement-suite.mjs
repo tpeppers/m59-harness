@@ -217,6 +217,8 @@ const SUITES = [
    'the router plans on the map the mover enforces, and the bake matches it'],
   ['m59-travelling-test.mjs',
    'travel_guard: what a journey may interrupt itself for, on which clock'],
+  ['m59-travel-hunt-test.mjs',
+   'travelHunt: a keeper work journey stops its walk for an in-band monster in reach, never on an order it did not give or below the flee line'],
   ['m59-safespot-test.mjs',
    'a wall is the two grids disagreeing, and the spot book stays a book'],
   ['m59-impossible-test.mjs',

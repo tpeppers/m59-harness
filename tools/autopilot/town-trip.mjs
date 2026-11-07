@@ -60,7 +60,7 @@ export class TownTripPart {
       // THE REAGENT AUTOBALANCER (m59-reagent-autobalance.mjs): this lap's reagent plan, made once as the trip opens.
       // Absent unless a 'keeper' loop names this character -- silence is the old restock, exactly.
       ...(this.autobalanceLoop() ? { autobalance: this.autobalancePlan() } : {}),
-      marketStops: wantsMarket ? townTable(this.s.world?.room?.num).MARKET_STOPS.filter(m => !this.bansDestination(m.room)) : null };
+      marketStops: wantsMarket ? townTable(this.s.world?.room?.num, this.policy).MARKET_STOPS.filter(m => !this.bansDestination(m.room)) : null };
     try {
       this.ledgerEvent('town_trip_opened', { trip_started_at: startedAt, trigger, purpose,
         errand, why: sellCall.why ?? null, to: target?.room ?? null, to_name: target?.name ?? null,
@@ -269,7 +269,7 @@ export class TownTripPart {
     const town = req.town ?? 'market';
     const destinations = townDestinations({ packFull: town === 'market', richEnoughToBank: town === 'bank',
                                             starving: town === 'food', supplyTrip: town === 'supply',
-                                            table: townTable(this.s.world?.room?.num) })
+                                            table: townTable(this.s.world?.room?.num, this.policy) })
       .filter(b => !this.bansDestination(b.room));
     const options = destinations
       .map(b => { const r = this.s.world?.route?.(b.room); return { ...b, hops: r?.found ? r.hops.length : Infinity }; })
@@ -434,14 +434,14 @@ export class TownTripPart {
       // its posted bill before walking to a merchant.
       const plan = trip.purchasePlan ?? this.shoppingPlan();
       this.postShoppingPlan(plan);
-      if (plan.required_purse > 0 && !townTable(trip.target.room).MARKETS.some(m => m.room === Number(trip.target.room))) {
+      if (plan.required_purse > 0 && !townTable(trip.target.room, this.policy).MARKETS.some(m => m.room === Number(trip.target.room))) {
         const funded = await this.ensurePurchaseFunds(plan);
         if (funded.unaffordable) return false;
         if (!funded.ready) return true;
       }
       if ((await this.leaveHold('continuing the shopping trip')).refused) return true;
       if (this.policy.reagentCoop?.enabled && !trip.coopInitial &&
-          !townTable(trip.target.room).BANKS.some(b => b.room === Number(trip.target.room))) {
+          !townTable(trip.target.room, this.policy).BANKS.some(b => b.room === Number(trip.target.room))) {
         const donation = await runReagentCoop(this, 'town', {
           requestId: 'keeper-town:' + trip.startedAt + ':initial', nextRoom: trip.target.room,
           bankable: Math.max(0, this.purseNow() - Math.max(this.walkingFloat(),
@@ -517,7 +517,7 @@ export class TownTripPart {
       ['town favors', () => this.gatherTownFavors()],
       ['vault', () => this.vaultRunIfPassing()],
       // A loot policy's `drop_town` (m59-loot-policies.mjs): only at a verified town-service room.
-      ['drop designated town loot', () => { const t = townTable(this.s.world?.room?.num);
+      ['drop designated town loot', () => { const t = townTable(this.s.world?.room?.num, this.policy);
         return dropTownDispositions(this, [...(t.BANKS ?? []), ...(t.FOOD_SHOPS ?? []), ...(t.MARKET_STOPS ?? []),
           t.REAGENT_SHOP, BARLOQUE_VAULT].filter(Boolean).map(r => r.room)); }],
       // LAST, ON KO'CATAN: leave town with a pack the East Tower guard will let through (sell / vault / drop;
@@ -536,7 +536,7 @@ export class TownTripPart {
         // this service; only another service creates another chance.
         const donation = await runReagentCoop(this, 'town', {
           requestId: 'keeper-town:' + trip.startedAt + ':' + trip.nextService,
-          nextRoom: name === 'buy food' ? townTable(this.s.world?.room?.num).FOOD_SHOPS[0].room : name === 'buy reagents' ? townTable(this.s.world?.room?.num).REAGENT_SHOP.room : Number(this.s.world?.room?.num), first: false,
+          nextRoom: (name === 'buy food' ? townTable(this.s.world?.room?.num, this.policy).FOOD_SHOPS[0]?.room : name === 'buy reagents' ? townTable(this.s.world?.room?.num, this.policy).REAGENT_SHOP?.room : null) ?? Number(this.s.world?.room?.num), first: false,
           bankable: Math.max(0, this.purseNow() - Math.max(this.walkingFloat(),
             this.shoppingPlan().required_purse ?? 0)),
         }, TITHE_FLEET);

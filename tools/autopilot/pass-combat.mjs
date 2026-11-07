@@ -20,7 +20,7 @@ import { pvpAllowedHere, pvpRoomsOf } from '../m59-pvp-rooms.mjs';
 import { refusedHere } from '../m59-refused-targets.mjs';
 import * as skills from '../m59-skills.mjs';
 import * as tougher from '../m59-tougher.mjs';
-import { CONJURED_WEAPON_BULK, CONTINUE, FIGHT_BACK_STALE_MS, HANDLED, REACH, SPELL_EXERTION_VIGOR, partialFightMadeProgress, pct, releaseQuarry, scriptedWalkDefersArming, sleep, unarmedBlocker, vigorOf } from '../m59-autopilot.mjs';
+import { CONJURED_WEAPON_BULK, CONTINUE, FIGHT_BACK_GAP_MS, FIGHT_BACK_STALE_MS, HANDLED, REACH, SPELL_EXERTION_VIGOR, partialFightMadeProgress, pct, releaseQuarry, scriptedWalkDefersArming, sleep, unarmedBlocker, vigorOf } from '../m59-autopilot.mjs';
 
 // The unarmed make-space hook: at most once per ten minutes, and room for the weapon plus a margin.
 export const UNARMED_MAKE_SPACE_EVERY_MS = 10 * 60_000;
@@ -895,7 +895,8 @@ export class PassCombatPart {
     // says "do not swing back when hit"; it says nothing about a creature standing in the
     // walk, which is a different permission with its own faculty (`clear_path`). Gating both
     // on one number is how a switch comes to mean two things.
-    if (!edict && this.fightBackDue?.reason !== 'blocked') return CONTINUE;
+    // AND A ROAD HUNT (m59-travel-hunt.mjs, reason 'travel_hunt') is a third permission, a strategy's `travelHunt`.
+    if (!edict && !['blocked', 'travel_hunt'].includes(this.fightBackDue?.reason)) return CONTINUE;
     const w = this.watch, a = w?.attack ?? null;
     const now = Date.now();
     // FLEEING OUTRANKS THIS -- WHEN THERE IS A FLEE LEFT. Below the line the survival ladder is the next stage and it is
@@ -921,11 +922,24 @@ export class PassCombatPart {
     if (!skills.isArmed(c)) return CONTINUE;          // passArm's problem, and it ran already
     const me = c?.self;
     if (!me) return CONTINUE;
-    const onUs = this.inReachOfUs();
-    if (!onUs.length) { if (w) w.attack = null; return CONTINUE; }
+    // A ROAD HUNT LOOKS AS FAR AS ITS OWN REACH (a monster beside the road, not only on us), and prefers the one the
+    // watchdog chose. It opens a fight only at the engage line unless that monster is already hitting us -- the same
+    // line the watchdog applied, asked again because a pass can arrive seconds later with less health.
+    const roadHunt = due.reason === 'travel_hunt';
+    const onUs = roadHunt ? (this.travelHuntCandidates?.(due.reach ?? REACH, now) ?? []).map(x => x.o) : this.inReachOfUs();
+    if (!onUs.length) { if (w && !roadHunt) w.attack = null; return CONTINUE; }
 
     const rows = this.fightBackRows(c, onUs, room?.num ?? this.s.world?.room?.num);
-    const pick = rows.find(r => r.name && !r.refused);
+    const pick = (roadHunt && due.targetId != null ? rows.find(r => r.o.id === due.targetId && r.name && !r.refused) : null)
+      ?? rows.find(r => r.name && !r.refused);
+    if (roadHunt && pick) {
+      const beingHit = !!(a && now - (a.lastHitAt ?? 0) < FIGHT_BACK_GAP_MS && pick.d <= REACH);
+      if (!beingHit && hp != null && hp < this.safety().engageAt) {
+        this.note('road hunt stood down: below the engage line by the time the pass came', {
+          target: pick.name, health: Math.round(hp * 100) + '%', engage_at: Math.round(this.safety().engageAt * 100) + '%' });
+        return CONTINUE;
+      }
+    }
     const underFor = Math.round((now - due.since) / 1000);
     if (!pick) {
       this.note('under attack and not swinging, but nothing on us is inside the band', {
@@ -935,23 +949,32 @@ export class PassCombatPart {
       });
       return CONTINUE;
     }
-    this.note('FIGHT BACK — under attack for ' + underFor + 's and getting nowhere', {
-      target: pick.name, distance: +pick.d.toFixed(1), hits_taken: due.hits, lost: due.lost,
-      was_doing: this.doing ?? null, from_safe_spot: !!this.hold,
-      why: cornered
-        ? 'below the flee line with nothing left to flee with: the session logoff is spent, no refuge is reachable ' +
-          'and the exit was just tried -- one exchange at what is hitting us, then the exit is asked again'
-        : 'the fight-back edict: something inside our band has been hitting us for longer ' +
-          'than ' + Math.round(edict / 1000) + 's while we were not swinging',
-      ...(cornered ? { cornered: true } : {}),
-    });
-    this.tally.fight_backs = (this.tally.fight_backs || 0) + 1;
-    this.ledgerEvent('fought_back', {
-      creature: pick.name, room: room?.name ?? null, room_num: room?.num ?? null,
-      under_attack_s: underFor, hits_taken: due.hits, lost: due.lost,
-      was_doing: this.doing ?? null, from_safe_spot: !!this.hold,
-      ...(cornered ? { cornered: true } : {}),
-    });
+    if (roadHunt) {
+      this.note('ROAD HUNT — fighting what was in reach of the road, then walking on', {
+        target: pick.name, distance: +pick.d.toFixed(1), was_doing: this.doing ?? null,
+        why: 'travelHunt: an in-band monster within reach of a keeper journey; the walk resumes after the fight' });
+      this.tally.road_hunt_fights = (this.tally.road_hunt_fights || 0) + 1;
+      this.ledgerEvent('road_hunt', { creature: pick.name, room: room?.name ?? null, room_num: room?.num ?? null,
+        distance: +pick.d.toFixed(1), was_doing: this.doing ?? null });
+    } else {
+      this.note('FIGHT BACK — under attack for ' + underFor + 's and getting nowhere', {
+        target: pick.name, distance: +pick.d.toFixed(1), hits_taken: due.hits, lost: due.lost,
+        was_doing: this.doing ?? null, from_safe_spot: !!this.hold,
+        why: cornered
+          ? 'below the flee line with nothing left to flee with: the session logoff is spent, no refuge is reachable ' +
+            'and the exit was just tried -- one exchange at what is hitting us, then the exit is asked again'
+          : 'the fight-back edict: something inside our band has been hitting us for longer ' +
+            'than ' + Math.round(edict / 1000) + 's while we were not swinging',
+        ...(cornered ? { cornered: true } : {}),
+      });
+      this.tally.fight_backs = (this.tally.fight_backs || 0) + 1;
+      this.ledgerEvent('fought_back', {
+        creature: pick.name, room: room?.name ?? null, room_num: room?.num ?? null,
+        under_attack_s: underFor, hits_taken: due.hits, lost: due.lost,
+        was_doing: this.doing ?? null, from_safe_spot: !!this.hold,
+        ...(cornered ? { cornered: true } : {}),
+      });
+    }
     const holding = !!this.hold;
     this.doing = 'fighting';
     const f = await this.fightNow({
@@ -976,7 +999,7 @@ export class PassCombatPart {
       });
       this.ledgerEvent('killed', {
         creature: f.target, room: room?.name ?? null, room_num: room?.num ?? null,
-        rounds: f.rounds, from_safe_spot: holding, fought_back: true,
+        rounds: f.rounds, from_safe_spot: holding, ...(roadHunt ? { road_hunt: true } : { fought_back: true }),
         looted: looted.length ? looted.join(', ') : undefined,
       });
       this.fledInARow = 0;
