@@ -732,6 +732,15 @@ into the open to pull from that area"): 13 steps from r37c40, and the nearest sq
 staircase line of sight says only r37c40 sees r35c41 (and only on the monster_grid), and `check` says so as warnings --
 the operator's squares stand. The first site (striker r35c42, kill r34c43) is retired.
 
+**LIVE, 2026-11-07 (deploy-2026-11-07).** Archers on their stations never shot ("nothing valid within 2"): the keeper took
+the reach from the FIRST equipped item in the pack, armour as often as not, and armour reaches like a fist. `needleWielded`
+now reads the keeper's equipment list and picks the bow (then anything the weapon ranking scores), so an archer shoots at
+the site's bow range (17) and a striker swings at its sword's. Line of sight stays a tie-break, not a gate, because the
+model's line of sight disagrees with the operator's wall. "No Discordance caster" is now said only after five minutes
+without one (the keepers; the coordinator draft counts the needle's members wherever they are and waits the same five
+minutes for one who is away). Status says why a keeper has no slot (`in_needle_room`, `why_no_slot`): a slot exists only
+in the needle's room, and a recalled archer in 2101 is "not there yet".
+
 Not changed, and reported: the striker left the room through the survival ladder's caster exit ("a caster is in the room:
 no spot here holds") -- avar shamans cast without a range or sight check (monster.kod MonsterCanCastSpell), so no square in
 2143 is safe from a spell, and archers resting on a station can still take spell damage. That is survival, and it is the
@@ -773,7 +782,7 @@ archer's behalf are not keeper rows -- both said in the report. Every pull is a 
 (no `autopilot` argument). On prod, the island coordinator gives the roles: `avar-village-ops.needle-draft.mjs` (beside
 the live file, for review) adds a `needle` module -- the first `needle.strikers` melee (default 2) get the striker
 strategy, the rationed archers get the needle's archer strategy, and `needle.archers` (`max`, `prefer`) replaces
-`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (64) pins it.
+`archers.max` and `archers.prefer` and takes the preferred names out of `archers.exclude` -- for 2143, seven archers. `m59-needle-farm-test.mjs` (66) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 

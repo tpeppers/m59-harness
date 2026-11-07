@@ -364,7 +364,7 @@ through a nested shelter order.
   `chaseMaxPieces`, and contact resets the count.
 
 - `m59-patrol-farm-test.mjs` (23): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
-- `m59-needle-farm-test.mjs` (64): `needle`, the single striker in the needle with archers behind it. The field
+- `m59-needle-farm-test.mjs` (66): `needle`, the single striker in the needle with archers behind it. The field
   takes `{ site, role }` only and the site file refuses bare pairs, unknown keys (a `fleeBelow` included), a `hold`
   bench with no squares, a duplicated station or one on the striker's square; notes (`_x`, `why`) pass. Target choice:
   the closest valid monster in reach, a closer one takes the next swing, a tie keeps the current one, sight breaks a
@@ -417,6 +417,8 @@ through a nested shelter order.
   The shipped 2143 example is the operator's needle: striker r36c40, kill r35c41, his six wall squares in his order then the
   two between, nobody east of c40, every square standable, check passing with the model's objections as warnings and
   nothing dropped or reordered.
+  LIVE 2026-11-07: an archer wearing armour first and a bow second reads the bow and shoots at 17; the equipment list wins;
+  a striker reads its sword, never the mail; "no Discordance caster" waits five minutes; status says why there is no slot.
 
 - `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy

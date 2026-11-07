@@ -223,10 +223,21 @@ export class NeedlePart {
 
   /** The name of the weapon in hand, or null. */
   needleWielded() {
-    const c = this.s?.client, using = skills.equippedNow(c);
-    if (!using) return null;
-    const o = (c?.inventory ?? []).find(x => using.has(x.id) && !skills.brokenSet(c).has(x.id));
-    return o ? (c.rsc?.get?.(o.nameRsc) || o.name || null) : null;
+    // THE WEAPON, NOT THE FIRST THING WORN (live 2026-11-07: Statler and Camilla, battle bows in hand, read "nothing valid
+    // within 2" on their stations -- this returned whatever equipped item came first in the pack, armour as often as not,
+    // and armour reaches like a fist). A bow first, then anything the weapon ranking scores; armour, shields and rings never.
+    const c = this.s?.client;
+    let worn = [];
+    try { const eq = c?.equipment?.(); if (eq?.known && Array.isArray(eq.equipped)) worn = eq.equipped.map(e => ({ id: e.id, name: String(e.name ?? '') })); } catch { worn = []; }
+    if (!worn.length) {
+      const using = skills.equippedNow(c);
+      if (!using) return null;
+      worn = (c?.inventory ?? []).filter(x => using.has(x.id)).map(x => ({ id: x.id, name: String(c.rsc?.get?.(x.nameRsc) || x.name || '') }));
+    }
+    worn = worn.filter(x => x.name && !(Number(x.id) > 0 && skills.brokenSet(c).has(x.id)));
+    const bow = worn.find(x => BOW.test(x.name) && !/crossbow/i.test(x.name));
+    const weapon = bow ?? worn.find(x => skills.weaponScore(x.name) > 0);
+    return weapon?.name ?? null;
   }
 
   /** { arrows, bow }: how many arrows the pack holds and whether it carries a usable bow. */
@@ -315,7 +326,10 @@ export class NeedlePart {
       { site: site.name, seat: slot.slot, hold_s: site.disco.holdS, cast_from: site.disco.castSquare ? sq(site.disco.castSquare) : 'my station' });
     st.onDisco = onDisco;
     st.slot = slot.slot; st.alloc = alloc;
-    if (alloc.disco_missing && (!this._needleDiscoSaid || now - this._needleDiscoSaid > 300_000)) {
+    // SAID ONLY WHEN IT LASTS (live 2026-11-07: "no Discordance caster" three minutes after Camilla cast it there -- she was
+    // staging). A caster away for a lap or a rest is not a missing caster; five minutes without one is.
+    if (!alloc.disco_missing) st.discoMissingSince = null; else st.discoMissingSince ??= now;
+    if (alloc.disco_missing && now - st.discoMissingSince >= 300_000 && (!this._needleDiscoSaid || now - this._needleDiscoSaid > 300_000)) {
       this._needleDiscoSaid = now;
       this.note('NEEDLE HAS NO DISCORDANCE CASTER: nobody here can lift a sandstorm', { site: site.name,
         configured: site.disco.agents, present: alloc.disco, why: site.disco.agents.length ? 'none of site.disco.agents is at the needle' : 'site.disco.agents is empty' });
@@ -652,7 +666,13 @@ export class NeedlePart {
     if (!p || typeof p !== 'object') return null;
     const n = this._needleNorm, st = this._needle;
     const site = n ? (typeof n.site === 'object' ? n.site : this._needleSites?.get(n.site)?.site ?? null) : null;
+    // WHERE THE BODY IS, beside where the needle is: a slot exists only in the needle's room, so "slot null" in 2101 or 2144
+    // means "not there yet", and status says so instead of looking broken (live 2026-11-07, Piggy recalled to 2101).
+    const here = this.s?.world?.room?.num ?? null;
     return { site: site?.name ?? (typeof p.site === 'string' ? p.site : null), room: site?.room ?? null, role: n?.role ?? p.role ?? null,
+      here, in_needle_room: site ? Number(here) === site.room : null,
+      why_no_slot: site && Number(here) !== site.room ? `not in the needle's room (${here ?? '?'}); the farm pass walks to ${site.room}` : null,
+      wielded: this.needleWielded?.() ?? null,
       slot: st?.slot ?? null, mode: st?.mode ?? null, money_losing: !!st?.alloc?.money_losing,
       disco_duty: !!st?.onDisco, disco_present: st?.alloc?.disco ?? [], disco_missing: !!st?.alloc?.disco_missing, away: st?.alloc?.away ?? [],
       mender: st?.alloc?.mender ?? null, mend: st?.mendState ? { ready: st.mendState.ready, usable: st.mendState.usable, need: st.mendState.need,

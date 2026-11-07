@@ -615,11 +615,37 @@ await ok('disco duty on the keeper: in a storm the disco archer stops shooting, 
   assert.equal(fightCalls.length, 1, 'storm lifted: back to shooting from the same seat');
   assert.equal(a.needleStatus().slot, 'archer:0');
 });
-await ok('the needle says it out loud when no Discordance caster is there', async () => {
+await ok('the needle says it out loud when no Discordance caster has been there for five minutes -- not when one is just away', async () => {
   reset();
   const s = keeperAt('t1', 'striker');
   await s.needlePass(ctxOf(s), [], s.needleHere(2143));
+  assert.ok(!notes.some(x => /NO DISCORDANCE CASTER/.test(x.what)), 'live 2026-11-07: three minutes after Camilla cast it there');
+  s.needleState().discoMissingSince = Date.now() - 301_000;
+  await s.needlePass(ctxOf(s), [], s.needleHere(2143));
   assert.ok(notes.some(x => /NO DISCORDANCE CASTER/.test(x.what)));
+});
+await ok('ARCHERS SHOOT AT BOW RANGE: the weapon in hand is the bow, not the first thing worn (armour reaches like a fist)', async () => {
+  reset();
+  const a = keeperAt('t3', 'archer', { self: W(34, 41), monsters: [M(52, 30, 44)],
+    inventory: [{ id: 200, nameRsc: 88, amount: 1 }, { id: 101, nameRsc: 2, amount: 1 }, { id: 102, nameRsc: 3, amount: 80 }] });
+  a.s.client.using = new Set([200, 101]);                       // leather armour first in the pack, then the bow
+  const g = a.s.client.rsc.get; a.s.client.rsc = { get: id => (id === 88 ? 'leather armor' : id === 2 ? 'battle bow' : g(id)) };
+  assert.equal(a.needleWielded(), 'battle bow');
+  await a.needlePass(ctxOf(a), [...a.s.client.room.objects.values()], a.needleHere(2143));
+  assert.equal(fightCalls.length, 1, 'a monster 5 squares off is in bow range');
+  assert.equal(fightCalls[0].reach, 17); assert.equal(fightCalls[0].exactTargetId, 52);
+  // The keeper's own equipment list wins when it has one.
+  a.s.client.equipment = () => ({ known: true, equipped: [{ id: 300, name: 'chain mail' }, { id: 301, name: 'longbow' }] });
+  assert.equal(a.needleWielded(), 'longbow');
+  a.s.client.equipment = () => ({ known: true, equipped: [{ id: 300, name: 'chain mail' }, { id: 302, name: 'nerudite sword' }] });
+  assert.equal(a.needleWielded(), 'nerudite sword', 'a striker\'s sword, never the mail');
+});
+await ok('status says why there is no slot: not in the needle\'s room yet', async () => {
+  const a = keeperAt('t14', 'archer', { self: W(10, 10) });
+  a.s.world.room = { num: 2101 };
+  a.needleHere(2101);
+  const st = a.needleStatus();
+  assert.equal(st.slot, null); assert.equal(st.in_needle_room, false); assert.match(st.why_no_slot, /walks to 2143/);
 });
 
 // ------------------------------------------------------------------------------------ mending the needle's bows
