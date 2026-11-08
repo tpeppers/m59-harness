@@ -501,11 +501,14 @@ export class DeskPracticePart {
       // REAGENTS ARE CHECKED BEFORE THE CAST, NOT INFERRED FROM ITS FAILURE. A cast that
       // cannot pay its reagents is refused server-side and looks, from here, exactly like
       // a cast that landed on somebody already enchanted.
-      const short = buff.reagents.filter(([n, k]) => this.reagentOnHand(n) < k);
+      // COUNTED EXACTLY: "mushroom" is not "red mushroom". A substring count let magic shield's red mushroom pass for the
+      // two plain ones (and a pack of red mushrooms pass for bless's), which is a cast refused server-side for nothing.
+      const have = n => (typeof this.reagentExact === 'function' ? this.reagentExact(n) : this.reagentOnHand(n));
+      const short = buff.reagents.filter(([n, k]) => have(n) < k);
       if (short.length) {
         this.declinedCast(buff.name, 'out of reagents',
           { needs: buff.reagents.map(([n, k]) => `${k} ${n}`).join(', '),
-            missing: short.map(([n, k]) => `${n} (have ${this.reagentOnHand(n)} of ${k})`) });
+            missing: short.map(([n, k]) => `${n} (have ${have(n)} of ${k})`) });
         continue;
       }
 
@@ -541,6 +544,7 @@ export class DeskPracticePart {
         said: ev.events?.filter(e => e.text).map(e => e.text).slice(0, 2),
         why: buff.name === 'super strength'
           ? 'might is brawling’s requisite stat: raises their improvement chance and soft cap'
+          : buff.name === 'magic shield' ? 'defence +50 + 2*power: fewer hits taken from what they are fighting'
           : 'to-hit, so more landed swings, so the 75-swing improvement counter pays sooner' });
       this.progress(`cast ${buff.name} on an ally`);
       return;                       // one cast per pass; the pacer owns the rest

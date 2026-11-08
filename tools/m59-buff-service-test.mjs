@@ -177,5 +177,29 @@ console.log('\nthe spell list can be narrowed by the doctrine');
   ok('only the named spell is cast', ap.notes.at(-1)?.detail?.spell === 'bless');
 }
 
+console.log('\nmagic shield (Kraanan level 3): its whole duration is promised, and its reagents are counted exactly');
+{
+  const MS = Autopilot.BUFFS.find(b => b.name === 'magic shield');
+  ok('magic shield is in the table', !!MS && MS.mana === 9);
+  const ap0 = Object.create(Autopilot.prototype);
+  // mshield.kod GetDuration: (1 + (power + 5) / 10) minutes, no Random(). Ability 40 -> power 20 -> 1 + 2 = 3 minutes.
+  ok('ability 40 holds the full 3 minutes', ap0.buffFloorMs(MS, 40) === 3 * 60_000);
+  ok('ability 0 still holds 1 minute', ap0.buffFloorMs(MS, 0) === 60_000);
+  ok('bless keeps its halved floor', ap0.buffFloorMs(BLESS, 20) === ((40 + 60) * 1000) / 2);
+  const SHIELD_ONLY = [['magic shield', 13]];
+  // Two red mushrooms and no plain ones: a substring count would read 2 "mushroom" and cast into a refusal.
+  const apRed = makeAp({ pack: [['red mushroom', 2]], spells: SHIELD_ONLY });
+  await apRed.buffAllies();
+  ok('red mushrooms do not pass for the two plain ones', apRed.s.client.casts === 0
+     && apRed.declined.some(d => d.what === 'magic shield' && d.why === 'out of reagents'));
+  const apOk = makeAp({ pack: [['mushroom', 2], ['red mushroom', 1]], spells: SHIELD_ONLY });
+  await apOk.buffAllies();
+  ok('with 2 mushroom + 1 red mushroom it is cast on the ally', apOk.s.client.casts === 1
+     && apOk.notes.at(-1)?.detail?.spell === 'magic shield');
+  apOk.lastBuffAt = 0;
+  await apOk.buffAllies();
+  ok('and not cast again on the same ally inside its window', apOk.s.client.casts === 1);
+}
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);

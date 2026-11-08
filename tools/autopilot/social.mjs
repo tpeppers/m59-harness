@@ -626,6 +626,14 @@ export class SocialPart {
       reagents: [['mushroom', 2], ['orc tooth', 1]] },
     { name: 'bless', mana: 6, base: 40,
       reagents: [['mushroom', 2], ['sapphire', 2]] },
+    // MAGIC SHIELD (Kraanan level 3, mshield.kod): 9 mana, 2 mushroom + 1 RED mushroom, +50 + 2*power defence. Operator
+    // 2026-11-08: "our level 2 and level 3 kraanan spells (bless, super strength, magic shield) getting practiced while they
+    // hunt mollusks, never wasting the buff but just casting on allies in the room also farming". Its GetDuration is
+    // (1 + (power + 5) / 10) MINUTES with no Random() wrapper, so the whole of it is promised: `durationMs` replaces the
+    // halved base + 6*power floor that the other two use. It is last because it is the dearest in reagents.
+    { name: 'magic shield', mana: 9,
+      durationMs: power => (1 + Math.floor((Math.max(0, power) + 5) / 10)) * 60_000,
+      reagents: [['mushroom', 2], ['red mushroom', 1]] },
   ];
 
   /**
@@ -667,6 +675,8 @@ export class SocialPart {
    */
   buffFloorMs(buff, ability) {
     const power = Math.max(0, Math.floor(Number(ability || 0) / 2));
+    // A buff whose kod duration is not randomised (magic shield) states it; the whole of it is guaranteed.
+    if (typeof buff.durationMs === 'function') return buff.durationMs(power);
     return ((buff.base + 6 * power) * 1000) / 2;
   }
 
