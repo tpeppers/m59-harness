@@ -22,6 +22,8 @@ import { activeRoutes, anchorFor } from '../m59-routes.mjs';
 import { coarseCombatReachFrom } from '../m59-safespots.mjs';
 import * as skills from '../m59-skills.mjs';
 import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision, observeSurvivalDecision, updateSurvivalDecision } from '../m59-survival-decision.mjs';
+import { pvpWindowMs, survivalEdgeVerdict } from '../m59-survival-edge.mjs';
+import { recentPvpDeathRooms } from '../m59-pvp-return.mjs';
 import { JAM_MEASURE_MS, JAM_TTL_MS, REPLAN_MS, jamObservation, recoveryObservationKey, validJamOwner } from '../m59-survival-jam.mjs';
 import { traceBody, traceRefuge, traceSurvival, traceSurvivalOperation } from '../m59-survival-trace.mjs';
 import { recordTactic } from '../m59-tactics.mjs';
@@ -552,7 +554,27 @@ export class SafeSpotsPart {
     this._spentExitTried={room,at:Date.now()};
     let exits=[];try{exits=s.world?.exits?.()??[];}catch{exits=[];}
     const confine=Array.isArray(this.policy?.confineRooms)&&this.policy.confineRooms.length?this.policy.confineRooms:null;
-    const exit=spentSessionExit(exits,{here:room,confine});
+    let exit=spentSessionExit(exits,{here:room,confine});
+    const client=s.client, from=client?.self, geo=s.world?.geometry;
+    if (exit?.to === 544 && Number.isFinite(exit.steps_away) && this.mode === 'farm' &&
+        this.oceanRangedRecoveryEnabled() && this.policy.assignedRoom === 552 &&
+        from && !from.predicted && client.room?.objects && Number.isInteger(geo?.security) &&
+        client.room.security === geo.security) {
+      // Kermit's spent-session exit sent him 61 steps across the Ocean. The eastern
+      // edge was reachable in 18, and the one-hop survival exception already permits it.
+      const east=exits.find(e => e?.kind === 'edge' && e.to === 562 && e.reachable === true && e.verified === true &&
+        e.stand_on && e.edge_target && Number.isFinite(e.steps_away) && e.steps_away * 2 <= exit.steps_away);
+      if (east && survivalEdgeVerdict({ to: east.to, policy: this.policy,
+        pvpRooms: recentPvpDeathRooms({ withinMs: pvpWindowMs(this.policy) }) }).allowed) {
+        const { col, row }=east.stand_on;
+        const reach=recoveryRefugeReach(geo,from,client.room.objects,client.selfId,client.playersOnline)(col,row);
+        if (reach.reachable && Number.isFinite(reach.steps) && reach.steps * 2 <= exit.steps_away) {
+          this.note('using the shorter proved Ocean recovery exit', { room, to: east.to, steps: reach.steps,
+            original_to: exit.to, original_steps: exit.steps_away });
+          exit=east;
+        }
+      }
+    }
     const hp=s.client?.vitals?.()?.health;
     if(!exit) {
       const why=confine?'no reachable exit into the confinement':'no reachable exit';

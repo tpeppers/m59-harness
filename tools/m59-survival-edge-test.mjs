@@ -26,6 +26,8 @@ const { survivalEdgeVerdict, isSurvivalExit, pvpWindowMs, SURVIVAL_EDGE_REVISIT 
 const { recentPvpDeathRooms, PVP_RETURN_DELAY_MS_DEFAULT } = await import('./m59-pvp-return.mjs');
 const { World } = await import('./m59-world.mjs');
 const { Session } = await import('./m59-game.mjs');
+const { Autopilot } = await import('./m59-autopilot.mjs');
+const { chooseSurvivalDecision } = await import('./m59-survival-decision.mjs');
 const { attachStepMasks } = await import('./m59-routes.mjs');
 const { geometryFor } = await import('./m59-safespots.mjs');
 const { loadMap } = await import('./m59-map.mjs');
@@ -117,6 +119,34 @@ const travelOrError = async (s, to, opts) => {
 const crossedNorth = packets => packets.some(p => p.y < 64);
 // Under the north door at r2c13 (kod 880,160): the agent's control walks this to the crossing when unconfined.
 const DOOR = [880, 160];
+
+test('Kermit’s spent-session recovery uses the proved shorter Ocean edge when permitted', { skip }, async () => {
+  for (const situation of ['clear', 'unverified', 'occupied', 'predicted', 'banned', 'recent PvP']) {
+    const confineRooms = [552, 544, 534, 200, 201, 202, 205];
+    const { s, c } = walker(552, 4704, 416, confineRooms);
+    const exits = s.world.exits().map(e => ({ ...e }));
+    const east = exits.find(e => e.to === 562);
+    const south = exits.find(e => e.to === 544);
+    assert.ok(east?.verified && south?.verified && east.steps_away * 2 < south.steps_away);
+    s.world.exits = () => exits;
+    if (situation === 'unverified') east.verified = false;
+    if (situation === 'occupied') c.room.objects.set(2, { id: 2, ...east.stand_on, flags: 9 });
+    if (situation === 'predicted') c.self.predicted = true;
+    if (situation === 'recent PvP') {
+      mkdirSync(process.env.M59_PVP_HOLD_DIR, { recursive: true });
+      writeFileSync(join(process.env.M59_PVP_HOLD_DIR, 'ocean.json'), JSON.stringify({ room_num: 562, died_at: Date.now() }));
+      recentPvpDeathRooms({ ttlMs: 0 });
+    }
+    const policy = { assignedRoom: 552, molluskCoverRecovery: true, confineRooms,
+      bannedDestinations: situation === 'banned' ? [562] : [] };
+    const travels = [];
+    const k = Object.assign(Object.create(Autopilot.prototype), { s, policy, mode: 'farm', note() {}, progress() {},
+      async travel(to, { origin, maxHops }) { travels.push({ to, name: origin.name, maxHops }); return { arrived: true }; } });
+    const d = chooseSurvivalDecision(s, { strategy: 'leave_room', status: 'pending', reason: 'spent logout budget' });
+    assert.equal(await k.leaveRoomForRecovery(d), true);
+    assert.deepEqual(travels, [{ to: situation === 'clear' ? 562 : 544, name: 'survival_exit', maxHops: 1 }], situation);
+  }
+});
 
 test('2501 -> 2508, confined to 2501, WITH the survival pass: walks out over the north edge', { skip }, async () => {
   const { s, packets, refused } = walker(2501, ...DOOR, [2501]);
