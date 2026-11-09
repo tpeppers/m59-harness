@@ -462,7 +462,7 @@ export class SafeSpotsPart {
       chooseSurvivalDecision(s,{strategy:'yield_to_controller',reason:'survival control explicitly handed to another controller',
         reason_code:'controller_ownership',status:'yielded'},{because:'external control takes precedence'});return false;
     }
-    // Waldorf died while the same jam tried a second distant Ocean refuge. A live
+    // A stalled Ocean approach can reselect a wall or an open logoff. A live
     // guarded rescue gets a chance first, with this exact retry intact if refused.
     if (isStalledRefugeRetry(d) && this.oceanRangedRecoveryEnabled()) {
       const generation = s.movementGeneration;
@@ -789,7 +789,14 @@ export class SafeSpotsPart {
       const why=REFUGE_NO_PROGRESS_REASON;
       this.note(why,{to:{row:spot.row,col:spot.col},room,
         stalled_ms:Date.now()-progress.progressedAt,remaining_steps:progress.best});
-      this.cancelForSurvival(null,why,{origin:keeperOrigin('shelter')});
+      const stopped=this.cancelForSurvival(null,why,{origin:keeperOrigin('shelter')});
+      const retry=currentSurvivalDecision(s);
+      // The cancelled walker may still be unwinding. The exact stalled retry
+      // can ask for cooperative rescue before the next ladder pass.
+      if(stopped?.cancelled && s.movementGeneration===generation+1 && position && !position.predicted &&
+          retry?.previous_decision_id===decision.id &&
+          isStalledRefugeRetry(retry) && this.oceanRangedRecoveryEnabled())
+        void this.tryOceanCooperativeEscape(retry).catch(()=>{});
     };
     const timer=setInterval(()=>{
       if(!stillOwned()){close();return;}

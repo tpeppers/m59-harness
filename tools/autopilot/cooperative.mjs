@@ -120,6 +120,7 @@ export class CooperativePart {
   }
 
   async tryOceanCooperativeEscape(retry = null) {
+    if (retry && this._oceanCooperativeRetry?.decision === retry) return this._oceanCooperativeRetry.promise;
     const s = this.s, c = s.client;
     const liveThreat = () => {
       const damage = s.lastFleetDamage, age = Date.now() - (damage?.at ?? 0);
@@ -142,9 +143,12 @@ export class CooperativePart {
     const why = 'recent damage below the flee line with a ranged mollusk in sight';
     const decision = retry ?? chooseSurvivalDecision(s, { strategy: 'logoff_open', reason: why,
       reason_code: 'ocean_ranged_escape', status: 'pending' });
+    const attempt = this.fleetLogoff(why, { afterRecovery, guard: liveThreat, includeOceanRanged: true, retry });
+    if (retry) this._oceanCooperativeRetry = { decision: retry, promise: attempt };
     try {
-      return await this.fleetLogoff(why, { afterRecovery, guard: liveThreat, includeOceanRanged: true, retry });
+      return await attempt;
     } finally {
+      if (retry && this._oceanCooperativeRetry?.promise === attempt) this._oceanCooperativeRetry = null;
       if (!retry && currentSurvivalDecision(s)?.id === decision.id)
         finishSurvivalDecision(s, decision.id, 'refused', 'no cooperative rescue admitted before caster exit');
     }

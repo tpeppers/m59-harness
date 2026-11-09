@@ -249,6 +249,35 @@ try{
   assert.equal(local.counts().rejoins,1);
   assert.deepEqual(local.store().read('request',local.a.s.name).targets.map(t=>t.id),[16833,17176,17160]);
 
+  // Rizzo's second canceled approach produced logoff_open while the old walker still unwound.
+  const rizzoOpen={
+   strategy:'logoff_open',at:{row:49,col:44,x:2833,y:3183},health:{value:47,max:122},
+   bodies:[[19919,52,41,2667,3366],[19931,42,51,3281,2725],[19585,43,51,3282,2797],[19910,44,52,3367,2835]],
+  };
+  const open=await stalled('rizzo-open-retry',true,rizzoOpen);
+  const requestStrategy=open.a.s._askStrategies;
+  let release,probes=0;
+  open.a.s._askStrategies=async(...args)=>{
+   probes++;
+   await new Promise(resolve=>{release=resolve;});
+   return requestStrategy(...args);
+  };
+  const early=open.a.pilot.tryOceanCooperativeEscape(open.retry);
+  const following=open.step();
+  assert.equal(probes,1,'the dispatcher joins the watchdog rescue for the same decision');
+  release();
+  assert.deepEqual(await Promise.all([early,following]),[true,true]);
+  assert.equal(open.paths(),0);
+  assert.equal(open.counts().rejoins,1);
+  assert.deepEqual(open.store().read('request',open.a.s.name).targets.map(t=>t.id),[19919,19931,19585,19910]);
+
+  const spentOpen=await stalled('rizzo-open-spent',true,rizzoOpen);
+  noteLogoff(spentOpen.a.s.name);
+  assert.equal(await spentOpen.a.pilot.tryOceanCooperativeEscape(spentOpen.retry),false);
+  assert.equal(spentOpen.counts().rejoins,0);
+  assert.equal(spentOpen.store().read('request',spentOpen.a.s.name),null);
+  assert.equal(currentSurvivalDecision(spentOpen.a.s),spentOpen.retry);
+
   const localRefused=await stalled('rizzo-no-helper',false,rizzo);
   assert.equal(await localRefused.step(),true);
   assert.equal(localRefused.paths(),1);

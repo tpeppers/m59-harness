@@ -186,6 +186,34 @@ test('incoming damage shortens a motionless refuge approach to two seconds; prog
   t.mock.timers.tick(500);assert.equal(s.movementGeneration,1);
   assert.ok(k.unreachableIn(38).has('23,7'));stop();
 });
+for (const [replans, replacement] of [[0, 'route_refuge'], [1, 'logoff_open']])
+test(`an exact Ocean ${replacement} retry asks for help before the old movement unwinds`,t=>{
+  t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
+  const {k,s,c}=approachFixture(),target={row:6,col:74};
+  s.world.room.num=552;
+  c.room.id=1416;
+  c.self={id:1,row:49,col:44,x:2833,y:3183};
+  s.damagedAt=Date.now();
+  k.policy.molluskCoverRecovery=true;
+  k.mode='farm';
+  k.inert={travelling:true,to:544};
+  const previous=chooseSurvivalDecision(s,{strategy:'route_refuge',status:'approaching',
+    chosen_refuge:{room:552,...target},replan_count:replans});
+  const probes=[];
+  k.tryOceanCooperativeEscape=async retry=>{probes.push({retry,generation:s.movementGeneration});return false;};
+  const stop=k.watchRecoveryApproach(target);
+  t.mock.timers.tick(1500);
+  assert.equal(probes.length,0);
+  t.mock.timers.tick(500);
+  const retry=currentSurvivalDecision(s);
+  assert.equal(retry.strategy,replacement);
+  assert.equal(retry.status,'pending');
+  assert.equal(retry.previous_decision_id,previous.id);
+  assert.deepEqual(probes,[{retry,generation:1}]);
+  t.mock.timers.tick(1500);
+  assert.equal(probes.length,1);
+  stop();
+});
 test('a new recovery episode and a completed arrival do not inherit an expired approach clock',t=>{
   t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
   const {k,s,c,target}=approachFixture();let stop=k.watchRecoveryApproach(target);
