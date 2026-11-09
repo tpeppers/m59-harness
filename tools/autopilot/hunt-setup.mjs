@@ -185,11 +185,14 @@ export class HuntSetupPart {
     const c = this.s.client;
     if (!c) return;
     const r = this.reagentCount();
-    const wants = [], needs = new Map(), spare = new Map();
+    const wants = [], needs = new Map(), spare = new Map(), wantMatches = new Map();
     for (const [kind, have] of [['elderberry', r.elderberry], ['herb', r.herbs]]) {
       const want = reagentTargetFor(kind, this.policy.reagentTarget);
-      if (have < want) wants.push(kind);
-      if (have < want) needs.set(kind, want - have);
+      if (have < want) {
+        wants.push(kind);
+        needs.set(kind, want - have);
+        wantMatches.set(kind, 'exact');
+      }
       else if (have > want) spare.set(kind, have - want);
     }
     // No food and nothing to cook with is a want somebody else can answer directly.
@@ -203,7 +206,15 @@ export class HuntSetupPart {
     const l = this.loadout();
     if (l) {
       const mine = wantsOf(l, this.packAsItems());
-      for (const w of mine.wants) if (!wants.includes(w)) wants.push(w);
+      for (const [w, match] of mine.wantMatches) {
+        if (!wants.includes(w)) {
+          wants.push(w);
+          wantMatches.set(w, match);
+        } else if (wantMatches.has(w) && match !== 'exact') {
+          // An explicitly broad carry order can still want more than the exact reagent target.
+          wantMatches.set(w, match);
+        }
+      }
       for (const [k, n] of mine.spare) if (!spare.has(k)) spare.set(k, n);
       // THE QUANTITIES TOO, and this line is the whole reason a loadout could be ignored by
       // the one mechanism that fetches things. `needs` is what `demandsForRoom` filters and
@@ -249,7 +260,10 @@ export class HuntSetupPart {
         const have = this.countOfKind(kind);
         if (have >= s.target || now - s.since > SHORTFALL_TTL_MS) { this._reagentShortfall.delete(kind); continue; }
         needs.set(kind, Math.max(needs.get(kind) ?? 0, s.target - have));
-        if (!wants.includes(kind)) wants.push(kind);
+        if (!wants.includes(kind)) {
+          wants.push(kind);
+          wantMatches.set(kind, 'exact');
+        }
         spare.delete(kind);
       }
     }
@@ -260,7 +274,7 @@ export class HuntSetupPart {
     const capNow = this.autobalanceCouriers?.() ? skills.carryCapacity(c) : null;
     const pack = capNow?.known && capNow.load && capNow.load.exact !== false
       ? Number(Math.max(capNow.load.weight / capNow.weight_max, capNow.load.bulk / capNow.bulk_max).toFixed(2)) : null;
-    skills.interest.declare(this.name ?? this.s.name, { wants, needs, spare, pack,
+    skills.interest.declare(this.name ?? this.s.name, { wants, needs, spare, wantMatches, pack,
       room: this.s.world?.room?.num ?? null, character: c.me?.name ?? null,
       farming: this.mode === 'farm' && this.running && !this.inert,
       // A SERVICE CHARACTER IS WORTH A WALK (m59-sharing.mjs): a chalice holder, a posted room

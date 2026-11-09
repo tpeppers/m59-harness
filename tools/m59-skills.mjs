@@ -39,7 +39,7 @@ import { FLEET_KEEP, weighPack, isWeaponName, isKnownNonWeapon, itemNameKey, foo
 // A character's own buy/sell/keep list, when it has one. Imported for the two pure
 // predicates only — this file does not go looking for the file, because the caller knows
 // which character it is and this one does not.
-import { keepTest as keepTestFor, sellTest as sellTestFor, saleAllowance } from './m59-loadout.mjs';
+import { entryMatches, keepTest as keepTestFor, sellTest as sellTestFor, saleAllowance } from './m59-loadout.mjs';
 import * as buyers from './m59-buyers.mjs';
 import {readIntent,sessionIdentity,planInventory,saleBlocked} from './m59-inventory-intent.mjs';
 import { readFileSync } from 'node:fs';
@@ -1960,10 +1960,11 @@ export const interest = {
 
   // `service`: this character serves others from a post (a desk, a room caster), so a gift to it
   // is worth a short walk. See m59-sharing.mjs.
-  declare(agent, { wants = [], needs = new Map(), spare = new Map(), room = null,
+  declare(agent, { wants = [], needs = new Map(), spare = new Map(), wantMatches = new Map(), room = null,
                    character = null, farming = false, service = false, pack = null } = {}) {
     const rec = {
       wants: new Set(wants.map(w => String(w).toLowerCase())),
+      wantMatches: wantMatches instanceof Map ? wantMatches : new Map(Object.entries(wantMatches ?? {})),
       needs: needs instanceof Map ? needs : new Map(Object.entries(needs)),
       spare: spare instanceof Map ? spare : new Map(Object.entries(spare)),
       room: room == null ? null : Number(room),
@@ -1979,7 +1980,7 @@ export const interest = {
     // m59-interest-store.mjs for what reading only it used to cost.
     // Written when it CHANGES, or every 20s as a heartbeat: this runs every keeper pass, and readers
     // drop anything older than a couple of minutes, so a once-a-second rewrite buys nothing.
-    const out = { ...rec, wants: [...rec.wants], needs: Object.fromEntries(rec.needs),
+    const out = { ...rec, wants: [...rec.wants], wantMatches: Object.fromEntries(rec.wantMatches), needs: Object.fromEntries(rec.needs),
                   spare: Object.fromEntries(rec.spare) };
     const body = JSON.stringify({ ...out, at: 0 });
     const last = (this._written ??= new Map()).get(agent);
@@ -1997,6 +1998,7 @@ export const interest = {
     for (const r of readDeclarations()) {
       out.set(String(r.agent), {
         wants: new Set([].concat(r.wants ?? []).map(w => String(w).toLowerCase())),
+        wantMatches: new Map(Object.entries(r.wantMatches ?? {})),
         needs: new Map(Object.entries(r.needs ?? {})),
         spare: new Map(Object.entries(r.spare ?? {})),
         room: r.room == null ? null : Number(r.room),
@@ -2009,15 +2011,21 @@ export const interest = {
     return out;
   },
 
-  // Who wants a thing by this name — matched loosely, because the server hands us
-  // display names ("herb", "elderberry") and callers think in kinds.
+  // A named ingredient wants that item. Keep the loose search for older declarations
+  // and callers asking for a category without an item matching rule.
   wantedBy(name, { except = null } = {}) {
     const n = String(name || '').toLowerCase();
     if (!n) return [];
     const out = [];
     for (const [agent, rec] of this.records()) {
       if (agent === except) continue;
-      for (const w of rec.wants) if (n.includes(w) || w.includes(n)) { out.push(agent); break; }
+      for (const w of rec.wants) {
+        const match = rec.wantMatches?.get(w);
+        if (match ? entryMatches({ item: w, match }, n) : n.includes(w) || w.includes(n)) {
+          out.push(agent);
+          break;
+        }
+      }
     }
     return out;
   },

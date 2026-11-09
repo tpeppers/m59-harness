@@ -1067,13 +1067,17 @@ export function bannedGearProblems(loadout, bannedWeapons = null) {
 // things. A want with no quantity is not a delivery order.
 export function wantsOf(loadout, items) {
   if (!loadout) return null;
-  const wants = [], needs = new Map(), spare = new Map();
+  const wants = [], needs = new Map(), spare = new Map(), wantMatches = new Map();
   for (const c of loadout.carry) {
     const have = countIn(items, c);
-    if (have < c.min) { wants.push(norm(c.item)); needs.set(norm(c.item), c.min - have); }
-    else if (c.max !== null && have > c.max) spare.set(norm(c.item), have - c.max);
+    if (have < c.min) {
+      const name = norm(c.item);
+      wants.push(name);
+      needs.set(name, c.min - have);
+      wantMatches.set(name, c.match ?? 'exact');
+    } else if (c.max !== null && have > c.max) spare.set(norm(c.item), have - c.max);
   }
-  return { wants, needs, spare };
+  return { wants, needs, spare, wantMatches };
 }
 
 // ------------------------------------------------------------------ reconcile
