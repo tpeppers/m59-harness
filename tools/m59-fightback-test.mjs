@@ -23,7 +23,10 @@
 // Drives the REAL prototype methods with a fake `this`, the way m59-passorder-test does.
 import './m59-test-ledger.mjs';        // FIRST — the ledger goes to a scratch file
 import { Autopilot, PASS_STAGES, HANDLED, CONTINUE } from './m59-autopilot.mjs';
+import { CHECKED_MAP_FILE, loadMap } from './m59-map.mjs';
 import { OF } from './m59-parse.mjs';
+import { sharedRoomGeometry } from './m59-roo.mjs';
+import { watchFarmDanger } from './m59-stage-danger.mjs';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -249,6 +252,77 @@ console.log('\nthe pass half: the answer');
   ok('three rounds of missing is reported as no progress, not hidden',
      miss.progressed.some(m => /without landing a hit/.test(m)) && miss.tally.kills === 0
      && miss.watch.attack == null);
+}
+
+console.log('\nGreat Ocean retaliation during ranged exposure');
+{
+  const room = loadMap(CHECKED_MAP_FILE).rooms[552];
+  const geometry = sharedRoomGeometry(room);
+  const melee = creature(1, 'mollusk creature', 55, 46);
+  const distant = creature(2, 'mollusk creature', 45, 45);
+  const coastal = ({ far = distant, optedIn = true, doing = 'travelling', age = 20 } = {}) => {
+    const k = keeper({ policy: { fightBackAfterMs: 10_000, molluskCoverRecovery: optedIn },
+      doing, inReach: [melee], fleeAt: 0.5, passStartedAt: Date.now() - 2000 });
+    const s = k.s, c = s.client, now = Date.now();
+    let health = hp(89, 121);
+    k.mode = 'farm';
+    s.world = { room, geometry };
+    Object.assign(c, { selfId: 4, state: 'game', combatReady: true, self: { id: 4, row: 45, col: 55 },
+      vitals: () => ({ health }) });
+    Object.assign(c.room, { id: 1416, security: geometry.security });
+    if (far) { c.room.objects.set(far.id, far); c.rsc.set(far.nameRsc, far.name); }
+    s.lastFleetDamage = { at: now - age, client: c, bodyId: c.selfId, roomId: c.room.id };
+    k.suspendJourney = why => { k.suspendedJourney = { to: 552, why }; };
+    k.cancelForSurvival = (token, why) => s.cancelMovement(token, why);
+    k.travelAllows = () => true;
+    k.sparedHere = () => false;
+    beaten(k, 11);
+    const setHealth = value => { health = hp(value, 121); s.lastFleetDamage.at = Date.now(); };
+    return { k, s, c, now, setHealth };
+  };
+
+  const road = coastal();
+  road.k.fightBackCheck(road.k.watch, hp(89, 121), road.now, 10);
+  ok('a travelling Scooter with melee and a live rock throw line yields to shelter',
+     !road.k.fightBackDue && /mollusk rock/.test(road.k.wantsForwardShelter) &&
+     road.k.cancels.length === 1 && road.k.suspendedJourney?.to === 552);
+  road.k.clearPathCheck({ pinnedSince: road.now - 10_000 }, hp(89, 121), road.now);
+  ok('clear-path cannot replace that shelter request with another retaliation', !road.k.fightBackDue && road.k.cancels.length === 1);
+  road.k.doing = null;
+  road.s.lastFleetDamage.at -= 10_000;
+  ok('a queued retaliation after the move unwinds still yields to the pending shelter',
+     await road.k.passFightBack({ ...ctxFor(road.k, 89 / 121), v: { health: hp(89, 121) } }) === CONTINUE &&
+     road.k.fought.length === 0);
+
+  const clear = coastal();
+  clear.k.clearPathCheck({ pinnedSince: clear.now - 10_000 }, hp(101, 120), clear.now);
+  ok('a Beaker-style pinned clear-path check picks the same recovery handoff',
+     clear.k.cancels.length === 1 && !clear.k.fightBackDue && !!clear.k.wantsForwardShelter);
+
+  for (const [label, args] of [['close-only', { far: null }], ['blocked rock line', { far: { ...distant, col: 65 } }],
+    ['old damage', { age: 6000 }], ['non-opted-in', { optedIn: false }], ['ordinary stationary defense', { doing: null }]]) {
+    const f = coastal(args);
+    f.k.fightBackCheck(f.k.watch, hp(89, 121), f.now, 10);
+    ok(`${label} keeps normal fight-back`, !!f.k.fightBackDue && !f.k.wantsForwardShelter);
+  }
+
+  const camilla = coastal({ doing: 'fighting' });
+  const token = { cancelled: false };
+  let signal;
+  const stop = watchFarmDanger(camilla.k, 'passFightBack', token, d => { signal = d; }, { intervalMs: 4 });
+  camilla.setHealth(51);
+  await new Promise(resolve => setTimeout(resolve, 24));
+  stop();
+  ok('Camilla-style in-flight retaliation yields at the effective flee line rather than its ordinary deadline',
+     token.cancelled && signal?.health.value === 51 && !!camilla.k.wantsForwardShelter && camilla.k.cancels.length === 1);
+
+  const covered = coastal({ doing: 'fighting', far: { ...distant, col: 65 } });
+  const coveredToken = { cancelled: false };
+  const stopCovered = watchFarmDanger(covered.k, 'passFightBack', coveredToken, () => {}, { intervalMs: 4 });
+  covered.setHealth(51);
+  await new Promise(resolve => setTimeout(resolve, 24));
+  stopCovered();
+  ok('retaliation from observed ranged cover keeps its existing fence', !coveredToken.cancelled && !covered.k.wantsForwardShelter);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

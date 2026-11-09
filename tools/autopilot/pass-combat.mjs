@@ -927,6 +927,8 @@ export class PassCombatPart {
     // An errand owns the body; the inert rescue in the watchdog covers bleeding under one.
     if (this.inert) return CONTINUE;
     if (belowFlee && !cornered) return CONTINUE;
+    if (!cornered && due.reason !== 'travel_hunt' &&
+        this.deferOceanRangedRetaliation(v?.health, now, { transportOnly: due.reason !== 'blocked' })) return CONTINUE;
     if (!skills.isArmed(c)) return CONTINUE;          // passArm's problem, and it ran already
     const me = c?.self;
     if (!me) return CONTINUE;

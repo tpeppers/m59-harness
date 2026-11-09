@@ -180,7 +180,7 @@ export async function configureCooperativeLogoff(pilot,phase) {
   return config?{config,ctx,monsters,fleetmates,strategy:got.strategy}:null;
 }
 
-function oceanRockThreats(pilot, objects) {
+export function oceanRockThreats(pilot, objects, { outsideMelee = false } = {}) {
   const { client, world } = pilot.s;
   if (!['farm', 'idle', 'survive'].includes(pilot.mode) || pilot.policy?.molluskCoverRecovery !== true ||
       world?.room?.num !== 552 || client?.combatReady !== true) return [];
@@ -195,8 +195,9 @@ function oceanRockThreats(pilot, objects) {
     if (body.id === client.selfId || !(body.flags & OF.ATTACKABLE) || (body.flags & OF.PLAYER) ||
         fold(client.rsc?.get(body.nameRsc)) !== 'mollusk creature') return false;
     const at = position(body);
-    return at && geo.inBounds(at.row, at.col) &&
-      (at.row - self.row) ** 2 + (at.col - self.col) ** 2 <= 100 &&
+    if (!at || !geo.inBounds(at.row, at.col)) return false;
+    const squared = (at.row - self.row) ** 2 + (at.col - self.col) ** 2;
+    return squared <= 100 && (!outsideMelee || squared > 9) &&
       lineOfSight(geo, at.row, at.col, self.row, self.col) &&
       lineOfSight(geo, at.row, at.col, self.row, self.col, { fine: true });
   });

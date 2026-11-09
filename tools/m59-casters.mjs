@@ -31,22 +31,32 @@ export function castersAmong(monsters = [], classOf = () => null) {
   return monsters.filter(m => isCasterClass(classOf(m?.name)));
 }
 
+function rockGeometryReady(geo) {
+  const squares = geo?.rows * geo?.cols;
+  return geo?.collisionReady && typeof geo.inBounds === 'function' && typeof geo.canMove === 'function' &&
+    geo.grid?.length === squares && geo.monsterGrid?.length === squares;
+}
+
+const knownSquare = (geo, p) => !p?.predicted && Number.isSafeInteger(p?.row) && Number.isSafeInteger(p?.col) &&
+  geo.inBounds(p.row, p.col);
+
+const rockLine = (geo, at, caster) => (at.row - caster.row) ** 2 + (at.col - caster.col) ** 2 <= 100 &&
+  (lineOfSight(geo, caster.row, caster.col, at.row, at.col) ||
+   lineOfSight(geo, caster.row, caster.col, at.row, at.col, { fine: true }));
+
+/** A visible rock line from beyond ordinary melee reach. */
+export function molluskRockThreatAt(geo, at, casters) {
+  return rockGeometryReady(geo) && knownSquare(geo, at) && casters.some(caster =>
+    caster.name?.toLowerCase() === 'mollusk creature' && knownSquare(geo, caster) &&
+    Math.hypot(at.row - caster.row, at.col - caster.col) > 3 && rockLine(geo, at, caster));
+}
+
 /** Prove that every observed caster here is a mollusk whose rock cannot reach this square. */
 export function mollusksBlockedAt(geo, at, casters) {
-  const squares = geo?.rows * geo?.cols;
-  if (!geo?.collisionReady || typeof geo.inBounds !== 'function' || typeof geo.canMove !== 'function'
-      || geo.grid?.length !== squares || geo.monsterGrid?.length !== squares)
-    return false;
-  const knownSquare = p => !p?.predicted && Number.isSafeInteger(p?.row) && Number.isSafeInteger(p?.col)
-    && geo.inBounds(p.row, p.col);
-  if (!knownSquare(at) || !casters.length) return false;
-  return casters.every(c => {
-    if (c.name?.toLowerCase() !== 'mollusk creature' || !knownSquare(c)) return false;
-    if ((at.row - c.row) ** 2 + (at.col - c.col) ** 2 > 100) return true;
-    // GetLOS is a server setting. Require both grids to block the attacker-to-player line.
-    return !lineOfSight(geo, c.row, c.col, at.row, at.col)
-      && !lineOfSight(geo, c.row, c.col, at.row, at.col, { fine: true });
-  });
+  if (!rockGeometryReady(geo) || !knownSquare(geo, at) || !casters.length) return false;
+  // GetLOS is a server setting. Require both grids to block the attacker-to-player line.
+  return casters.every(caster => caster.name?.toLowerCase() === 'mollusk creature' &&
+    knownSquare(geo, caster) && !rockLine(geo, at, caster));
 }
 
 /**

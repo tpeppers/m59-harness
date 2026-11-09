@@ -8,6 +8,7 @@ import {Autopilot,PASS_STAGES} from './m59-autopilot.mjs';
 import {OF} from './m59-parse.mjs';
 import {withPacketScope,bindPacketScope} from './m59-packet-scope.mjs';
 import {currentSurvivalDecision} from './m59-survival-decision.mjs';
+import {noteLogoff} from './m59-healing-session.mjs';
 import * as party from './m59-party.mjs';
 import {load,firstAnswer} from './m59-strategies.mjs';
 import {cooperativeStore,configureCooperativeLogoff,publishCooperativePresence,requestCooperativeLogoff,markCooperativeOffline,
@@ -126,6 +127,72 @@ try{
   Object.assign(mollusk, { row: 45, col: 65, x: 4192, y: 2912 });
   assert.deepEqual((await offer()).ctx.monsters, []);
   console.log('PASS an opted-in Ocean requester can capture the observed rock thrower, with identity, range and LOS guards');
+ }
+ {
+  const { loadMap, CHECKED_MAP_FILE } = await import('./m59-map.mjs');
+  const { sharedRoomGeometry } = await import('./m59-roo.mjs');
+  const room = loadMap(CHECKED_MAP_FILE).rooms[552], geometry = sharedRoomGeometry(room);
+  const setup = async label => {
+   const f = fixture(label), {s,c,pilot} = f.a;
+   s.name = label;
+   for (const actor of [f.a, f.b]) {
+    Object.assign(actor.s.world, { room, geometry });
+    Object.assign(actor.c.room, { id: 1416, security: geometry.security });
+    actor.c.room.objects.delete(40);
+   }
+   Object.assign(c.self, { row: 49, col: 44, x: 2848, y: 3168 });
+   const rock = { id: 11790, nameRsc: 'mollusk creature', flags: OF.ATTACKABLE, row: 55, col: 41, x: 2653, y: 3567 };
+   const melee = { ...rock, id: 41, row: 49, col: 46, x: 2976, y: 3168 };
+   for (const actor of [f.a,f.b]) {
+    actor.c.room.objects.set(rock.id,rock);
+    actor.c.room.objects.set(melee.id,melee);
+   }
+   let hp=45, exits=0, rejoins=0;
+   c.vitals=()=>({health:{value:hp,max:100},vigor:{value:180}});
+   c.ailments=()=>[];
+   s.lastFleetDamage={at:Date.now(),client:c,bodyId:c.selfId,roomId:c.room.id};
+   Object.assign(pilot,{policy:{molluskCoverRecovery:true},safety:()=>({fleeAt:.5}),
+    oceanRangedRecoveryEnabled:Autopilot.prototype.oceanRangedRecoveryEnabled,
+    tryOceanCooperativeEscape:Autopilot.prototype.tryOceanCooperativeEscape,
+    fleetLogoff:Autopilot.prototype.fleetLogoff,inReachOfUs:Autopilot.prototype.inReachOfUs,
+    operatorSurvivalStandDown:()=>false,farmBuffPass:async()=>false,
+    escapeIfWedgedAndHurt:async()=>false,tradeInPlaceIfWedged:async()=>false,defensiveAnswer:async()=>false,
+    leaveForCasters:async()=>{exits++;return true;},suspendJourney(){},
+    reconnect:async()=>{rejoins++;return {ok:true};},resumeCooperativeReturn:async()=>{},
+   });
+   return { ...f, rock, melee, setHP: value=>{hp=value;}, counts:()=>({exits,rejoins}),
+    pass:()=>Autopilot.prototype.passFleeAndRest.call(pilot,{s,c,room,v:c.vitals(),hp:hp/100}) };
+  };
+  const mixed=await setup('early-ocean-mixed');
+  await configureCooperativeLogoff(mixed.b.pilot,'helper');
+  await mixed.pass();
+  assert.deepEqual(mixed.counts(),{exits:0,rejoins:1});
+  assert.deepEqual(mixed.store().read('request',mixed.a.s.name).targets.map(t=>t.id),[mixed.melee.id]);
+  const ranged=await setup('early-ocean-ranged');
+  ranged.a.c.room.objects.delete(ranged.melee.id);
+  await configureCooperativeLogoff(ranged.b.pilot,'helper');
+  await ranged.pass();
+  assert.deepEqual(ranged.counts(),{exits:0,rejoins:1});
+  assert.deepEqual(ranged.store().read('request',ranged.a.s.name).targets.map(t=>t.id),[ranged.rock.id]);
+  for (const [label,change] of [
+   ['no-helper',()=>{}],
+   ['still-above-flee',f=>f.setHP(60)],
+   ['stale-damage',f=>{f.a.s.lastFleetDamage.at-=6000;}],
+   ['other-visit',f=>{f.a.s.lastFleetDamage.roomId++;}],
+   ['proved-wall',f=>{f.a.pilot.currentRecoveryWall=()=>true;}],
+   ['budget-spent',f=>noteLogoff(f.a.s.name)],
+   ['only-melee',f=>f.a.c.room.objects.delete(f.rock.id)],
+   ['async-pose-changed',f=>{f.a.s._askStrategies=async()=>{f.a.c.self.predicted=true;return {strategy:'fixture-private',answer:policy};};}],
+  ]) {
+   const f=await setup('early-ocean-'+label);
+   if(label!=='no-helper')await configureCooperativeLogoff(f.b.pilot,'helper');
+   change(f);
+   await f.pass();
+   assert.deepEqual(f.counts(),{exits:1,rejoins:0},label);
+   assert.equal(f.store().read('request',f.a.s.name),null,label);
+   assert.equal(currentSurvivalDecision(f.a.s),null,label);
+  }
+  console.log('PASS Ocean mixed/ranged escape runs before the caster exit only with live proof, budget and admitted fleet help');
  }
  {
   const f=fixture('ocean-passive-support');

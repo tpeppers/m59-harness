@@ -3960,7 +3960,8 @@ export class Autopilot {
     const danger = new Promise(resolve => {
       stopDanger = watchFarmDanger(this, stage, stageToken, detail => {
         this.tally.survival_stage_interrupts = (this.tally.survival_stage_interrupts || 0) + 1;
-        this.note(stage==='passCooperative'?'cooperative distraction yielded immediately to falling health':'farm action yielded immediately to falling health', {stage, ...detail});
+        const what = stage === 'passCooperative' ? 'cooperative distraction' : stage === 'passFightBack' ? 'Ocean retaliation' : 'farm action';
+        this.note(`${what} yielded immediately to falling health`, {stage, ...detail});
         resolve(STAGE_OVERRAN);
       });
     });

@@ -92,6 +92,8 @@ export class PassSurvivalPart {
     // Operator's doctrine, 2026-09-06. See `defensiveAnswer`.
     if (await this.defensiveAnswer({ near, v }).catch(() => false)) return HANDLED;
 
+    // A damaged Ocean farmer may shed aggro with fleet help before committing to an exposed exit.
+    if (await this.tryOceanCooperativeEscape?.().catch(() => false)) return HANDLED;
     // A CASTER IN THE ROOM: NO SPOT HERE HOLDS, SO A RESTING OR HURT BODY LEAVES BY THE NEAREST EXIT (leaveForCasters).
     if (await this.leaveForCasters({ hostiles, v }).catch(() => false)) return HANDLED;
 

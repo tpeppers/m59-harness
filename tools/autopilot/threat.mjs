@@ -8,20 +8,24 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 32 methods: threatCeiling, namedPlayersHere, namedThreatsHere, roomOutranksUs,
+// 33 methods: threatCeiling, namedPlayersHere, namedThreatsHere, roomOutranksUs,
 //   travelShelterBelow, travelStopMaxThreats, threatCountHere, advancingThreatCountHere, crowded,
 //   noteCrowdRefusal, travelDivertAt, shelterForwardAndMend, exitTest, reachTest,
 //   noteUnreachableSpot, noteUnreachablePrey, unreachablePreyIn, preyAvoid, noteFailedRestSpot,
 //   restSpotRefused, spotExclusions, bansDestination, unreachableIn, strangersInReach, fightBackAfterMs,
-//   fightBackCheck, clearPathCheck, travelHuntCandidates, travelHuntCheck, karmaForbids, refuseEngagement,
+//   deferOceanRangedRetaliation, fightBackCheck, clearPathCheck, travelHuntCandidates, travelHuntCheck, karmaForbids, refuseEngagement,
 //   recentText, mortalDanger, healthRate
 import { keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
+import { molluskRockThreatAt } from '../m59-casters.mjs';
+import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
 import { CROWD_SQUARES, travelHuntBudget, travelHuntDecision, travelHuntSettings } from '../m59-travel-hunt.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import { creatureByName, karmaSafe, loadSpawns } from '../m59-spawns.mjs';
 import { recordTactic } from '../m59-tactics.mjs';
 import { CLEAR_PATH_MS, FIGHT_BACK_GAP_MS, GOING_STATES, PULSE_MS, REACH, SPAWN_FILE, STARVED_FIGHT_VIGOR, UNREACHABLE_SPOT_MS, advancesUs, crowdedSquares, engagementRefusal, pct } from '../m59-autopilot.mjs';
+
+const OCEAN_RANGED_RETREAT = 'exposed to mollusk rock throws after taking damage';
 
 export class ThreatPart {
   // @part 1
@@ -624,6 +628,43 @@ export class ThreatPart {
     return Number.isFinite(v) && v > 0 ? v : 0;
   }
 
+  deferOceanRangedRetaliation(hp, now = Date.now(), { interrupt = false, transportOnly = false } = {}) {
+    const pending = this.wantsForwardShelter === OCEAN_RANGED_RETREAT;
+    const ocean = this.mode === 'farm' && this.oceanRangedRecoveryEnabled();
+    if (!ocean || !(hp?.value > 0 && hp.value < hp.max) ||
+        this.operatorSurvivalStandDown?.() || this.s.combat?.active ||
+        (pending && this.hold && this.currentRecoveryWall())) {
+      if (pending) this.wantsForwardShelter = null;
+      return false;
+    }
+    if (pending) {
+      this.fightBackDue = null;
+      return true;
+    }
+    const s = this.s, c = s.client, geo = s.world?.geometry, damage = s.lastFleetDamage;
+    if (transportOnly && !GOING_STATES.includes(this.doing ?? null) && !liveMoveOrder(s) && !this.suspendedJourney)
+      return false;
+    if (!c || !damage || damage.client !== c || damage.bodyId !== c.selfId || damage.roomId !== c.room?.id ||
+        !(now - damage.at >= 0 && now - damage.at < 5_000) || !Number.isInteger(geo?.security) ||
+        c.room?.security !== geo.security) return false;
+    const observed = s.refugePosition;
+    const at = !c.self?.predicted ? c.self : observed?.client === c && observed.id === c.selfId &&
+      observed.room_object_id === c.room.id && observed.generation === s.movementGeneration &&
+      now - observed.at >= 0 && now - observed.at < 1_000 ? observed : null;
+    if (!molluskRockThreatAt(geo, at, this.casterScene().casters)) return false;
+
+    this.fightBackDue = null;
+    if (continuingProvenRefugeLeg(s, { now })) return true;
+    const why = OCEAN_RANGED_RETREAT;
+    this.wantsForwardShelter = why;
+    this.suspendJourney(why);
+    if (interrupt) {
+      try { this.cancelForSurvival(null, why, { origin: keeperOrigin('shelter') }); } catch { /* the next pass still seeks cover */ }
+    }
+    this.note('Ocean retaliation yielded to ranged recovery', { why, health: `${hp.value}/${hp.max}` });
+    return true;
+  }
+
   fightBackCheck(w, hp, now, lost) {
     if (!w || this.policy?.neverAttack === true) return null;
     // THE EPISODE. A blow is health going down with something attackable in reach; falling
@@ -643,6 +684,7 @@ export class ThreatPart {
     const frac = pct(hp);
     // Below the flee line the other arms and the ladder own this — running, not swinging.
     if (frac === null || frac < this.safety().fleeAt) return null;
+    if (this.deferOceanRangedRetaliation(hp, now, { interrupt: true, transportOnly: true })) return null;
     // NOTHING IN REACH IS ONE WE WOULD FIGHT: THE WALK IS THE ANSWER. The pass that this cancel makes room for picks
     // from `fightBackRows` and, finding every attacker refused, takes "the ordinary ladder -- which walks away from
     // what it will not fight". Cancelling a walk for that is stopping in the fire to decide to leave it: Beaker,
@@ -793,6 +835,7 @@ export class ThreatPart {
     // is the answer to a spared blocker, and it is the wedge ladder's, not this rung's).
     const near = (this.inReachOfUs?.() ?? []).filter(o => !this.sparedHere(o));
     if (!near.length) return null;
+    if (this.deferOceanRangedRetaliation(hp, now, { interrupt: true })) return null;
 
     w.clearPathPass = this.passes;
     this.tally.clear_path_interrupts = (this.tally.clear_path_interrupts || 0) + 1;
@@ -854,6 +897,8 @@ export class ThreatPart {
     if (!w || this.policy?.neverAttack === true) return null;
     const cfg = travelHuntSettings(this.policy?.travelHunt);
     if (!cfg) return null;
+    if (this.oceanRangedRecoveryEnabled() && (this.wantsForwardShelter === OCEAN_RANGED_RETREAT ||
+        continuingProvenRefugeLeg(this.s, { now }))) return null;
     // travel_guard {clear_path: false} switches every road swing off; this is one.
     if (!this.travelAllows('clear_path')) return null;
     if (this.fightBackDue) return null;                 // something already asked this pass a question

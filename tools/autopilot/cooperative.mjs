@@ -8,11 +8,11 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 13 methods: checkFreeze, playerThreatPresent, passCooperative, recordCooperativeKill,
+// 14 methods: checkFreeze, playerThreatPresent, passCooperative, recordCooperativeKill, tryOceanCooperativeEscape,
 //   fleetLogoff, resumeCooperativeReturn, playDead, spentAndCornered, sessionSpotHere, logoffDeclined, playDeadObserved,
 //   askForHelp, restockReagents
 import { closeIfHealed, mayLogoff, noteLogoff, SPENT_EXIT_RETRY_MS, spentLogoffReplacement } from '../m59-healing-session.mjs';
-import { abortPreparingCooperativeLogoff, configureCooperativeLogoff, cooperativeAssist, cooperativeReturnRefuge, requestCooperativeLogoff } from '../m59-cooperative-logoff.mjs';
+import { abortPreparingCooperativeLogoff, configureCooperativeLogoff, cooperativeAssist, cooperativeReturnRefuge, oceanRockThreats, requestCooperativeLogoff } from '../m59-cooperative-logoff.mjs';
 import { isFood } from '../m59-items.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF, buyLines } from '../m59-parse.mjs';
@@ -117,7 +117,34 @@ export class CooperativePart {
     this.farmStrategyHook('onKill',{creature:f.target,room:request.room,looted:[]});
   }
 
-  async fleetLogoff(why, { afterRecovery = false } = {}) {
+  async tryOceanCooperativeEscape() {
+    const s = this.s, c = s.client;
+    const liveThreat = () => {
+      const damage = s.lastFleetDamage, age = Date.now() - (damage?.at ?? 0);
+      const hp = pct(c?.vitals?.()?.health);
+      return this.mode === 'farm' && this.policy?.neverAttack !== true && this.oceanRangedRecoveryEnabled() &&
+        s.live && s.client === c && c.combatReady === true && !s.combat?.active?.pvp &&
+        hp > 0 && hp < this.safety().fleeAt && c.ailments?.()?.length === 0 &&
+        damage?.client === c && damage.bodyId === c.selfId && damage.roomId === c.room.id &&
+        age >= 0 && age <= 5000 && !this.currentRecoveryWall() &&
+        oceanRockThreats(this, [...c.room.objects.values()], { outsideMelee: true }).length > 0;
+    };
+    if (!liveThreat() || currentSurvivalDecision(s)) return false;
+    const agent = String(s.name ?? '');
+    const afterRecovery = !mayLogoff(agent);
+    if (afterRecovery && !mayLogoff(agent, { afterRecovery: true })) return false;
+    const why = 'recent damage below the flee line with a ranged mollusk in sight';
+    const decision = chooseSurvivalDecision(s, { strategy: 'logoff_open', reason: why,
+      reason_code: 'ocean_ranged_escape', status: 'pending' });
+    try {
+      return await this.fleetLogoff(why, { afterRecovery, guard: liveThreat });
+    } finally {
+      if (currentSurvivalDecision(s)?.id === decision.id)
+        finishSurvivalDecision(s, decision.id, 'refused', 'no cooperative rescue admitted before caster exit');
+    }
+  }
+
+  async fleetLogoff(why, { afterRecovery = false, guard = null } = {}) {
     // A NEEDLE KEEPER DOES NOT LOG OFF FOR A DISTRACTION (live 2026-11-06: Camilla went NOT IN GAME at 23:30:44Z and
     // 23:42:08Z, "rejoin: cooperative logoff: wait for distraction", from a threat-0 archer station). Its square is one no
     // monster in reach can see; it stays in the game and the rest of the ladder decides.
@@ -135,13 +162,14 @@ export class CooperativePart {
         !this.operatorSurvivalStandDown() && !s.combat?.active?.pvp &&
         active?.id===decisionId && active?.strategy==='logoff_open' && active.status==='pending' &&
         health>0 && health<this.safety().fleeAt && client.ailments?.()?.length===0 && !this.currentRecoveryWall() &&
-        mayLogoff(String(s.name??''),{afterRecovery:true});
+        mayLogoff(String(s.name??''),{afterRecovery}) && (!guard || guard());
     };
-    if(afterRecovery && !eligible())return false;
+    const guarded = afterRecovery || guard !== null;
+    if(guarded && !eligible())return false;
     const offered=await configureCooperativeLogoff(this,'request');
-    const request=offered&&(!afterRecovery||eligible())&&requestCooperativeLogoff(this,offered);
+    const request=offered&&(!guarded||eligible())&&requestCooperativeLogoff(this,offered);
     if(!request)return false;
-    if(afterRecovery)this.suspendJourney(why);
+    if(guarded)this.suspendJourney(why);
     const decision=chooseSurvivalDecision(s,{strategy:'logoff_open',reason:why,
       reason_code:'cooperative_logoff',status:'active',mitigation:'wait offline for confirmed fleetmate distraction hits'},
       {because:'private cooperative strategy and a controlled fleetmate in this room'});

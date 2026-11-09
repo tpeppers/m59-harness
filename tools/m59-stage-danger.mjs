@@ -2,7 +2,8 @@ import {continuingProvenRefugeLeg} from './m59-refuge-leg.mjs';
 // A long farm pull must yield before its ordinary deadline when the body is hurt.
 // Invalidating this invocation also fences callbacks already waiting in the pacer.
 export function watchFarmDanger(ap,stage,token,onDanger,{intervalMs=100}={}) {
- if(!['passFarm','passCooperative'].includes(stage))return()=>{};
+ const retaliation=stage==='passFightBack';
+ if(!['passFarm','passCooperative'].includes(stage)&&!(retaliation&&ap.oceanRangedRecoveryEnabled?.()))return()=>{};
  const s=ap.s,c=s?.client,room=c?.room?.id,self=c?.selfId;
  let previous=c?.vitals?.()?.health?.value;
  const timer=setInterval(()=>{
@@ -14,9 +15,11 @@ export function watchFarmDanger(ap,stage,token,onDanger,{intervalMs=100}={}) {
   if(continuingProvenRefugeLeg(s))return;
   const lost=Number.isFinite(previous)&&h?.value<previous; previous=h?.value;
   if(!(h?.value>0&&h.max>0&&h.value/h.max<ap.safety().fleeAt&&(lost||ap.mortalDanger?.())))return;
+  if(retaliation&&!ap.deferOceanRangedRetaliation?.(h))return;
   token.cancelled=true;clearInterval(timer);
   if(ap.farmCombat?.pending)ap.farmCombat={...ap.farmCombat,pending:false,interrupted_at:Date.now(),reason:"survival preemption"};
-  const cancelled=s.cancelMovement?.(null,stage==='passCooperative'?'cooperative distraction yielded to survival':'farm action yielded to survival');
+  const why=retaliation?'Ocean retaliation yielded to survival':stage==='passCooperative'?'cooperative distraction yielded to survival':'farm action yielded to survival';
+  const cancelled=s.cancelMovement?.(null,why);
   onDanger({health:{...h},fleeAt:ap.safety().fleeAt,cancelled});
  },intervalMs);
  return()=>clearInterval(timer);
