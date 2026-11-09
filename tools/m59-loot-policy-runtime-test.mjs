@@ -10,6 +10,9 @@ process.env.M59_INVENTORY_INTENT_DIR = join(scratch, 'intent');
 test.after(() => rmSync(scratch, { recursive: true, force: true }));
 const { Session } = await import('./m59-game.mjs');
 const { Autopilot } = await import('./m59-autopilot.mjs');
+const { FarmStrategyEngine } = await import('./m59-strategy-engine.mjs');
+const { validateStrategy } = await import('./m59-strategy-schema.mjs');
+const { resolveItemName } = await import('./m59-items.mjs');
 const { OF } = await import('./m59-parse.mjs');
 const skills = await import('./m59-skills.mjs');
 const { saleBlocked } = await import('./m59-inventory-intent.mjs');
@@ -43,6 +46,45 @@ test('real lootFloor refuses leave and keeps the cursed pickup guard above polic
   const w = fixture('leave'); w.objects.set(2, w.item(2)); await w.s.lootFloor(); assert.deepEqual(w.got, []);
   w.document.profiles.test.rules = [{ item: 'ring of lethargy', action: 'vault' }]; w.objects.clear(); w.objects.set(3, w.item(3, 'ring of lethargy'));
   await w.s.lootFloor(); assert.deepEqual(w.got, []);
+});
+test('station pickup overrides only exact unconditional ignores in the active farm room', async () => {
+  const names = ['edible mushroom', 'Inky-cap mushroom', 'mushroom', 'red mushroom', 'blue mushroom', 'ring of lethargy'];
+  const spec = { name: 'mushroom-station', lootPickup: names };
+  assert.match(validateStrategy(spec, { resolveItem: resolveItemName }).why, /confine.station/);
+  assert.equal(validateStrategy({ ...spec, confine: { station: 552 }, lootPickup: ['edible'] },
+    { resolveItem: resolveItemName }).ok, false);
+  const validated = validateStrategy({ ...spec, confine: { station: 552 } }, { resolveItem: resolveItemName });
+  assert.equal(validated.ok, true, validated.why);
+  assert.equal(validated.strategy.faculties.lootPickup, 'economy');
+
+  const w = fixture();
+  w.ap.mode = 'farm'; w.ap.policy.farmStrategy = spec.name;
+  const engine = new FarmStrategyEngine(w.ap);
+  engine.assigned = spec.name; engine.loaded = validated; engine.apply();
+  const rules = ['edible mushroom', 'Inky-cap mushroom', 'mushroom',
+    { name: 'red mushroom', max_held: 0 }, 'blue mushroom', 'purple mushroom', 'ring of lethargy'];
+  w.s.setLootIgnore(rules, () => engine.stationLootPickup());
+  w.document.profiles.test.rules = [{ item: 'blue mushroom', action: 'leave' }];
+  [...names, 'purple mushroom'].forEach((name, i) => w.objects.set(i + 2, w.item(i + 2, name)));
+
+  w.s.world.room.num = 544;
+  await w.s.lootFloor({ stayPut: true }); assert.deepEqual(w.got, [], 'a road room keeps the old ignore rules');
+  w.s.world.room.num = 552;
+  w.s.moveOrder = { kind: 'travel' };
+  await w.s.lootFloor({ stayPut: true }); assert.deepEqual(w.got, [], 'an unrelated journey cannot use station pickup');
+  w.s.moveOrder = null;
+  w.s.setLootOnly({ '*': ['edible mushroom', 'inky-cap mushroom', 'red mushroom', 'blue mushroom', 'ring of lethargy'] });
+  await w.s.lootFloor({ stayPut: true });
+  assert.deepEqual(w.got, [2, 3], 'lootOnly, held cap, explicit leave, unrelated names and cursed ban all win');
+
+  w.objects.set(21, w.item(21, 'edible mushroom'));
+  w.s.pacer.submit = async (kind, fn) => {
+    if (kind === 'get') w.ap.policy.farmStrategy = null;
+    return fn();
+  };
+  await w.s.lootFloor({ stayPut: true });
+  assert.deepEqual(w.got, [2, 3], 'reassignment between classification and get withdraws permission');
+  assert.equal(w.objects.has(21), true);
 });
 test('sale plan and final sale guard agree on vault/keep/leave/drop and allow sell', () => {
   const w = fixture(); w.c.inventory = [w.item(2)];

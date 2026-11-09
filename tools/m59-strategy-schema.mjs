@@ -11,8 +11,8 @@
 //
 // So this file is the CONTRACT between the two. A strategy file is declarative first: every field
 // below maps onto a policy key the keeper already obeys, through the SAME validator the broker's
-// `autopilot` tool uses for that key. A file therefore cannot say anything an operator could not
-// already say with one `autopilot` call — it only says it once, by name, for one task, with the
+// `autopilot` tool uses for that key where the key is also an operator order. A file says it once,
+// by name, for one task, with the
 // task's own small hooks beside it. The engine (m59-strategy-engine.mjs) applies it; the keeper
 // never reads a field of it.
 //
@@ -134,6 +134,8 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'hunt', keys: ['hunt'], faculty: 'work', arg: 'hunt', normalize: normHunt },
   { path: 'huntPriority', keys: ['huntPriority'], faculty: 'work', arg: 'hunt_priority',
     normalize: v => huntPrioritySpec(v) },
+  // Station-only and strategy-only. Regular loot safety and per-creature filters still apply.
+  { path: 'lootPickup', keys: ['lootPickup'], faculty: 'economy', normalize: normItems('lootPickup') },
   { path: 'lootOnly', keys: ['lootOnly'], faculty: 'economy', arg: 'loot_only',
     normalize: (v, o = {}) => lootOnlySpec(v, { resolveItem: o.resolveItem ?? null }) },
   { path: 'lootOnlyFloor', keys: ['lootOnlyFloor'], faculty: 'economy', arg: 'loot_only_floor',
@@ -337,7 +339,7 @@ export const fieldForKey = (key) => KEY_FIELD.get(key) ?? null;
 export const KEY_FACULTY = Object.freeze(Object.fromEntries(
   STRATEGY_FIELDS.flatMap(f => f.keys.map(k => [k, f.faculty]))));
 /** broker autopilot argument -> the policy keys it writes, for the shadow warning. */
-export const ARG_KEYS = Object.freeze(Object.fromEntries(STRATEGY_FIELDS.map(f => [f.arg, f.keys])));
+export const ARG_KEYS = Object.freeze(Object.fromEntries(STRATEGY_FIELDS.filter(f => f.arg).map(f => [f.arg, f.keys])));
 const FIELD_BY_PATH = new Map(STRATEGY_FIELDS.map(f => [f.path, f]));
 export const fieldFor = (path) => FIELD_BY_PATH.get(path) ?? null;
 const GROUPS = new Set(STRATEGY_FIELDS.filter(f => f.path.includes('.')).map(f => f.path.split('.')[0]));
@@ -432,6 +434,9 @@ export function validateStrategy(exported, { file = null, resolveItem = null } =
     for (const k of f.keys) { desired[k] = value; faculties[k] = f.faculty; }
     fields.push({ path: f.path, keys: f.keys, faculty: f.faculty });
   }
+
+  if (desired.lootPickup?.length && desired.assignedRoom == null)
+    problems.push({ path: 'lootPickup', why: 'requires confine.station to scope the pickup override' });
 
   // WHAT THE BODY NEEDS, AND HOW MUCH IT MUST KILL (m59-strategy-gate.mjs). Not policy keys: the engine
   // stands the farm down while either fails, and the broker refuses an assignment whose requirement is unmet.

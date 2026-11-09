@@ -1498,6 +1498,8 @@ function atEdgeOpening(position, opening, direction) {
 }
 
 
+const lootName = value => String(value ?? '').toLowerCase().trim();
+
 /**
  * Is `name` on the loot-ignore list for a character wearing `worn` (names)? Pure. Exact names,
  * case-insensitive, never substrings. A rule with `unless_unworn: 'shield' | 'armor'` lets a
@@ -1506,8 +1508,8 @@ function atEdgeOpening(position, opening, direction) {
  * that name) reaches N.
  */
 export function lootIgnored(name, rules = [], worn = [], held = 0) {
-  const n = String(name ?? '').toLowerCase().trim();
-  const r = (rules ?? []).find(x => String(x?.name ?? x).toLowerCase().trim() === n);
+  const n = lootName(name);
+  const r = (rules ?? []).find(x => lootName(x?.name ?? x) === n);
   if (!r) return false;
   // `max_held: N`: taken until the character holds N (whole items, stacks summed), left after that. Operator, 2026-10-26:
   // "nobody needs more than 1x relic of Qor or 4x meat pies if they're not being sold" -- the 16th relic is pack space.
@@ -5090,7 +5092,10 @@ class Session {
   // "mushroom" is a bless reagent while "gold round shield" is 225 weight for 350 shillings.
   // `unless_unworn: 'shield' | 'armor'`: still taken by a character wearing none of that kind.
   lootDisposition(item) { return sessionLootDecision(this, item); }
-  setLootIgnore(list = []) { this._lootIgnore = Array.isArray(list) ? list : []; }
+  setLootIgnore(list = [], stationPickup = null) {
+    this._lootIgnore = Array.isArray(list) ? list : [];
+    this._stationLootPickup = typeof stationPickup === 'function' ? stationPickup : null;
+  }
   // THE KO'CATAN GATE AS A LOOT CAP: { classify(name) -> guard category | null, limits } while on the island, else null.
   setGateCap(cap = null) { this._gateCap = cap && typeof cap.classify === 'function' && cap.limits ? cap : null; }
 
@@ -5384,7 +5389,16 @@ class Session {
     // THE FLEET'S IGNORE LIST, after the cursed and broken filters and before overfarming ranks
     // anything. Never applied to an explicit id list: a caller naming an item wants that item.
     const ignoredSkipped = [];
+    const stationPickupIds = this._stationLootPickup ? new Set() : null;
+    const lootRoom = c.room;
+    const stationPickupAllowed = (id, name) => !stationPickupIds?.has(id) ||
+      (this.client === c && c.room === lootRoom && this._stationLootPickup?.()?.some(item => lootName(item) === lootName(name)));
     if (!ids?.length && this._lootIgnore?.length) {
+      const pickup = this._stationLootPickup?.();
+      const stationNames = pickup?.length ? new Set(pickup.map(lootName)) : null;
+      // A strategy only lifts unconditional legacy ignores, leaving gear exceptions and quantity caps intact.
+      const rules = stationNames ? this._lootIgnore.filter(rule => rule?.unless_unworn ||
+        Number.isFinite(Number(rule?.max_held)) || !stationNames.has(lootName(rule?.name ?? rule))) : this._lootIgnore;
       const worn = (c.equipment?.()?.equipped ?? []).map(e => e.name ?? '');
       // What is already carried, by lower-case name, for `max_held` caps; each candidate taken in this sweep counts too,
       // so a floor of five relics fills a cap of one with one.
@@ -5392,9 +5406,15 @@ class Session {
       for (const o of c.inventory ?? []) { const k = String(c.rsc.get(o.nameRsc) || '').toLowerCase().trim(); held.set(k, (held.get(k) ?? 0) + (Number(o.amount) || 1)); }
       cands = cands.filter(o => {
         const name = c.rsc.get(o.nameRsc) || '';
-        const k = name.toLowerCase().trim();
+        const k = lootName(name), amountHeld = held.get(k) ?? 0;
         // A loot policy's named disposition (m59-loot-policies.mjs) overrides the ignore list for that item.
-        if (this.lootDisposition?.(o)?.pickup || !lootIgnored(name, this._lootIgnore, worn, held.get(k) ?? 0)) { held.set(k, (held.get(k) ?? 0) + (Number(o.amount) || 1)); return true; }
+        const policyPickup = this.lootDisposition?.(o)?.pickup;
+        if (policyPickup || !lootIgnored(name, rules, worn, amountHeld)) {
+          if (!policyPickup && stationNames?.has(k) && lootIgnored(name, this._lootIgnore, worn, amountHeld))
+            stationPickupIds.add(o.id);
+          held.set(k, amountHeld + (Number(o.amount) || 1));
+          return true;
+        }
         ignoredSkipped.push(name);
         return false;
       });
@@ -5501,6 +5521,7 @@ class Session {
         // The swaps first: the pack has to have the room before the get is sent, or the
         // server refuses the pickup and we have thrown something away for nothing.
         for (const swap of overfarmPlan.swaps) {
+          if (!stationPickupAllowed(swap.take.id, swap.take.name)) continue;
           for (const giving of swap.drop) {
             // An explicit planned ID never falls back to a different same-name object.
             const inv = c.inventory || [];
@@ -5508,12 +5529,15 @@ class Session {
               inv.find(o => (c.rsc.get(o.nameRsc) || o.name) === giving.name && !keepIds.has(Number(o.id)));
             if ((c.equipment?.()?.equipped ?? []).some(e => e.id === held?.id)) continue;
             if (!held) continue;
+            let stationWithdrew = false;
             await this.pacer.submit('drop', () => {
+              if (!stationPickupAllowed(swap.take.id, swap.take.name)) { stationWithdrew = true; return; }
               if ((c.equipment?.()?.equipped ?? []).some(e => e.id === held.id)) return;
               if ([...(this._overfarmKeepIds?.() ?? [])].some(id => Number(id) === Number(held.id))) return;
               if (typeof beforeMutation === 'function') beforeMutation('drop', { target_id: held.id });
               return c.drop([dropSpec(held, giving.amount)]);
             }).catch(() => {});
+            if (stationWithdrew) break;
             this._overfarm.dropped++;
             refused.push({ id: held.id, name: giving.name, dropped: true,
                            why: `traded away for ${swap.take.name}: ${swap.why}` });
@@ -5552,8 +5576,9 @@ class Session {
                                    'would be poured into the first and destroyed (chalice.kod NewOwner)' });
     for (const o of cands) {
       if (cancelled()) { wasCancelled = true; break; }
-      setIntentTarget(this,{kind:'pickup',object_id:o.id});
       const name = c.rsc.get(o.nameRsc);
+      if (!stationPickupAllowed(o.id, name)) continue;
+      setIntentTarget(this,{kind:'pickup',object_id:o.id});
       const me = c.self;
       // UserGet measures MANHATTAN distance and refuses past 7, so only walk when
       // we actually have to — most drops are already in reach.
@@ -5576,10 +5601,14 @@ class Session {
       }
       if (cancelled()) { wasCancelled = true; break; }
       const before = c.evSeq;
+      let sent = false;
       await this.pacer.submit('get', () => {
+        if (!stationPickupAllowed(o.id, name)) return;
         if (typeof beforeMutation === 'function') beforeMutation('get', { target_id: o.id });
+        sent = true;
         return c.get(o.id);
       });
+      if (!sent) continue;
       const ev = await c.waitFor({ since: before, kinds: ['got', 'message', 'vanished'], timeoutMs: 3000 });
       const got = ev.events.find(e => e.kind === 'got');
       if (got) taken.push({ id: o.id, name, amount: o.amount || undefined, icon_rsc: o.iconRsc });

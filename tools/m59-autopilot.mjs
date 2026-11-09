@@ -2410,6 +2410,7 @@ export class Autopilot {
       // { spider: ['purple mushroom'] } takes only those from that creature's kill
       // (m59-loot-filter.mjs). Operator, 2026-10-02, for Kermit in Faronath.
       huntPriority: null,
+      lootPickup: null,
       lootOnly: null,
       // How far the loot list reaches (m59-loot-filter.mjs lootFloorSpec). null = the default { scope: 'floor', armor: true }.
       lootOnlyFloor: null,
@@ -3557,7 +3558,8 @@ export class Autopilot {
     // The protect list is `protectedItemNames()` — vault items, temporary cargo, whatever
     // the guild plan is still short of, and the declared stockpile floors — so the things
     // this fleet already refuses to sell are also the things it refuses to trade away.
-    s.setLootIgnore?.(this.lootIgnoreList());
+    s.setLootIgnore?.(this.lootIgnoreList(), this.policy.lootPickup?.length
+      ? () => this._farmStrategy?.stationLootPickup?.() : null);
     // On the island the East Tower guard is a loot cap (m59-game setGateCap): no second armour, helmet, gauntlet or shield --
     // except in the trading post's rooms, whose town is Wulfgang and whose farmers never walk past the guard (gateCapApplies).
     s.setGateCap?.(gateCapApplies(s.world?.room?.num) ? this.gateLootCap() : null);

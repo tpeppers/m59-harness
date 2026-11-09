@@ -251,6 +251,17 @@ export class FarmStrategyEngine {
 
   name() { return this.loaded?.strategy?.name ?? null; }
 
+  stationLootPickup() {
+    const { mode, policy, s, inert, suspendedJourney, townTrip } = this.host;
+    const station = this.loaded?.strategy?.desired.assignedRoom;
+    if (!policy.lootPickup?.length || !this.wrote.has('lootPickup') || this.assigned !== policy.farmStrategy ||
+        mode !== 'farm' || station == null || s?.world?.room?.num !== station || policy.assignedRoom !== station ||
+        inert || suspendedJourney || townTrip || s?.combat?.active || s?.moveOrder?.kind === 'travel' ||
+        (s?.job?.kind === 'travel' && !s.job.done) || ['work', 'movement', 'economy'].some(k => this.heldBy(k)))
+      return null;
+    return policy.lootPickup;
+  }
+
   noteOnce(key, what, data, { every = NOTE_EVERY_MS } = {}) {
     const t = this.now();
     if (every && t - (this.lastNoteAt.get(key) ?? -Infinity) < every) return;
