@@ -67,8 +67,12 @@ export class SocialPart {
         this.note('accepted a gift', { from: t.withName,
                                        items: t.theirs.map(i => i.name + (i.amount > 1 ? ` x${i.amount}` : '')) });
         this.progress('someone gave us something');
-        // Put it to use immediately — a donated sword is no help in the pack.
-        await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => {});
+        // Gifts are still accepted while a caster or another controller owns the loadout.
+        const gearHeld = () => this.policy?.neverAttack === true || this.facultyHeld('work') || this.facultyHeld('economy');
+        if (!gearHeld()) {
+          await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow(),
+            shouldCancel: gearHeld }).catch(() => {});
+        }
       } catch (e) { this.note('could not accept a gift', { why: e.message }); }
     }
 
