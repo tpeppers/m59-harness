@@ -433,6 +433,9 @@ export function sessionWalkPrototype(deps) {
     const c = this.need();
     const roomId = c.room.id;
     let legs = 0, singles = 0;
+    const cancelled = () => (this.client !== undefined && this.client !== c) ||
+      this.movementWasCancelled(movementGeneration, controlToken);
+    const ownsPivot = () => c.room.id === roomId && !cancelled();
     let divertedTo = null, diverted = 0;
     // ONE LEG OF ACTUAL PROGRESS BEFORE THE NEXT DIVERT, AND IT IS A LIVE-LOCK GUARD.
     //
@@ -568,7 +571,7 @@ export function sessionWalkPrototype(deps) {
         // A FALL IS ALWAYS "UNPROVED" TO THE PULL, because the pull traces in walk mode —
         // which is precisely the predicate that refuses a fall. So it lands here, and here
         // is where the flag has to be passed on.
-        const r = await this.step(target.col, target.row, { fall: !!target.fall });
+        const r = await this.step(target.col, target.row, { fall: !!target.fall, movementGeneration, controlToken });
         if(r.reason==='movement_deviation')return {done:false,legs,singles,...r,why:r.reason};
         const blockedAfter = bodyBlock(target,r); if (blockedAfter) return blockedAfter;
         if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
@@ -632,7 +635,7 @@ export function sessionWalkPrototype(deps) {
         const one = remaining[0];
         const blocked = bodyBlock(one); if (blocked) return blocked;
         const advances = me.col !== one.col || me.row !== one.row;
-        const r = await this.step(one.col, one.row, { fall: !!one.fall });
+        const r = await this.step(one.col, one.row, { fall: !!one.fall, movementGeneration, controlToken });
         const blockedAfter = bodyBlock(one,r); if (blockedAfter) return blockedAfter;
         if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         singles++;
@@ -696,7 +699,7 @@ export function sessionWalkPrototype(deps) {
         const nextSq = remaining[0];
         if (nextSq) {
           const advances = me.col !== nextSq.col || me.row !== nextSq.row;
-          const r = await this.step(nextSq.col, nextSq.row, { fall: !!nextSq.fall });
+          const r = await this.step(nextSq.col, nextSq.row, { fall: !!nextSq.fall, movementGeneration, controlToken });
           const blockedAfter = bodyBlock(nextSq,r); if (blockedAfter) return blockedAfter;
           if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
           if (r?.left_room || c.room.id !== roomId)
@@ -731,10 +734,14 @@ export function sessionWalkPrototype(deps) {
       const speed = this.moveSpeed();
       const owed = Math.round(1000 * dist / squaresPerSecond(speed));
       const deg = (Math.atan2(target.y - me.y, target.x - me.x) * 180 / Math.PI + 360) % 360;
-      await this.pacer.submit('turn', () => (c.room.id === roomId ? c.face(deg) : false));
+      // A coalesced leg can wait in the pacer past a recovery takeover.
+      // Validate its original owner at the wire, including on the retry.
+      await this.pacer.submit('turn', () => (ownsPivot() ? c.face(deg) : false));
+      if (cancelled()) return { done: false, legs, singles, cancelled: true };
       let queued = await this.queueValidatedMove(target.x, target.y,
         { speed, slide: false, minGap: Math.max(this._moveGapMs ?? MOVE_INTERVAL_MS, owed),
-          expectedRoomId: roomId });
+          expectedRoomId: roomId, beforeMutation: ownsPivot });
+      if (cancelled()) return { done: false, legs, singles, cancelled: true };
       // Traced at the CALL SITE, never inside `queueValidatedMove` — that method is lifted
       // out of this file by text and evaluated by m59-collision-test.mjs, so anything it
       // calls has to exist in that scope too. Off unless M59_COLLISION_TRACE=1.
@@ -773,8 +780,9 @@ export function sessionWalkPrototype(deps) {
         const retry = other && (other.x !== target.x || other.y !== target.y)
           ? await this.queueValidatedMove(other.x, other.y,
               { speed, slide: false, minGap: Math.max(this._moveGapMs ?? MOVE_INTERVAL_MS, owed),
-                expectedRoomId: roomId }).catch(() => null)
+                expectedRoomId: roomId, beforeMutation: ownsPivot }).catch(() => null)
           : null;
+        if (cancelled()) return { done: false, legs, singles, cancelled: true };
         if (!retry?.sent)
           return { done: false, legs, singles, why: queued.validation?.reason ?? 'refused',
                    note: queued.validation?.note };
