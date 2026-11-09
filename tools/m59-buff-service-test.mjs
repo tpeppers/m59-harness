@@ -36,7 +36,7 @@ const BLESS = Autopilot.BUFFS.find(b => b.name === 'bless');
 
 // A client stub shaped like the real one where buffAllies touches it.
 const makeAp = ({ pack = [], spells = [], others = 1, mana = 30, ability = 20,
-                  cfg = { enabled: true } } = {}) => {
+                  cfg = { enabled: true }, paid = true } = {}) => {
   const names = new Map();
   const inv = pack.map(([name, amount], i) => { names.set(2000 + i, name);
                                                 return { id: 500 + i, nameRsc: 2000 + i, amount }; });
@@ -52,10 +52,21 @@ const makeAp = ({ pack = [], spells = [], others = 1, mana = 30, ability = 20,
     rsc: { get: r => names.get(r) ?? '' },
     room: { objects: objs },
     vitals: () => ({ mana: { value: mana } }),
-    cast: async () => { client.casts++; return true; },
+    cast: async (id, [target]) => {
+      client.casts++;
+      client.targets.push(target);
+      const name = spells.find(([, spellId]) => spellId === id)[0];
+      if (paid) for (const [reagent, cost] of Autopilot.BUFFS.find(b => b.name === name).reagents) {
+        const item = inv.find(o => names.get(o.nameRsc) === reagent);
+        item.amount -= cost;
+        if (!item.amount) inv.splice(inv.indexOf(item), 1);
+      }
+      return true;
+    },
     waitFor: async () => ({ events: [] }),
   };
   client.casts = 0;
+  client.targets = [];
   const ap = Object.create(Autopilot.prototype);
   ap.policy = { buffAllies: cfg };
   ap.tally = {};
@@ -63,7 +74,8 @@ const makeAp = ({ pack = [], spells = [], others = 1, mana = 30, ability = 20,
   ap.notes = [];
   ap.s = { client, need: () => client, pacer: { submit: async (_k, fn) => fn() } };
   ap.declinedCast = (what, why, detail) => { ap.declined.push({ what, why, detail }); };
-  ap.recordCast = () => {};
+  ap.receipts = [];
+  ap.recordCast = (spell, result) => ap.receipts.push({ spell, ...result });
   ap.note = (what, detail) => { ap.notes.push({ what, detail }); };
   ap.progress = () => {};
   return ap;
@@ -144,6 +156,32 @@ console.log('\nit falls through to bless when super strength cannot be paid for'
   ok('bless went out instead', ap.notes.at(-1)?.detail?.spell === 'bless');
   ok('and the super strength shortfall was still recorded',
      ap.declined.some(d => d.why === 'out of reagents'));
+}
+
+{
+  const ap = makeAp({ pack: FULL, spells: BOTH, mana: 12 });
+  await ap.buffAllies();
+  ok('bless remains available below the strength mana floor', ap.receipts[0]?.spell === 'bless');
+}
+
+{
+  const ap = makeAp({ pack: FULL, spells: BOTH, others: 2, paid: false });
+  await ap.buffAllies();
+  ok('a silent refusal is not counted as coverage', ap.receipts[0]?.ok === false && !ap.tally.buffs_given);
+  ap.lastBuffAt = 0;
+  await ap.buffAllies();
+  ok('an unconfirmed recipient does not block another ally', ap.s.client.targets[1] === 91);
+}
+
+{
+  const ap = makeAp({ pack: FULL, spells: BOTH, others: 2 });
+  await ap.buffAllies();
+  ap.lastBuffAt = 0;
+  await ap.buffAllies();
+  for (const entry of ap._buffedAt.values()) entry.retryAt = 0;
+  ap.lastBuffAt = 0;
+  await ap.buffAllies();
+  ok('due strength renewals do not starve allies never given bless', ap.receipts[2]?.spell === 'bless');
 }
 
 console.log('\na target inside the guaranteed window is not re-buffed');

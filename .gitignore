@@ -1043,6 +1043,9 @@ substrate/rescue-travel/
 /substrate/double-down-prod*
 /substrate/human-presence.json
 /substrate/prism-quest-*
+# Jala pupil progress and the posture saved before the audition.
+/substrate/jala-pupil-open-*.json
+/substrate/jala-pupil-posture-*.json
 /substrate/production-*/
 /substrate/production-*-runtime.json
 /substrate/red-alert/

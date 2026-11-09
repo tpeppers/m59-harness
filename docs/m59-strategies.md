@@ -430,7 +430,15 @@ It never widens the hunt: a listed creature `hunt` does not name is not prey wit
 `autopilot status` reports such a rule under `gang_up.ignored`. `gang_up.last` names what was left alone, and what was
 taken, with the fleet-mates at it. A strategy key only: the `autopilot` tool takes no `gang_up` argument (like
 `huntArea`), so it reaches a keeper through a file, needs no broker restart, and is hot-reloaded with the file. The keeper
-code that asks it (`gangUpFilter` and the rest) needs a `restart-keepers` handoff. `m59-gang-up-test.mjs` (33) pins it.
+code that asks it (`gangUpFilter` and the rest) needs a `restart-keepers` handoff. See `m59-gang-up-test.mjs`.
+
+Set `fightInPlace: true` in a creature's rule to let a ready keeper approach that
+creature where it stands. The keeper requires the existing opening health and
+vigor checks, enough health for the configured open-fight blow count, and fewer
+monsters in reach than the crowd threshold. It rechecks the quorum before leaving
+cover and before each attack packet. If a crowd forms or support moves away, the
+keeper re-evaluates on its next pass. For example, the Great Ocean can use
+`gangUp: { 'mollusk creature': { min: 2, radius: 6, fightInPlace: true } }`.
 
 ### Patrol (`patrol`): walk the spawn points in a loop
 

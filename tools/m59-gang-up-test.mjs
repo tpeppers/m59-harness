@@ -48,6 +48,7 @@ const { loadFarmStrategy } = await import('./m59-strategy-engine.mjs');
 const { Autopilot, policyDefaults, rankQuarries } = await import('./m59-autopilot.mjs');
 const party = await import('./m59-party.mjs');
 const skills = await import('./m59-skills.mjs');
+const { Session } = await import('./m59-game.mjs');
 const { OF } = await import('./m59-parse.mjs');
 const { readToolSource } = await import('./autopilot/source.mjs');
 
@@ -101,6 +102,60 @@ function choose(ap) {
 }
 
 console.log('the choice, from this keeper\'s own room view');
+await test('approaching in place needs the opt-in, a live quorum, opening health, vigor and room to fight', () => {
+  const policy = { ...ORDERS, gangUp: { 'guardian of zjiria': { min: 2, radius: 4, fightInPlace: true } } };
+  const { ap, c } = keeper({ policy, maxHealth: 120, objects: [me(), guardian(), { ...bunsen(12, 12), id: 2 }] });
+  let hp = 120, vigor = 160, contacts = [{ id: 100 }];
+  c.vitals = () => ({ health: { value: hp, max: 120 }, vigor: { value: vigor } });
+  ap.safety = () => ({ engageAt: 0.85 });
+  ap.fightFloor = () => 140;
+  ap.creatureLevel = () => 120;
+  ap.inReachOfUs = () => contacts;
+  const ready = () => ap.gangUpFightInPlace(c.room.objects.get(100));
+  assert(ready(), 'full health, fed and supported');
+  hp = 107;
+  assert(!ready(), 'low opening health uses the wall path');
+  hp = 120;
+  vigor = 139;
+  assert(!ready(), 'low vigor uses the wall path');
+  vigor = 160;
+  contacts = [{ id: 100 }, { id: 200 }];
+  assert(!ready(), 'crowd protection uses the wall path');
+  contacts = [{ id: 200 }];
+  assert(!ready(), 'a different attacker keeps the ordinary wall and defense rules');
+  contacts = [{ id: 100 }];
+  c.room.objects.get(2).row = 30;
+  assert(!ready(), 'the same target lost its quorum');
+  c.room.objects.get(2).row = 12;
+  ap.policy.gangUp = RULE;
+  assert(!ready(), 'old group rules keep their existing approach');
+});
+
+await test('a quorum that lapses during the opening reads or queued swing sends no movement or attack', async () => {
+  for (const lapseAt of ['read', 'attack']) {
+    const { ap, c } = keeper({ objects: [me(), guardian(), { ...bunsen(12, 12), id: 2 }] });
+    const s = ap.s;
+    const sent = [];
+    c.roomContents = c.stats = c.face = () => {};
+    c.waitFor = async () => ({ events: [] });
+    c.attack = () => sent.push('attack');
+    s.faceToward = async () => {};
+    s.walkToMeleeRange = async () => { sent.push('approach'); return { arrived: true }; };
+    s.attackRounds = Session.prototype.attackRounds;
+    s.pacer = { submit: async (kind, fn) => {
+      if (kind === lapseAt) c.room.objects.get(2).row = 30;
+      return fn();
+    } };
+    const result = await skills.fight(s, {
+      target: 'guardian of zjiria', exactTargetId: 100, equip: false, loot: false, reach: 2,
+      targetAllowed: target => !!ap.gangUpVerdict(target)?.met,
+    });
+    eq(sent, lapseAt === 'read' ? [] : ['approach'], lapseAt);
+    eq(result.reason, 'quarry no longer eligible for open combat', lapseAt);
+    if (lapseAt === 'attack') assert(result.cancelled && result.rounds === 0 && !result.fought);
+  }
+});
+
 await test('a lone keeper beside a Guardian does not take it: it takes a troll, though the priority names the guardian first', () => {
   const { ap, notes } = keeper({ objects: [me(), guardian(), troll()] });
   eq(choose(ap), 'troll');
@@ -272,6 +327,7 @@ await test('normal form: names folded, defaults filled in, null and {} are inert
   eq(normalizeGangUp({ ' Guardian  of Zjiria ': { min: 2 }, Troll: { radius: 6, min: 3 } }),
      { 'guardian of zjiria': { min: 2, radius: GANG_UP_DEFAULTS.radius }, troll: { min: 3, radius: 6 } });
   eq(normalizeGangUp({ 'guardian of zjiria': {} }), { 'guardian of zjiria': { min: 2, radius: 4 } });
+  eq(normalizeGangUp({ troll: { fightInPlace: true } }), { troll: { min: 2, radius: 4, fightInPlace: true } });
   eq(normalizeGangUp(null), null); eq(normalizeGangUp(undefined), null); eq(normalizeGangUp({}), null);
 });
 await test('bad shapes are refused, each with its reason', () => {
@@ -285,6 +341,7 @@ await test('bad shapes are refused, each with its reason', () => {
     [{ 'guardian of zjiria': { radius: 0 } }, /radius must be/], [{ 'guardian of zjiria': { radius: -1 } }, /radius must be/],
     [{ 'guardian of zjiria': { radius: 40 } }, /radius must be/], [{ 'guardian of zjiria': { radius: 1.5 } }, /radius must be/],
     [{ 'guardian of zjiria': { min: 2, count: 2 } }, /unrecognised count/],
+    [{ 'guardian of zjiria': { fightInPlace: 'true' } }, /fightInPlace must be a boolean/],
     [{ 'Guardian of Zjiria': { min: 2 }, 'guardian of zjiria': { min: 3 } }, /twice/],
     [{ '  ': { min: 2 } }, /not a creature name/],
     [Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`creature ${i}`, {}])), /at most 24/],

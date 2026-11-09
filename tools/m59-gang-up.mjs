@@ -78,8 +78,8 @@ export function normalizeGangUp(v) {
       throw new Error(`gangUp names one creature twice (${JSON.stringify(seen.get(identity(name)))} and ${JSON.stringify(raw)})`);
     seen.set(identity(name), raw);
     if (!isPlain(rule)) throw new Error(`gangUp["${name}"] must be { min, radius }; got ${JSON.stringify(rule)}`);
-    const unknown = Object.keys(rule).filter(k => k !== 'min' && k !== 'radius');
-    if (unknown.length) throw new Error(`gangUp["${name}"]: unrecognised ${unknown.join(', ')} (a rule has only min and radius)`);
+    const unknown = Object.keys(rule).filter(k => k !== 'min' && k !== 'radius' && k !== 'fightInPlace');
+    if (unknown.length) throw new Error(`gangUp["${name}"]: unrecognised ${unknown.join(', ')}`);
     const min = rule.min === undefined ? GANG_UP_DEFAULTS.min : rule.min;
     const radius = rule.radius === undefined ? GANG_UP_DEFAULTS.radius : rule.radius;
     if (!Number.isInteger(min) || min < 2 || min > GANG_UP_MAX_MIN)
@@ -88,7 +88,9 @@ export function normalizeGangUp(v) {
     if (!Number.isInteger(radius) || radius < 1 || radius > GANG_UP_MAX_RADIUS)
       throw new Error(`gangUp["${name}"].radius must be a whole number of coarse squares from 1 to ${GANG_UP_MAX_RADIUS}; ` +
                       `got ${JSON.stringify(rule.radius)}`);
-    out[name] = { min, radius };
+    if (rule.fightInPlace !== undefined && typeof rule.fightInPlace !== 'boolean')
+      throw new Error(`gangUp["${name}"].fightInPlace must be a boolean`);
+    out[name] = { min, radius, ...(rule.fightInPlace === true ? { fightInPlace: true } : {}) };
   }
   return Object.keys(out).length ? out : null;
 }
@@ -104,7 +106,8 @@ export function gangUpRuleFor(spec, liveName, { matcherFor = null } = {}) {
     let hit = false;
     try { hit = typeof matcherFor === 'function' ? !!matcherFor(creature)(liveName) : identity(creature) === identity(liveName); }
     catch { hit = false; }
-    if (hit) return { creature, min: rule.min, radius: rule.radius };
+    if (hit) return { creature, min: rule.min, radius: rule.radius,
+                      ...(rule.fightInPlace === true ? { fightInPlace: true } : {}) };
   }
   return null;
 }

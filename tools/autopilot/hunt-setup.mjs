@@ -442,7 +442,8 @@ export class HuntSetupPart {
     const rule = gangUpRuleFor(spec, name, { matcherFor });
     if (!rule) return null;
     const v = gangUpQuorum(rule, o, players ?? this.gangUpPlayersHere(), { isFleetmate: n => party.isFleetmate(n) });
-    return { ...v, name, id: o.id ?? null, at: Number.isFinite(o.row) && Number.isFinite(o.col) ? `r${o.row}c${o.col}` : null };
+    return { ...v, name, id: o.id ?? null, ...(rule.fightInPlace ? { fightInPlace: true } : {}),
+             at: Number.isFinite(o.row) && Number.isFinite(o.col) ? `r${o.row}c${o.col}` : null };
   }
 
   /** The verdict when this creature is listed AND its quorum is not met -- it may not be chosen -- else null. */

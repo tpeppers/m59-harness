@@ -406,7 +406,7 @@ export function recordSample(rows = []) {
 // The ledger's own filename shape, named once so the reader and the writer cannot drift.
 const LEDGER_FILE = /^fleet-\d{4}-\d{2}-\d{2}\.jsonl$/;
 
-export function readLedger({ sinceMs = 24 * 3600 * 1000 } = {}) {
+export function readLedger({ sinceMs = 24 * 3600 * 1000, dir = DIR, now = Date.now() } = {}) {
   // AN ABSENT DIRECTORY IS NOT AN EMPTY ONE, and this used to answer the same for both.
   //
   // The ledger resolves its directory from the CHECKOUT it was loaded in, so a report run
@@ -415,9 +415,9 @@ export function readLedger({ sinceMs = 24 * 3600 * 1000 } = {}) {
   // the first time m59-spellcast ran from a worktree, and the fix is not to stop making the
   // mistake: `source` travels with every read and the CLIs print it. M59_LEDGER_DIR is how
   // one is pointed at another fleet's history.
-  const source = { dir: DIR, exists: existsSync(DIR), files: 0, rows: 0 };
+  const source = { dir, exists: existsSync(dir), files: 0, rows: 0 };
   if (!source.exists) return { samples: [], events: [], source };
-  const cutoff = Date.now() - sinceMs;
+  const cutoff = now - sinceMs;
   const samples = [], events = [];
   // Two days of files covers any 24-hour window regardless of when it started.
   //
@@ -427,11 +427,12 @@ export function readLedger({ sinceMs = 24 * 3600 * 1000 } = {}) {
   // that was ~134 MB per `fleet` call (killsIn caches only 5s), and the broker's loop
   // blocked 3-6s some 580 times an hour, starving every driver on it.
   const firstDay = new Date(cutoff).toISOString().slice(0, 10);
-  const files = readdirSync(DIR).filter(f => LEDGER_FILE.test(f)).sort().slice(-3)
+  const lastDay = new Date(now).toISOString().slice(0, 10);
+  const files = readdirSync(dir).filter(f => LEDGER_FILE.test(f) && f.slice(6, 16) <= lastDay).sort().slice(-3)
     .filter(f => f.slice(6, 16) >= firstDay);
   source.files = files.length;
   for (const f of files) {
-    for (const line of readFileSync(join(DIR, f), 'utf8').split('\n')) {
+    for (const line of readFileSync(join(dir, f), 'utf8').split('\n')) {
       if (!line) continue;
       let o; try { o = JSON.parse(line); } catch { continue; }
       source.rows++;

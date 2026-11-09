@@ -5009,10 +5009,18 @@ class Session {
       if (vetoAttack(this, c, targetId)) break;
       await this.faceToward(o);
       const before = c.evSeq;
+      let sent = false;
       await this.pacer.submit('attack', () => {
+        if (this.client !== c || shouldCancel?.()) {
+          cancelled = { at_swing: i };
+          return;
+        }
+        if (!c.room.objects.has(targetId)) return;
+        sent = true;
         if(observer){observer.after=c.evSeq;observer.armed=true;}
         return c.attack(targetId);
       }, ATTACK_INTERVAL_MS);
+      if (!sent) break;
       // Combat results and disappearance are server messages.  Do not admit chat
       // (`said`) into the evidence window: another player can quote hit prose while
       // this swing is outstanding, and that must not turn a miss into progress.

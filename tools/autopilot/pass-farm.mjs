@@ -56,6 +56,25 @@ export class PassFarmPart {
     return await cooperativePass(this,{passiveOnly:true}) ? HANDLED : CONTINUE;
   }
 
+  gangUpFightInPlace(target, opening = true) {
+    const verdict = this.gangUpVerdict(target);
+    if (!verdict?.fightInPlace || !verdict.met) return false;
+    const c = this.s.client;
+    if (!c?.self) return false;
+    const inReach = this.inReachOfUs();
+    if (inReach.length >= (this.policy.wallAtAttackers ?? 2)) return false;
+    if (!opening) return true;
+    if (c.self.predicted || inReach.some(foe => foe.id !== target.id)) return false;
+    const vitals = c.vitals?.();
+    return openFightReadiness({
+      healthValue: vitals?.health?.value, healthMax: vitals?.health?.max,
+      vigor: vigorOf(vitals ?? {}), vigorBar: this.fightFloor(),
+      preyLevel: this.creatureLevel(verdict.name),
+      openFightHealth: Math.max(this.safety().engageAt, this.policy.openFightHealth ?? 0.9),
+      minimumBlows: this.policy.openFightBlows ?? 7,
+    }).ready;
+  }
+
   async passFarm(ctx) {
     const { s, c, room, v, hp } = ctx;
     // Before any work is chosen: is there an unfinished journey to pick back up? Ahead of
@@ -1022,11 +1041,14 @@ export class PassFarmPart {
       const foundNames = [...new Set(found.map(o => c.rsc.get(o.nameRsc)))];
       const worth = this.holdWorthwhile([...new Set([...foundNames, ...this.threat().names])]);
       const selectedQuarry = found[0] ?? null;
+      const groupApproach = !!selectedQuarry
+        && (!this.pendingPull || this.pendingPull.target_id === selectedQuarry.id)
+        && this.gangUpFightInPlace(c.room.objects.get(selectedQuarry.id));
       // A safe spot is part of a quarry/spot pair, not a room-wide home forever. Once
       // the selected quarry changes, recompute the closest valid wall for the new one.
       // Do not step off a wall while something is already in melee range; finish that
       // immediate contact first, then rebind on the next pass.
-      if (worth.hold && this.hold && selectedQuarry
+      if (!groupApproach && worth.hold && this.hold && selectedQuarry
           && this.hold.quarry_id !== selectedQuarry.id
           && !this.pendingPull && !(this.inReachOfUs()?.length)) {
         this.releaseHold('the selected quarry changed — recomputing its closest safe spot');
@@ -1048,7 +1070,7 @@ export class PassFarmPart {
         this.releaseHold('the crowd this wall was taken for has cleared, and the wall is ' +
                          'not required here — back to fighting in the open');
       }
-      if (worth.hold && !this.hold && room) {
+      if (!groupApproach && worth.hold && !this.hold && room) {
         // The quarry was ranked and claimed above. Its identity stays attached to the
         // hold and through the pull; distance to it is the selector's primary order.
         const t = await this.takeSafeSpot(worth.why, selectedQuarry);
@@ -1094,7 +1116,7 @@ export class PassFarmPart {
       // GATED ON THE OPENING PULL, because that is what it is a consequence of: if a
       // fight may only be opened from a wall, a room with no wall cannot be fought in.
       // With `pullToSafeWall` false the fight opens in the open and the room is fine.
-      if (opensFightFromWall(this.policy) && !this.hold && room?.num != null) {
+      if (!groupApproach && opensFightFromWall(this.policy) && !this.hold && room?.num != null) {
         // Ask once per room, not once per pass. takeSafeSpot is a scan plus pathfinds,
         // and the answer does not change while we stand here — but it DOES change when
         // the book learns something, so this is per session rather than persisted.
@@ -1607,7 +1629,6 @@ export class PassFarmPart {
         V.lowest_at_engage = V.lowest_at_engage == null ? vAt : Math.min(V.lowest_at_engage, vAt);
         if (vAt < WANT_FIGHT_VIGOR) V.below_want++;
       }
-      const holding = !!this.hold;
       // TELL THE PARTNER WHAT WE ARE ABOUT TO HIT, before hitting it. Declaring after
       // the swing means the first exchange of every fight is two characters choosing
       // independently, which is the one moment convergence is worth most — whoever
@@ -1638,6 +1659,23 @@ export class PassFarmPart {
       const plannedQuarryId = this.pendingPull?.target_id ?? selectedQuarry?.id ?? null;
       const swingAt = bystander ? bystander.id : (partyFoe ? partyFoe.id : plannedQuarryId);
       const claimedSwing = swingAt ?? null;
+      const sameGroupTarget = groupApproach && !bystander && claimedSwing === selectedQuarry.id;
+      // Keep any existing cover until the final swing id is known. A different
+      // defensive or pending target must never inherit the open-ground exception.
+      if (groupApproach && !sameGroupTarget && !this.hold) return HANDLED;
+      if (sameGroupTarget && !this.gangUpFightInPlace(c.room.objects.get(claimedSwing))) return HANDLED;
+      if (sameGroupTarget && this.hold && !this.inReachOfUs().length)
+        this.releaseHold('approaching a quorum-backed quarry where it stands');
+      const holding = !!this.hold;
+      const guardGroupApproach = sameGroupTarget && !holding;
+      const roomObject = c.room.id;
+      const selfId = c.selfId;
+      const idGenerations = c.idGenerations;
+      const groupTargetAllowed = guardGroupApproach ? (target, opening) =>
+        s.client === c && c.room.id === roomObject && s.world?.room?.num === room?.num
+          && c.selfId === selfId && c.idGenerations === idGenerations && target.nameRsc === selectedQuarry.nameRsc
+          && (target.flags & OF.ATTACKABLE) && !(target.flags & OF.PLAYER)
+          && this.gangUpFightInPlace(target, opening) : null;
       // The experiment is about the configured farm prey, not weak-room cleanup or a
       // defensive contact. Use the same canonical matcher as every other hunt decision,
       // so class and alias orders (for example `soldier`) train their actual prey too.
@@ -1698,7 +1736,8 @@ export class PassFarmPart {
         claimQuarry(this.s.name, room?.num, claimedSwing);
       if (this.policy.partner && !this.pendingPull)
         party.declareTarget(this.s.name, claimedSwing, engageName);
-      this.farmCombat = {at:Date.now(),pending:true,target:engageName,target_id:claimedSwing,holding:!!holding};
+      const groupPosture = guardGroupApproach ? { fight_in_place: true } : {};
+      this.farmCombat = {at:Date.now(),pending:true,target:engageName,target_id:claimedSwing,holding:!!holding,...groupPosture};
       const f = await skills.fight(s, { target: engageName,
                                         // The same predicate that chose the quarry. An order naming
                                         // several creatures is not a string, and fight() would
@@ -1720,6 +1759,7 @@ export class PassFarmPart {
                                         avoid: bystander ? null : this.preyAvoid(s.world?.room?.num ?? null),
                                         preferId: claimedSwing,
                                         exactTargetId: claimedSwing,
+                                        targetAllowed: groupTargetAllowed,
                                         disengageAt: safe.fleeAt, loot: true,
                                         holdPosition: holding, reach: PLAYER_REACH,
                                         // m59-chase.mjs, off unless a strategy turned it on (policy.chaseOnFoot).
@@ -1735,7 +1775,7 @@ export class PassFarmPart {
         this.recordInterruptedFarmOutcome(f,{room,holding,preempted:error.code??error.message});
         return HANDLED;
       }
-      this.farmCombat = {at:Date.now(),pending:false,target:engageName,target_id:claimedSwing,holding:!!holding,killed:!!f.killed,died:!!f.died,out_of_reach:!!f.out_of_reach,reason:f.reason??f.why??null,rounds:f.rounds??null,combat:(f.combat??[]).slice(-8)};
+      this.farmCombat = {at:Date.now(),pending:false,target:engageName,target_id:claimedSwing,holding:!!holding,killed:!!f.killed,died:!!f.died,out_of_reach:!!f.out_of_reach,reason:f.reason??f.why??null,rounds:f.rounds??null,combat:(f.combat??[]).slice(-8),...groupPosture};
       if(this.finishFailedCombatApproach(f))return HANDLED;
       // A piece of a chase on foot (m59-chase.mjs): walked toward the quarry, not yet in reach. Progress, not a stall.
       if(this.finishChasePiece(f))return HANDLED;
@@ -1827,6 +1867,8 @@ export class PassFarmPart {
         const patrolHereNow = this.patrolHere?.(this.s.world?.room?.num ?? c.room?.num) ?? null;
         if (patrolHereNow && this.hold) this.hold = null;
         if (!this.hold) {
+          if (groupTargetAllowed && (!quarry || !groupTargetAllowed(quarry, true)))
+            return HANDLED;
           const closed = quarry ? await this.closeOnQuarry(quarry)
                                 : { closed: false, why: 'nothing to close on' };
           // A chase piece keeps the quarry ours, so the next pass carries on toward the same one (m59-chase.mjs).

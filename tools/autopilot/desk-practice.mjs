@@ -11,6 +11,7 @@
 // 10 methods: isRoomEnchantPost, maintainRoomEnchantPost, roomEnchantAllows, roomEnchant,
 //   practiceSafeSpot, practiceSessionDue, practiceAtDesk, buffAllies, practiceBuyHere, reagentExact
 import { allyVerdict } from '../m59-ally.mjs';
+import { classifyCast } from '../m59-castoutcomes.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
 import { castsAbove, folRoomsOf } from '../m59-chalice.mjs';
 import { buyHereWants, choosePractice, deskReserve, isReagent, normalizePractice, offeredServices, pickCreatureTarget, touchedCreatures } from '../m59-deskpractice.mjs';
@@ -484,7 +485,11 @@ export class DeskPracticePart {
 
     const wanted = [].concat(cfg.spells ?? Autopilot.BUFFS.map(b => b.name))
       .map(x => String(x).toLowerCase());
-    this._buffedAt ||= new Map();          // `${targetId}:${spell}` -> when it was cast
+    this._buffedAt ||= new Map();          // target/spell -> last attempt and earliest retry
+    const now = Date.now();
+    const mana = c.vitals()?.mana;
+    const have = n => this.reagentExact(n);
+    let next = null;
 
     for (const buff of Autopilot.BUFFS) {
       if (!wanted.includes(buff.name)) continue;
@@ -492,18 +497,17 @@ export class DeskPracticePart {
         .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === buff.name);
       if (!spell) continue;                                     // not a caster of this one
 
-      const mana = c.vitals()?.mana;
       const floor = Number(cfg.mana_floor) >= 0 ? Number(cfg.mana_floor) : buff.mana + 4;
-      if (mana && mana.value < floor)
-        return this.declinedCast(buff.name, 'not enough mana',
-          { mana: mana.value, needs: floor });
+      if (mana && mana.value < Math.max(buff.mana, floor)) {
+        this.declinedCast(buff.name, 'not enough mana', { mana: mana.value, needs: Math.max(buff.mana, floor) });
+        continue;
+      }
 
       // REAGENTS ARE CHECKED BEFORE THE CAST, NOT INFERRED FROM ITS FAILURE. A cast that
       // cannot pay its reagents is refused server-side and looks, from here, exactly like
       // a cast that landed on somebody already enchanted.
       // COUNTED EXACTLY: "mushroom" is not "red mushroom". A substring count let magic shield's red mushroom pass for the
       // two plain ones (and a pack of red mushrooms pass for bless's), which is a cast refused server-side for nothing.
-      const have = n => (typeof this.reagentExact === 'function' ? this.reagentExact(n) : this.reagentOnHand(n));
       const short = buff.reagents.filter(([n, k]) => have(n) < k);
       if (short.length) {
         this.declinedCast(buff.name, 'out of reagents',
@@ -518,37 +522,51 @@ export class DeskPracticePart {
       // empty until the first read, hence the fallback.
       const ability = c.abilities?.get?.(spell.id)?.ability ?? cfg.assume_ability ?? 20;
       const holdMs = this.buffFloorMs(buff, ability);
-      const target = others.find(o => {
-        const at = this._buffedAt.get(`${o.id}:${buff.name}`);
-        return !at || Date.now() - at >= holdMs;
-      });
-      // Everyone in the room is still inside the guaranteed window for this one. Not a
-      // fault and not worth a log line every pass — try the next spell.
-      if (!target) continue;
-
-      this.lastBuffAt = Date.now();
-      this._buffedAt.set(`${target.id}:${buff.name}`, Date.now());
-      await withCastRite(s, { spell, targets: [target.id], why: 'buffAllies' }, () => s.pacer.submit('cast', () => c.cast(spell.id, [target.id]), 1050));
-      const ev = await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 })
-        .catch(() => ({ events: [] }));
-      this.tally.buffs_given = (this.tally.buffs_given || 0) + 1;
-      // Like a heal on somebody else, there is no inventory diff to prove it landed, so
-      // `ok` means the cast went out. The reagents leaving the pack is the nearest thing
-      // to a receipt and it is not read back here.
-      this.recordCast(buff.name, { ok: true, target: c.rsc.get(target.nameRsc),
-        why: `an ally in the room (${basisOf.get(target.id) ?? 'ally'}): buffs them, and casting is how the spell improves`,
-        mana_before: mana?.value ?? null, mana_after: c.vitals?.()?.mana?.value ?? null });
-      this.note('buffed an ally', {
-        target: c.rsc.get(target.nameRsc), spell: buff.name,
-        holds_for_s: Math.round(holdMs / 1000),
-        said: ev.events?.filter(e => e.text).map(e => e.text).slice(0, 2),
-        why: buff.name === 'super strength'
-          ? 'might is brawling’s requisite stat: raises their improvement chance and soft cap'
-          : buff.name === 'magic shield' ? 'defence +50 + 2*power: fewer hits taken from what they are fighting'
-          : 'to-hit, so more landed swings, so the 75-swing improvement counter pays sooner' });
-      this.progress(`cast ${buff.name} on an ally`);
-      return;                       // one cast per pass; the pacer owns the rest
+      for (const target of others) {
+        const key = `${target.id}:${target.nameRsc}:${buff.name}`;
+        const previous = this._buffedAt.get(key);
+        if (previous?.retryAt > now) continue;
+        const last = previous?.at ?? 0;
+        // A large room can make strength come due again before we ever reach bless.
+        // Use the oldest attempt across both spells and allies, with spell order breaking ties.
+        if (!next || last < next.last) next = { target, key, buff, spell, last, holdMs };
+      }
     }
+    if (!next) return;
+
+    const { target, key, buff, spell, holdMs } = next;
+    const before = buff.reagents.map(([name, cost]) => ({ name, cost, count: have(name) }));
+    const paid = () => before.every(({ name, cost, count }) => count - have(name) >= cost);
+    const since = c.evSeq;
+    this.lastBuffAt = now;
+    this._buffedAt.set(key, { at: now, retryAt: now + gap });
+    await withCastRite(s, { spell, targets: [target.id], why: 'buffAllies' }, () =>
+      s.pacer.submit('cast', () => c.cast(spell.id, [target.id]), 1050));
+    const ev = await c.waitFor({ since, kinds: ['message', 'stat', 'changed', 'left', 'inventory'], timeoutMs: 3000,
+      match: e => (e.kind === 'message' && !!classifyCast([e.text])) || paid() })
+      .catch(() => ({ events: [] }));
+    const said = ev.events?.filter(e => e.text).map(e => e.text) ?? [];
+    const outcome = classifyCast(said);
+    if (outcome || !paid()) {
+      this.recordCast(buff.name, { ok: false, target: c.rsc.get(target.nameRsc),
+        why: outcome?.why ?? 'no complete reagent payment observed', said: said.slice(0, 2) });
+      return;
+    }
+
+    this._buffedAt.set(key, { at: now, retryAt: Date.now() + holdMs });
+    this.tally.buffs_given = (this.tally.buffs_given || 0) + 1;
+    this.recordCast(buff.name, { ok: true, target: c.rsc.get(target.nameRsc),
+      why: `recipe paid for an ally in the room (${basisOf.get(target.id) ?? 'ally'})`,
+      mana_before: mana?.value ?? null, mana_after: c.vitals?.()?.mana?.value ?? null });
+    this.note('buffed an ally', {
+      target: c.rsc.get(target.nameRsc), spell: buff.name,
+      holds_for_s: Math.round(holdMs / 1000),
+      said: said.slice(0, 2),
+      why: buff.name === 'super strength'
+        ? 'might is brawling’s requisite stat: raises their improvement chance and soft cap'
+        : buff.name === 'magic shield' ? 'defence +50 + 2*power: fewer hits taken from what they are fighting'
+        : 'to-hit, so more landed swings, so the 75-swing improvement counter pays sooner' });
+    this.progress(`cast ${buff.name} on an ally`);
   }
   // How many of exactly this reagent the pack holds: "mushroom" counts mushrooms and not blue mushrooms.
   reagentExact(name) {

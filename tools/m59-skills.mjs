@@ -2803,6 +2803,9 @@ async function fightWithIntent(s, {
   // A predicate over the OBJECT: true means "do not consider this one". The keeper passes
   // prey it has already failed to reach; see noteUnreachablePrey in m59-autopilot.mjs.
   avoid = null,
+  // Optional eligibility that can lapse while a supported hunt waits for I/O or moves.
+  // The opening check also requires the conditions for leaving cover.
+  targetAllowed = null,
   // CHASE ON FOOT (m59-chase.mjs): off unless the caller asks. The keeper passes policy.chaseOnFoot; every other
   // caller (fleetscript, the broker's fight tool) keeps the approach it always had.
   chase = false,
@@ -2902,6 +2905,11 @@ async function fightWithIntent(s, {
   if (startPct !== null && startPct < disengageAt)
     return { fought: false, reason: `starting health is ${Math.round(startPct * 100)}%, already below the disengage threshold`,
              vitals: before, note: 'rest first' };
+  const liveTarget = () => c.room.objects.get(foe.id);
+  const eligibilityReason = 'quarry no longer eligible for open combat';
+  const openingTarget = liveTarget();
+  if (targetAllowed && (!openingTarget || !targetAllowed(openingTarget, true)))
+    return { fought: false, target: foeName, foe_id: foe.id, reason: eligibilityReason, log };
 
   // Close and face. approachSquare routes to a square BESIDE it — you cannot stand
   // where a monster stands — and faceToward matters because an attack on something
@@ -3055,9 +3063,13 @@ async function fightWithIntent(s, {
     say('faced target', { deg: Math.round(deg), target: foeName });
   }
 
-  const fightCancelled = () =>
-    typeof s?.fightWasCancelled === 'function' &&
-    s.fightWasCancelled(fightGeneration, controlToken);
+  let eligibilityRevoked = false;
+  const fightCancelled = () => {
+    if (s.fightWasCancelled?.(fightGeneration, controlToken)) return true;
+    const live = targetAllowed && liveTarget();
+    if (live && !targetAllowed(live, false)) eligibilityRevoked = true;
+    return eligibilityRevoked;
+  };
 
   for (let r = 0; r < rounds; r++) {
     // Asked before the round as well as inside it. A cancel that lands between rounds
@@ -3066,6 +3078,7 @@ async function fightWithIntent(s, {
       return { fought: roundsFought > 0, killed: false, died: false, cancelled: true,
                rounds: roundsFought, target: foeName, foe_id: foe.id,
                combat: combatLines.slice(-8), log,
+               ...(eligibilityRevoked ? { reason: eligibilityReason } : {}),
                note: `the fight was cancelled after ${roundsFought} round(s). The monster is ` +
                      `still there and still hostile — whatever cancelled this owns the ` +
                      `character now and has to decide what happens next.` };
@@ -3100,7 +3113,7 @@ async function fightWithIntent(s, {
     };
     const res = await s.attackRounds(foe.id, swingsPerRound,
       { abortBelow: disengageAt, shouldCancel: fightCancelled, onMessages:typeof onLandedHit==='function'?notifyHits:null });
-    roundsFought++;
+    if (!eligibilityRevoked || res.cancelled?.at_swing !== 0) roundsFought++;
     combatLines.push(...res.messages);
     await notifyHits(res.messages,{fallback:true});
 
@@ -3117,9 +3130,10 @@ async function fightWithIntent(s, {
     // rounds", because a fight somebody STOPPED and a fight that ran out of budget call
     // for opposite responses from the caller.
     if (res.cancelled)
-      return { fought: true, killed: false, died: false, cancelled: true,
+      return { fought: roundsFought > 0, killed: false, died: false, cancelled: true,
                rounds: roundsFought, at_swing: res.cancelled.at_swing,
                target: foeName, foe_id: foe.id, combat: combatLines.slice(-8), log,
+               ...(eligibilityRevoked ? { reason: eligibilityReason } : {}),
                note: `the fight was cancelled mid-round, after ${roundsFought} round(s). ` +
                      `The monster is still there and still hostile.` };
 
