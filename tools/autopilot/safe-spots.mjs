@@ -17,7 +17,7 @@ import { noteHealingRecovery, spentSessionExit } from '../m59-healing-session.mj
 import { keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import { affordableHeal, castRecoveryHeal } from '../m59-recovery-heal.mjs';
-import { REFUGE_PROGRESS_MS, observeRefugeProgress, recoveryOccupiedSquares, recoveryRefugeReach, recoveryUnderPressure } from '../m59-recovery-refuge.mjs';
+import { REFUGE_NO_PROGRESS_REASON, REFUGE_PROGRESS_MS, isStalledRefugeRetry, observeRefugeProgress, recoveryOccupiedSquares, recoveryRefugeReach, recoveryUnderPressure } from '../m59-recovery-refuge.mjs';
 import { activeRoutes, anchorFor } from '../m59-routes.mjs';
 import { coarseCombatReachFrom } from '../m59-safespots.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -431,10 +431,18 @@ export class SafeSpotsPart {
     // these protected faculties. Its initial declaration already cancels old
     // movement. Only inert/human control or an explicit protected handoff yields
     // the replacement recovery; renewing an errand must not strand it.
-    if (this.stopping || (this.inert && !this.inert.travelling)
-        || this.facultyHeld('survival') || this.facultyHeld('recovery') || this.facultyHeld('combat')) {
+    const recoveryHandedOff = () => this.stopping || (this.inert && !this.inert.travelling) ||
+      this.facultyHeld('survival') || this.facultyHeld('recovery') || this.facultyHeld('combat');
+    if (recoveryHandedOff()) {
       chooseSurvivalDecision(s,{strategy:'yield_to_controller',reason:'survival control explicitly handed to another controller',
         reason_code:'controller_ownership',status:'yielded'},{because:'external control takes precedence'});return false;
+    }
+    // Waldorf died while the same jam tried a second distant Ocean refuge. A live
+    // guarded rescue gets a chance first, with this exact retry intact if refused.
+    if (isStalledRefugeRetry(d) && this.oceanRangedRecoveryEnabled()) {
+      const generation = s.movementGeneration;
+      if (await this.tryOceanCooperativeEscape(d)) return true;
+      if (currentSurvivalDecision(s) !== d || s.movementGeneration !== generation || recoveryHandedOff()) return true;
     }
     // Pending recovery runs before passFleeAndRest. Without its blocker rung,
     // a pinned body can exhaust refuge alternatives forever without reaching
@@ -741,7 +749,7 @@ export class SafeSpotsPart {
       close();
       this.noteUnreachableSpot(room,spot.col,spot.row);
       this.rememberSurvivalJam({failed:true});
-      const why='shelter approach made no confirmed route progress';
+      const why=REFUGE_NO_PROGRESS_REASON;
       this.note(why,{to:{row:spot.row,col:spot.col},room,
         stalled_ms:Date.now()-progress.progressedAt,remaining_steps:progress.best});
       this.cancelForSurvival(null,why,{origin:keeperOrigin('shelter')});

@@ -7,7 +7,7 @@ import {Session} from './m59-game.mjs';
 import {Autopilot,PASS_STAGES} from './m59-autopilot.mjs';
 import {OF} from './m59-parse.mjs';
 import {withPacketScope,bindPacketScope} from './m59-packet-scope.mjs';
-import {currentSurvivalDecision} from './m59-survival-decision.mjs';
+import {chooseSurvivalDecision,currentSurvivalDecision} from './m59-survival-decision.mjs';
 import {noteLogoff} from './m59-healing-session.mjs';
 import * as party from './m59-party.mjs';
 import {load,firstAnswer} from './m59-strategies.mjs';
@@ -205,6 +205,60 @@ try{
    assert.equal(currentSurvivalDecision(f.a.s),null,label);
   }
   console.log('PASS Ocean mixed/ranged escape runs before the caster exit only with live proof, budget and admitted fleet help');
+
+  // Waldorf's final confirmed pose after the first refuge's no-progress cancellation.
+  const stalled = async (label, helper = true) => {
+   const f = await setup(label), {s,c,pilot} = f.a;
+   Object.assign(c.self,{row:47,col:47,x:3040,y:3040});
+   c.vitals=()=>({health:{value:17,max:121},vigor:{value:188}});
+   for (const actor of [f.a,f.b]) {
+    actor.c.room.objects.delete(f.rock.id);
+    actor.c.room.objects.delete(f.melee.id);
+    for (const [id,row,col,x,y] of [[13099,46,47,3043,2963],[13085,47,48,3114,3051],[13094,44,55,3546,2836]])
+     actor.c.room.objects.set(id,{...f.rock,id,row,col,x,y});
+   }
+   let paths=0;
+   Object.assign(pilot,{
+    rememberSurvivalJam:()=>{},blinkPastSurvivalJam:async()=>false,lureSparedBlocker:async()=>false,armedForSure:()=>true,
+    takeRecoverySpot:async(why,opts)=>{paths++;assert.equal(opts.decisionId,retry.id);},
+   });
+   const retry=chooseSurvivalDecision(s,{strategy:'route_refuge',reason:'shelter approach made no confirmed route progress',
+    reason_code:'approach_interrupted',source:'travel',replan_count:1});
+   if(helper)await configureCooperativeLogoff(f.b.pilot,'helper');
+   return {...f,retry,paths:()=>paths,step:()=>Autopilot.prototype.continueSurvivalDecisionStep.call(pilot)};
+  };
+  const rescued = await stalled('waldorf-pending-retry');
+  assert.equal(await rescued.step(),true);
+  assert.equal(rescued.paths(),0,'no second 44-step refuge before an admitted rescue');
+  assert.equal(rescued.counts().rejoins,1);
+  assert.deepEqual(rescued.store().read('request',rescued.a.s.name).targets.map(t=>t.id),[13099,13085,13094]);
+
+  for(const [label,helper,configure,expectedPaths] of [
+   ['no-helper',false,()=>{},1],
+   ['already-spent',true,f=>noteLogoff(f.a.s.name),1],
+   ['safe-wall',true,f=>{f.a.pilot.currentRecoveryWall=()=>true;f.a.pilot.playDead=async()=>true;},0],
+   ['no-attack',true,f=>{f.a.pilot.policy.neverAttack=true;},1],
+   ['new-generation',true,f=>{f.a.s._askStrategies=async()=>{f.a.s.movementGeneration++;return {strategy:'fixture-private',answer:policy};};},0],
+   ['survival-handoff',true,f=>{f.a.s._askStrategies=async()=>{f.a.pilot.facultyHeld=key=>key==='survival';return {strategy:'fixture-private',answer:policy};};},0],
+   ['advancing-refuge',true,f=>{
+    const {s,c}=f.a,now=Date.now(),generation=s.movementGeneration;
+    s.moveOrder={generation,origin:{source:'keeper',name:'shelter'}};
+    s.provenRefugeLeg={client:c,self_id:c.selfId,room_object_id:c.room.id,generation,owner:'keeper:shelter',
+     started_at:now-250,from:{x:2976,y:3040},waypoints:[{x:3168,y:3040}],next_index:0};
+    s.refugePosition={client:c,id:c.selfId,room_object_id:c.room.id,generation,at:now,changed_at:now,
+     x:3040,y:3040,previous:{x:2976,y:3040,at:now-200}};
+   },1],
+  ]) {
+   const f=await stalled('waldorf-'+label,helper);
+   configure(f);
+   assert.equal(await f.step(),true,label);
+   assert.equal(f.counts().rejoins,0,label);
+   assert.equal(f.paths(),expectedPaths,label);
+   assert.equal(currentSurvivalDecision(f.a.s),f.retry,label);
+   assert.equal(f.retry.replan_count,1,label);
+   assert.equal(f.store().read('request',f.a.s.name),null,label);
+  }
+  console.log('PASS the stalled Ocean recovery replay admits a mixed rescue before another refuge and preserves a refused retry');
  }
  {
   const f=fixture('ocean-passive-support');

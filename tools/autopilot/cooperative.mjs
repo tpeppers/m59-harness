@@ -18,6 +18,8 @@ import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF, buyLines } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import { purchaseKey } from '../m59-purchase-plan.mjs';
+import { isStalledRefugeRetry } from '../m59-recovery-refuge.mjs';
+import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
 import * as skills from '../m59-skills.mjs';
 import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision, updateSurvivalDecision } from '../m59-survival-decision.mjs';
 import { CONTINUE, DEBUG_STATES, HANDLED, LOGOFF_REFRESH_MS, LOGOFF_UNDER_ATTACK_MS, REST_VIGOR_CAP, bearingIn, pct, purchaseEnabled, vigorOf } from '../m59-autopilot.mjs';
@@ -117,34 +119,38 @@ export class CooperativePart {
     this.farmStrategyHook('onKill',{creature:f.target,room:request.room,looted:[]});
   }
 
-  async tryOceanCooperativeEscape() {
+  async tryOceanCooperativeEscape(retry = null) {
     const s = this.s, c = s.client;
     const liveThreat = () => {
       const damage = s.lastFleetDamage, age = Date.now() - (damage?.at ?? 0);
       const hp = pct(c?.vitals?.()?.health);
       return this.mode === 'farm' && this.policy?.neverAttack !== true && this.oceanRangedRecoveryEnabled() &&
         s.live && s.client === c && c.combatReady === true && !s.combat?.active?.pvp &&
+        (!retry || (currentSurvivalDecision(s) === retry && retry.room === s.world?.room?.num &&
+          isStalledRefugeRetry(retry) && !continuingProvenRefugeLeg(s) && !this.stopping &&
+          !(this.inert && !this.inert.travelling) &&
+          !this.facultyHeld('survival') && !this.facultyHeld('recovery') && !this.facultyHeld('combat'))) &&
         hp > 0 && hp < this.safety().fleeAt && c.ailments?.()?.length === 0 &&
         damage?.client === c && damage.bodyId === c.selfId && damage.roomId === c.room.id &&
         age >= 0 && age <= 5000 && !this.currentRecoveryWall() &&
         oceanRockThreats(this, [...c.room.objects.values()], { outsideMelee: true }).length > 0;
     };
-    if (!liveThreat() || currentSurvivalDecision(s)) return false;
+    if (!liveThreat() || currentSurvivalDecision(s) !== retry) return false;
     const agent = String(s.name ?? '');
     const afterRecovery = !mayLogoff(agent);
     if (afterRecovery && !mayLogoff(agent, { afterRecovery: true })) return false;
     const why = 'recent damage below the flee line with a ranged mollusk in sight';
-    const decision = chooseSurvivalDecision(s, { strategy: 'logoff_open', reason: why,
+    const decision = retry ?? chooseSurvivalDecision(s, { strategy: 'logoff_open', reason: why,
       reason_code: 'ocean_ranged_escape', status: 'pending' });
     try {
-      return await this.fleetLogoff(why, { afterRecovery, guard: liveThreat, includeOceanRanged: true });
+      return await this.fleetLogoff(why, { afterRecovery, guard: liveThreat, includeOceanRanged: true, retry });
     } finally {
-      if (currentSurvivalDecision(s)?.id === decision.id)
+      if (!retry && currentSurvivalDecision(s)?.id === decision.id)
         finishSurvivalDecision(s, decision.id, 'refused', 'no cooperative rescue admitted before caster exit');
     }
   }
 
-  async fleetLogoff(why, { afterRecovery = false, guard = null, includeOceanRanged = false } = {}) {
+  async fleetLogoff(why, { afterRecovery = false, guard = null, includeOceanRanged = false, retry = null } = {}) {
     // A NEEDLE KEEPER DOES NOT LOG OFF FOR A DISTRACTION (live 2026-11-06: Camilla went NOT IN GAME at 23:30:44Z and
     // 23:42:08Z, "rejoin: cooperative logoff: wait for distraction", from a threat-0 archer station). Its square is one no
     // monster in reach can see; it stays in the game and the rest of the ladder decides.
@@ -160,7 +166,8 @@ export class CooperativePart {
       return s.live && s.client===client && s.movementGeneration===generation && s.world?.room?.num===room &&
         client?.combatReady===true &&
         !this.operatorSurvivalStandDown() && !s.combat?.active?.pvp &&
-        active?.id===decisionId && active?.strategy==='logoff_open' && active.status==='pending' &&
+        active?.id===decisionId && active?.status==='pending' &&
+        (active.strategy==='logoff_open' || (guard !== null && active === retry && isStalledRefugeRetry(active))) &&
         health>0 && health<this.safety().fleeAt && client.ailments?.()?.length===0 && !this.currentRecoveryWall() &&
         mayLogoff(String(s.name??''),{afterRecovery}) && (!guard || guard());
     };
