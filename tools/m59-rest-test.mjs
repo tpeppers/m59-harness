@@ -439,9 +439,9 @@ console.log('\nresting before a blink out of a stalled crossing');
   {
     const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
     const at = AP.indexOf('async restBeforeBlink(');
-    const body = AP.slice(at, at + 1400);
-    ok('restBeforeBlink asks for REST_VIGOR_CAP, not for full vigor',
-       /vigor:\s*REST_VIGOR_CAP/.test(body) && !/vigor:\s*1\b/.test(body), body.slice(0, 200));
+    const body = AP.slice(at, AP.indexOf('\n  async takeSafeSpot(', at));
+    ok('restBeforeBlink asks for the personal resting cap',
+       /vigor:\s*this\.restVigorCap\(\)/.test(body) && !/vigor:\s*1\b/.test(body), body.slice(0, 200));
     ok('and it does not hold the cast up for health',
        /health:\s*0\b/.test(body), body.slice(0, 200));
     ok('and it still aborts if the wall turns out to be one that is being hit',
