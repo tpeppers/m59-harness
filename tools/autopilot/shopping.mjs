@@ -8,8 +8,8 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 17 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
-//   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, ownSalePlan, salePlanView,
+// 18 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
+//   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, townSaleOptions, ownSalePlan, salePlanView,
 //   makeSpaceNow, postShoppingPlan,
 //   ensurePurchaseFunds, bankRun, walkingFloat, bankAboveNow, purseLeaseStatus
 import { readBankerLine } from '../m59-bank.mjs';
@@ -21,7 +21,8 @@ import { bankAboveOf, leaseCarry, walkingFloatOf } from '../m59-purse-lease.mjs'
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
-import { farmTownMenu } from '../m59-farm-town.mjs';
+import { farmTownKeep, farmTownMenu, farmTownSaleLoadout } from '../m59-farm-town.mjs';
+import { floorsFor, readReserve, reagentKey, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
 import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
 import { countsOf, overlayRequests } from '../m59-reagent-autobalance.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -170,10 +171,7 @@ export class ShoppingPart {
       // THE SAME TERMS THE COUNTER WILL SELL ON, or the trip judgement and the sale disagree. On Ko'catan that is the island
       // release and reserve (islandSaleRelease, saleLoadout); prod 2026-10-27 dropped every islander's sell trip as "pack
       // full of kept stock" while the stock it was keeping was the island reagents Zala buys. Off the island: unchanged.
-      const plan = skills.inventorySalePlan(this.s, { keep: MARKET_KEEP,
-        protect: this.islandSaleRelease ? this.islandSaleRelease(this.protectedItemNames()) : this.protectedItemNames(),
-        loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(),
-        maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
+      const plan = this.ownSalePlan();
       if (plan?.error) return null;
       const heldBack = this.heldBackIds?.() ?? new Set();
       const sold = (plan?.items ?? []).filter(i => i.state === 'sell' && i.sale_amount > 0 && !heldBack.has(Number(i.id)));
@@ -199,7 +197,26 @@ export class ShoppingPart {
    * saleRelief passes. `sale_plan` shows it and `make_space` chooses from it, so the two cannot
    * disagree about what is "planned to be sold" (tools/m59-make-space.mjs).
    */
+  townSaleOptions(town) {
+    const c = this.s?.client;
+    const who = this.s?.reserveWho;
+    const known = (c?.spells ?? []).map(sp => c.rsc?.get?.(sp.nameRsc) ?? sp.name).filter(Boolean);
+    const reserve = town.sellReserve && who ? resolveReserve(readReserve(reserveFile(who.fleet)), who) : null;
+    const floors = floorsFor(reserve, known);
+    const spellFloors = new Map(Object.keys(town.sellReserve ?? {}).map(item => [item, floors.get(reagentKey(item)) ?? 0]));
+    return {
+      keep: MARKET_KEEP,
+      protect: farmTownKeep(town, this.saleProtectedNames()),
+      loadout: farmTownSaleLoadout(town, this.saleLoadout ? this.saleLoadout() : this.loadout(), spellFloors),
+      maxWeapons: this.policy.maxWeapons,
+      weaponPriority: this.weaponPriorityNow(),
+      exclude: new Set([...(this.heldBackIds?.() ?? []), ...(this.saleExcludeIds?.() ?? [])]),
+    };
+  }
+
   ownSalePlan() {
+    const town = townTable(this.s?.world?.room?.num, this.policy).farmTown;
+    if (town) return skills.inventorySalePlan(this.s, this.townSaleOptions(town));
     return skills.inventorySalePlan(this.s, { keep: MARKET_KEEP,
       protect: this.islandSaleRelease ? this.islandSaleRelease(this.protectedItemNames()) : this.protectedItemNames(),
       loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(),
@@ -388,11 +405,14 @@ export class ShoppingPart {
       this.townTrip.purchasePlan = this.shoppingPlan();
       return this.continueTownTrip();
     }
-    const above = this.bankAboveNow();
-    if (!above) return false;                       // 0 or null turns the trips off
-    const s = this.s, c = s.need();
-    const room = s.world?.room;
-    if (!room || townTable(room.num, this.policy).BANKS.some(b => b.room === room.num)) return false;   // already there
+    const s = this.s, room = s.world?.room;
+    if (!room) return false;
+    const table = townTable(room.num, this.policy);
+    const bankingThreshold = this.bankAboveNow();
+    const marketOnly = !bankingThreshold && !!table.farmTown?.sellReserve && table.MARKET_STOPS.length > 0;
+    if ((!bankingThreshold && !marketOnly) || table.BANKS.some(b => b.room === room.num)) return false;
+    const above = bankingThreshold || Infinity;
+    const c = s.need();
     // Wait for the reply, not just the request. Reading c.inventory straight after
     // submitting reads the PREVIOUS snapshot, which is the whole family of bugs this
     // file keeps re-learning.
@@ -459,6 +479,7 @@ export class ShoppingPart {
     const poor = this.poorFarmingActive();
     const supplyShort = !poor && sellCall.sell && sellCall.trigger === 'supply';
     const packFull = sellCall.sell && sellCall.trigger !== 'supply';
+    if (marketOnly && (!packFull || !['load', 'stacks', 'unweighable'].includes(sellCall.trigger))) return false;
     // A FARM TOWN'S OWN ERRANDS (m59-farm-town.mjs): a cursed weapon to lift, or money over bank_above / loot magic weapons
     // for the guild hall. Each opens a trip to the town's counters -- sell first, as the operator ordered -- and the trip's
     // own steps do the rest ('lift the curse', 'hall deposit'). Silence (no farm town, or neither key) is null.
@@ -519,7 +540,7 @@ export class ShoppingPart {
     // hungerNeedsTown: a floor resting reaches makes an empty larder no reason to travel.
     const needsFood = hungerNeedsTown(this.wantedFightFloor(),
                                       c.vitals?.()?.vigor?.scale_max ?? VIGOR_CAP);
-    const starving = !poor && needsFood && purchaseEnabled(this.policy, 'food') &&
+    const starving = !marketOnly && !poor && needsFood && purchaseEnabled(this.policy, 'food') &&
                      !this.larder(c).length && !canCook &&
                      (spendable >= 60 || canFetch) && !triedRecently;
     // AND THE SAME QUESTION FOR REAGENTS, WHICH IS THE ONE NOBODY ASKED.

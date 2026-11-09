@@ -4117,7 +4117,7 @@ export function merchantEquipmentPlan(c, { maxWeapons = null, weaponPriority = n
 // `loadout` is this character's own list, or null. See `sellable` above for the order the
 // rules apply in and why. A caller that passes null gets the behaviour this function has
 // always had, which is what every existing caller relies on.
-export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons=null,weaponPriority=null}={}) {
+export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons=null,weaponPriority=null,exclude=null}={}) {
   const c=s.need(), equipped=equippedNow(c), worn=equipped??new Set();
   const foods=new Set(larderOf(c).map(row=>row.o.id));
   const pack=(c.inventory||[]).map(o=>({o,id:o.id,name:c.rsc.get(o.nameRsc)||'',amount:o.amount||1,equipped:worn.has(o.id)}));
@@ -4127,6 +4127,7 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
   const identity=sessionIdentity(s);let doc=null,error=null;
   if(identity)try{doc=readIntent(identity);}catch{error='inventory intent unavailable';}
   const held=[];
+  const excluded = new Set([...(exclude ?? [])].map(Number));
   const remaining = pack.map(x => ({ ...x }));
   const candidates=pack.filter(x=>x.name).map(x=>{
     const normal=sellable({name:x.name,worn:x.equipped,keepRe,loadout,armoured,pack});
@@ -4135,7 +4136,8 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
     const disposition=s.lootDisposition?.(x.o);
     const recommended=disposition ? disposition.action==='sell' : equipment.sell.has(x.id)||(!equipment.keep.has(x.id)&&normal.sell);
     let blocked=error||(!equipped?'equipment is not known':null);
-    if(itemIsProtected(x.name,protect))blocked='protected item';
+    if(excluded.has(Number(x.id)))blocked='held out of the offer by the caller';
+    else if(itemIsProtected(x.name,protect))blocked='protected item';
     else if(equipment.keep.has(x.id))blocked=equipment.keep.get(x.id);
     // A CONJURED ITEM IS NEVER OFFERED. IA_MADE makes CanBeGivenToNPC false (item.kod:1110-1126),
     // so a merchant refuses it in silence and the offer is a wasted round trip that reads like a
@@ -4180,7 +4182,7 @@ export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], mi
   await s.pacer.submit('read', () => c.requestInventory());
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
 
-  const selection=inventorySalePlan(s,{keep,protect,loadout,maxWeapons,weaponPriority});
+  const selection=inventorySalePlan(s,{keep,protect,loadout,maxWeapons,weaponPriority,exclude});
   const held=selection.held;
   // `exclude`: ids the caller holds out of every offer (a farm town's hall cargo and its cursed weapon, Autopilot
   // saleExcludeIds). Silence excludes nothing.

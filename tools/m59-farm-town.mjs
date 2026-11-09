@@ -20,6 +20,7 @@
 //     },
 //     bank: null,
 //     keep: ['elderberry', 'herbs', 'edible mushroom'],
+//     sellReserve: { mushroom: 48, 'red mushroom': 24 },
 //   }
 //
 // WHAT IT CHANGES, AND ONLY THAT (silence is the old townTable, exactly):
@@ -34,6 +35,7 @@
 //     costs a refused offer, never the item;
 //   * `keep` is never offered at these counters. It is a SALE exclusion only, not `protect`: a kept elderberry is still a
 //     spare a fleet-mate who ran dry may be handed (m59-sharing.mjs), which `protect` would forbid.
+//   * `sellReserve` makes only excess units available at those counters and enables pack-triggered sales without a banking threshold.
 //
 // WHOLE ITEM NAMES, like lootOnly and the supply tool: "loaf of bread", not "bread" (the broker's resolveItemName refuses
 // the abbreviation and says what it meant). Seller names match the NPC's own name case-blind, as a word sequence, so
@@ -43,7 +45,7 @@
 import { itemNameKey } from './m59-items.mjs';
 
 export const FARM_TOWN_KINDS = Object.freeze(['food', 'weapons', 'armor', 'reagents']);
-const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep', 'hall', 'uncurse']);
+const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep', 'sellReserve', 'hall', 'uncurse']);
 // The public door to the Barloque guild halls (the reagent coop enters the hall from here, m59-reagent-coop-runtime.mjs) and
 // Frular's room (the rent, m59-tithe.mjs FRULAR_ROOM). A farm town's `hall` road may leave the confinement for these three.
 export const NORTH_BARLOQUE = 101;
@@ -82,7 +84,7 @@ const plain = v => v !== null && typeof v === 'object' && !Array.isArray(v);
  */
 export function normalizeFarmTown(v, { resolveItem = null } = {}) {
   if (v === null || v === undefined) return null;
-  if (!plain(v)) throw new Error('town must be { name?, sell, buy, bank?, keep?, hall?, uncurse? } or null');
+  if (!plain(v)) throw new Error('town must be { name?, sell, buy, bank?, keep?, sellReserve?, hall?, uncurse? } or null');
   for (const k of Object.keys(v)) if (!TOP_KEYS.includes(k)) throw new Error(`town: unrecognised key ${k} (known: ${TOP_KEYS.join(', ')})`);
   const out = { name: null, sell: [], buy: {}, bank: null, keep: [], hall: null, uncurse: null };
   if (v.name != null) { if (typeof v.name !== 'string' || !v.name.trim()) throw new Error('town.name must be a word'); out.name = v.name.trim(); }
@@ -122,6 +124,15 @@ export function normalizeFarmTown(v, { resolveItem = null } = {}) {
       ? v.bank.name.trim() : `bank (room ${room('town.bank.room', v.bank.room)})` };
   }
   if (v.keep != null) out.keep = itemList('town.keep', v.keep, resolveItem);
+  if (v.sellReserve != null) {
+    if (!plain(v.sellReserve)) throw new Error('town.sellReserve must map whole item names to quantities');
+    const entries = Object.entries(v.sellReserve);
+    const names = itemList('town.sellReserve', entries.map(([name]) => name), resolveItem);
+    if (names.length !== entries.length) throw new Error('town.sellReserve names the same item more than once');
+    if (entries.some(([, amount]) => !Number.isSafeInteger(amount) || amount < 0))
+      throw new Error('town.sellReserve quantities must be nonnegative whole numbers');
+    out.sellReserve = Object.fromEntries(names.map((name, i) => [name, entries[i][1]]));
+  }
   // THE GUILD HALL INSTEAD OF A BANK (operator 2026-11-07: "let them deposit in the guild chest instead of banking").
   if (v.hall != null) {
     if (!plain(v.hall)) throw new Error('town.hall must be { room, magicWeapons?, weaponsTripAt? } or null');
@@ -228,6 +239,15 @@ export const isFarmTownBuyer = (town, name) => !!town?.sell?.some(s => sellerMat
 /** The farm town's `keep` list added to a sale's protect list. */
 export const farmTownKeep = (town, protect = []) =>
   town?.keep?.length ? [...new Set([...(protect ?? []), ...town.keep])] : protect;
+
+/** Sale-only minima compose with any stricter personal, trip or spell reserve. */
+export function farmTownSaleLoadout(town, loadout, spellFloors = new Map()) {
+  if (!town?.sellReserve) return loadout;
+  const base = loadout ?? { keep: [], sell: [], gear: { weapon: [], slots: {} } };
+  const minima = Object.entries(town.sellReserve).map(([item, min]) =>
+    ({ item, min: Math.max(min, spellFloors.get(item) ?? 0), match: 'exact' }));
+  return { ...base, carry: [...(base.carry ?? []), ...minima] };
+}
 
 /**
  * WHAT THE OUTFIT ERRAND (m59-outfit.mjs) MAY BUY, AND WHERE. `wants` are its slot wants `{ slot, re, fallback, what }`

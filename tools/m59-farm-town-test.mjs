@@ -16,9 +16,10 @@ import './m59-test-ledger.mjs';        // FIRST — the ledger goes to a scratch
 import { Autopilot, townTable, townDestinations, purchaseEnabled, ISLAND_TOWN, VILLAGE_TOWN, MARKET_STOPS, BANKS, FOOD_SHOPS } from './m59-autopilot.mjs';
 import { readToolSource } from './autopilot/source.mjs';
 import { normalizeFarmTown, farmTownTable, farmTownMenu, farmTownSeller, farmTownMayBuy, farmTownKeep, farmTownOutfit,
-         sellerMatches, isFarmTownBuyer } from './m59-farm-town.mjs';
+         sellerMatches, isFarmTownBuyer, farmTownSaleLoadout } from './m59-farm-town.mjs';
 import { validateStrategy } from './m59-strategy-schema.mjs';
 import { resolveItemName } from './m59-items.mjs';
+import { saleAllowance } from './m59-loadout.mjs';
 import { wantsFor } from './m59-outfit.mjs';
 
 let pass = 0, fail = 0;
@@ -122,6 +123,71 @@ console.log('\nwho a sale goes to');
   ok('and nothing is added without a farm town', farmTownKeep(null, ['wand']).join() === 'wand');
 }
 
+console.log('\nbounded sale stock');
+{
+  const limited = normalizeFarmTown({ ...MARION, keep: [...MARION.keep, 'inky-cap mushroom'],
+    sellReserve: { mushroom: 48, 'red mushroom': 24 } }, { resolveItem });
+  ok('different mushroom names keep different reserves',
+     limited.sellReserve.mushroom === 48 && limited.sellReserve['red mushroom'] === 24);
+  ok('negative and fractional sale reserves are refused',
+     throws(() => normalizeFarmTown({ ...MARION, sellReserve: { mushroom: -1 } })) &&
+     throws(() => normalizeFarmTown({ ...MARION, sellReserve: { mushroom: 1.5 } })));
+  ok('food and reagent names cannot be abbreviated or confused',
+     throws(() => normalizeFarmTown({ ...MARION, sellReserve: { edible: 2 } }, { resolveItem })));
+  const personal = { keep: [], sell: [], gear: { weapon: [], slots: {} },
+    carry: [{ item: 'mushroom', min: 0, max: 60 }] };
+  const loadout = farmTownSaleLoadout(limited, personal, new Map([['red mushroom', 30]]));
+  const pack = [{ name: 'mushroom', amount: 90 }, { name: 'red mushroom', amount: 33 },
+    { name: 'edible mushroom', amount: 100 }];
+  ok('only exact surplus is available after the higher personal or spell reserve',
+     saleAllowance(loadout, 'mushroom', pack).amount === 30 &&
+     saleAllowance(loadout, 'red mushroom', pack).amount === 3 &&
+     saleAllowance(loadout, 'edible mushroom', pack).amount === Infinity);
+  ok('there is no sale override for towns that omit the reserve', farmTownSaleLoadout(town, personal) === personal);
+
+  const k = Object.create(Autopilot.prototype);
+  const c = { inventory: [{id: 31, nameRsc: 1, amount: 40}, {id: 32, nameRsc: 1, amount: 25},
+    {id: 33, nameRsc: 2, amount: 80}, {id: 34, nameRsc: 3, amount: 1}],
+    rsc: new Map([[1, 'mushroom'], [2, 'edible mushroom'], [3, 'axe']]), using: new Set() };
+  Object.assign(k, { policy: { farmTown: limited, maxWeapons: 0 },
+    s: { name: 'fixture', client: c, world: { room: { num: 552 } }, need: () => c },
+    saleLoadout: () => null, weaponPriorityNow: () => [], saleProtectedNames: () => [],
+    heldBackIds: () => new Set([34]), saleExcludeIds: () => new Set() });
+  const rows = k.ownSalePlan().items;
+  ok('the actual keeper plan limits sales across duplicate stacks',
+     rows.filter(r => r.name === 'mushroom' && r.state === 'sell').reduce((sum, r) => sum + r.sale_amount, 0) === 17);
+  ok('the actual keeper plan holds edible mushrooms and the reserved axe',
+     rows.find(r => r.id === 33).state !== 'sell' && rows.find(r => r.id === 34).state !== 'sell');
+}
+
+console.log('\nselling without a banking threshold');
+{
+  const limited = normalizeFarmTown({ ...MARION, sellReserve: { mushroom: 48 } });
+  const c = { inventory: [], requestInventory() {}, async waitFor() {} };
+  const run = async (farmTown, trigger) => {
+    const k = Object.create(Autopilot.prototype);
+    const trip = [];
+    Object.assign(k, { policy: { farmTown, bankAbove: null, townTrips: true },
+      s: { client: c, need: () => c, pacer: { submit: async (_kind, fn) => fn() },
+        world: { room: { num: 552 }, route: room => ({ found: true, hops: [room] }) } },
+      askTownStrategy: async () => null, poorFarmingActive: () => false,
+      checkIfShouldSell: () => ({ sell: true, trigger }), farmTownErrand: () => null,
+      reagentCount: () => ({}), wantedFightFloor: () => 140,
+      bansDestination: () => false, prepareFarmDelivery: () => {},
+      farmCleanupBeforeSale: async () => {}, packWantsMarket: () => true, note: () => {},
+      shoppingPlan: () => ({}), postShoppingPlan: () => {},
+      openTownTrip: (target, options) => { trip.push({ target, options }); },
+      continueTownTrip: async () => true,
+    });
+    return { handled: await k.bankRun(), trip };
+  };
+  const market = await run(limited, 'load');
+  ok('a loaded farmer with a configured sale reserve opens Marion market with banking disabled',
+     market.handled === true && market.trip[0]?.target.room === 202 && market.trip[0]?.options.wantsMarket === true);
+  ok('the opt-in leaves bank-disabled legacy strategies and supply triggers alone',
+     (await run(town, 'load')).handled === false && (await run(limited, 'supply')).handled === false);
+}
+
 console.log('\nthe outfit errand');
 {
   const plan = farmTownOutfit(town, wantsFor(null));
@@ -186,4 +252,5 @@ console.log('\nwired in');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
+process.exitCode = fail ? 1 : 0;
 process.exit(fail ? 1 : 0);

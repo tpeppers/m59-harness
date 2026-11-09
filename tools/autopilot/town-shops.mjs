@@ -27,7 +27,7 @@ import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan } from '../m59-
 import { TICKETS_FILE, TicketBook, readDeskOpen } from '../m59-vault-broker.mjs';
 import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP as REAGENT_SHOP_MAINLAND, SPAWN_FILE, TITHE_FLEET, onIsland, purchaseEnabled, reagentTargetFor, sleep , townTable } from '../m59-autopilot.mjs';
 import { inspectDispositionQuality } from '../m59-loot-policy-runtime.mjs';
-import { curseErrandNext, farmTownKeep, farmTownSeller, hallDepositPlan, isHallBoundWeapon, sellerMatches } from '../m59-farm-town.mjs';
+import { curseErrandNext, farmTownSeller, hallDepositPlan, isHallBoundWeapon, sellerMatches } from '../m59-farm-town.mjs';
 
 export class TownShopsPart {
   // @part 1
@@ -360,7 +360,7 @@ export class TownShopsPart {
     // A FARM TOWN NAMES ITS BUYER (m59-farm-town.mjs), and that is the one exception: the stop's `seller`, which SELL_TO
     // need not list (neither Marion man is on it). Never a NEVER_SELL_TO name, and sellAll still refuses a sale with no
     // quoted price, so a named counter that pays nothing costs a refused offer, never the item.
-    const farmTown = this.policy?.farmTown ?? null;
+    const farmTown = seller ? townTable(s.world?.room?.num, this.policy).farmTown : null;
     const buyers = [...c.room.objects.values()].filter(o => affordances(o.flags).includes('buy'));
     const buyer = seller
       ? farmTownSeller({ seller }, buyers.filter(o => !skills.NEVER_SELL_TO.some(re => re.test(c.rsc.get(o.nameRsc) || ''))),
@@ -369,14 +369,15 @@ export class TownShopsPart {
     if (!buyer) return null;
     this.doing = 'trading';
     // saleLoadout: the character's own loadout, plus on Ko'catan the island-reagent ceilings (m59-island-sale.mjs).
-    const r = await skills.sellAll(s, { merchant: buyer.id, loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(), keep: MARKET_KEEP,
-                                       // A farm town's `keep` is never offered at its counters: a sale exclusion, not
-                                       // `protect`, so a kept reagent is still a spare a fleet-mate may be handed.
-                                       protect: farmTown && seller ? farmTownKeep(farmTown, this.saleProtectedNames()) : this.saleProtectedNames(),
-                                       maxWeapons: this.policy.maxWeapons,
-                                       weaponPriority: this.weaponPriorityNow(), maxStack,
-                                       // A FARM TOWN'S HALL CARGO AND CURSED WEAPON are never offered (saleExcludeIds).
-                                       exclude: this.saleExcludeIds?.() ?? null })
+    const options = farmTown ? this.townSaleOptions(farmTown) : {
+      loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(),
+      keep: MARKET_KEEP,
+      protect: this.saleProtectedNames(),
+      maxWeapons: this.policy.maxWeapons,
+      weaponPriority: this.weaponPriorityNow(),
+      exclude: this.saleExcludeIds?.() ?? null,
+    };
+    const r = await skills.sellAll(s, { ...options, merchant: buyer.id, maxStack })
                           .catch(e => ({ error: e.message }));
     if (r.error) { this.note('could not sell in town', { why: r.error }); return null; }
     if (r.sold?.length) {
