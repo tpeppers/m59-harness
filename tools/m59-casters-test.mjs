@@ -135,6 +135,17 @@ console.log('healthy Great Ocean farmers can retain proved cover from a rock thr
     bodies: [mollusk({ row: 60, col: 30 })] });
   ok('non-opted-in recovery uses the prior melee wall verdict',
     legacy.k.currentRecoveryWall()?.ok === true);
+  for (const mode of ['idle', 'survive']) {
+    const support = coastal({ hp:30, at:{ row:61, col:30 },
+      bodies:[mollusk({ row:60, col:30 })] });
+    support.k.mode = mode;
+    ok(`an opted-in ${mode} support keeper refuses recovery on the exposed wall`,
+      !support.k.currentRecoveryWall() && !support.k.sessionSpotHere());
+    const threat = support.k.s.client.room.objects.values().next().value;
+    threat.row = 40;
+    ok(`an opted-in ${mode} support keeper can use the same wall outside rock range`,
+      support.k.currentRecoveryWall()?.ok && support.k.sessionSpotHere());
+  }
   const onlyWall = (f, at, onward = null) => {
     const k = f.k, { client } = k.s;
     k.spotExclusions = () => null;

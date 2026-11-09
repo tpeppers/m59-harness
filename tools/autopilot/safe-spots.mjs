@@ -631,7 +631,8 @@ export class SafeSpotsPart {
   }
 
   oceanRangedRecoveryEnabled() {
-    return this.s.world?.room?.num === 552 && this.mode === 'farm' && this.policy?.molluskCoverRecovery === true;
+    return this.s.world?.room?.num === 552 && this.policy?.molluskCoverRecovery === true &&
+      ['farm', 'idle', 'survive'].includes(this.mode);
   }
 
   recoveryRangedCoverAt(at, scene = null) {
