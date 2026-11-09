@@ -14,6 +14,7 @@ import { closeIfHealed, staysPut } from '../m59-healing-session.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
 import { OF } from '../m59-parse.mjs';
 import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
+import { relayFarmVigor, tryFarmRelay } from '../m59-relay-farming.mjs';
 import * as skills from '../m59-skills.mjs';
 import { AILING_SHELTER_BELOW, belowRoomRetreatHealth, CONTINUE, farmVigorWorkReady, HANDLED, healAllowOf, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorOf, vigorPct } from '../m59-autopilot.mjs';
 import { roomIsNoCombat } from '../m59-hazards.mjs';
@@ -291,8 +292,13 @@ export class PassSurvivalPart {
     // and 64% of that was this. Fed by hand, a loaf was accepted at once (78 -> 97): the server
     // had room, the keeper never asked.
     //
-    // eatToFloor is inert below a floor of 81, so the rest of the fleet behaves exactly as before.
-    if (await this.eatToFloor(ctx) === 'ate') return HANDLED;
+    // A Relay farmer below their own rest ceiling saves the meal until after a
+    // safe rest. The ordinary emergency ladder still uses its own thresholds.
+    const relayProfile = relayFarmVigor(this, ctx);
+    const relayRest = relayProfile?.belowCap === true;
+    if (!relayRest) {
+      if (await this.eatToFloor(ctx) === 'ate') return HANDLED;
+    }
 
     // 3. Hurt but safe. Resting next to something hostile just feeds it — out in the
     //    open. In a proven safe spot "next to something hostile" is not a danger at
@@ -379,11 +385,14 @@ export class PassSurvivalPart {
     const rawVigor = this.s.client?.vitals?.()?.vigor?.value ?? null;
     const spent = Number.isFinite(rawVigor)
       && rawVigor < (this.policy.ordinaryVigorFloor ?? ORDINARY_VIGOR_FLOOR);
-    const hurt = (hp !== null && hp < restAt) || ((vig !== null && vig < vigorRestAt) || spent)&&!scriptedWalkDefersVigorRest(this,v)&&!farmVigorWorkReady(this,v);
+    const healthNeedsRest = hp !== null && hp < restAt;
+    const hurt = healthNeedsRest || ((vig !== null && vig < vigorRestAt) || spent)&&!scriptedWalkDefersVigorRest(this,v)&&!farmVigorWorkReady(this,v);
+    const relayVigorOnly = relayRest && hp !== null && !healthNeedsRest;
     // In a NO_COMBAT room nothing can swing, so recovery needs no wall: rest where we stand (see continueSurvivalDecision).
     const noCombatHere = roomIsNoCombat(s);
-    if(hurt && !noCombatHere && this.currentRecoveryWall()) {
-      await this.takeRecoverySpot('recovery needed while already at a safe wall');
+    if((hurt || relayRest) && !noCombatHere && this.currentRecoveryWall()) {
+      if (relayVigorOnly) this.adoptRecoveryWall();
+      else await this.takeRecoverySpot('recovery needed while already at a safe wall');
       // TAKE THE SPOT AS A SIDE EFFECT AND LET THE PASS CARRY ON — the same correction the
       // branch below already carries, in its own words: "returned as soon as takeSafeSpot()
       // succeeded, and that deadlocked characters ... the branch fired again next pass".
@@ -477,7 +486,7 @@ export class PassSurvivalPart {
     // both. The `&& this.suspendedJourney` here made the farming half unreachable, which left
     // farmers in the original bug this call was added to fix: "a character holding a wall
     // never reaches [passFarm], because this stage handles the pass and returns first."
-    if (this.hold) await this.releaseRestedHold();
+    if (this.hold && !relayRest) await this.releaseRestedHold();
     if(this.hold)await this.healObservedFleetmate().catch(e=>this.note('observed ally heal failed',{why:e.message}));
 
     // A posted room caster works from its refuge. Ordinary errands are below this
@@ -589,11 +598,15 @@ export class PassSurvivalPart {
     }
 
     const spawnsHere = !this.sanctuary();
-    if (hurt && !noCombatHere && (combatZone || spawnsHere) && !sheltered && !testing && !this.hold
+    if ((hurt || relayRest) && !noCombatHere && (combatZone || spawnsHere) && !sheltered && !testing && !this.hold
         && (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000)) {
       this.wallTriedAt = Date.now();
-      const got = await this.takeRecoverySpot(
-        'hurt in a room that spawns monsters — a wall before a rest')
+      // A voluntary vigor stop can use the same cover without the emergency
+      // reconnect that takeRecoverySpot may perform at arrival.
+      const got = await (relayVigorOnly
+        ? this.takeSafeSpot('low vigor — a wall before a rest', null,
+                            { source: 'recovery', recovery: true, nearestOnly: true })
+        : this.takeRecoverySpot('hurt in a room that spawns monsters — a wall before a rest'))
         .catch(() => false);
       if (this.travelInterrupted() || got?.cancelled) return HANDLED;
       // A WALL TAKEN HERE IS A WALL TO REST AT ON THIS PASS. `sheltered` and `testing` were read before it was taken, so
@@ -928,7 +941,12 @@ export class PassSurvivalPart {
       return HANDLED;
     }
 
-    if ((!combatZone || sheltered || testing) && hurt) {
+    const canRelayRest = noCombatHere || sheltered || testing || (!combatZone && !spawnsHere);
+    if (((!combatZone || sheltered || testing) && hurt) || (relayRest && canRelayRest)) {
+      // After a packet, reobserve before resting. A failed or unavailable cast
+      // falls straight through to rest. Probing an unproved wall stays a rest.
+      if (relayRest && (sheltered || !combatZone) && await tryFarmRelay(this, ctx, relayProfile).catch(() => false))
+        return HANDLED;
       if (testing && near.length)
         this.note('testing this spot the only way there is', {
           where: { col: this.hold.col, row: this.hold.row }, crowd: near.length,
@@ -1032,10 +1050,9 @@ export class PassSurvivalPart {
         // Always finish above the threshold that sent us here, or the next pass sends
         // us straight back and the character rests in one-second slices forever.
         health: Math.min(0.99, Math.max(0.95, restAt + 0.02)),
-        // Not 0.95. RestTimer stops awarding vigor at 80 of 200, so asking for more
-        // guarantees the full timeout is burned every single rest and reached_target
-        // is always false.
-        vigor: REST_VIGOR_CAP,
+        // Use a threshold resting can reach. The Relay mode has a confirmed
+        // personal cap, while ordinary recovery keeps its existing target.
+        vigor: relayRest ? relayProfile.cap / skills.VIGOR_MAX : REST_VIGOR_CAP,
         // A short leash while the spot is only a hypothesis: resting does not look at
         // anything, so a two-minute rest in a corner that does not work is two minutes
         // of being hit with nobody watching.
@@ -1093,7 +1110,9 @@ export class PassSurvivalPart {
       // is the trade this whole file already makes everywhere else about safe spots.
       const after = r.vitals?.health;
       const afterHp = after?.max ? after.value / after.max : null;
-      if (sheltered && r.reached_target !== true && afterHp != null && hp != null && afterHp <= hp) {
+      const afterVigor = vigorOf(r.vitals ?? {});
+      const relayRestProgress = relayRest && afterVigor != null && rawVigor != null && afterVigor > rawVigor;
+      if (sheltered && !relayRestProgress && r.reached_target !== true && afterHp != null && hp != null && afterHp <= hp) {
         this.note('rested and gained nothing — giving the square up', {
           health_before: Math.round(hp * 100) + '%', health_after: Math.round(afterHp * 100) + '%',
           seconds: r.seconds, crowd: near.length, why: r.note,

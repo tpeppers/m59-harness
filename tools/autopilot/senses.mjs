@@ -11,6 +11,7 @@
 // 16 methods: safety, threat, holdWorks, noteSpotRush, spotRushedAt, recordShelterStop, wallHere,
 //   armed, armedForSure, recovered, observe, recordRestOutcome, operatorSurvivalStandDown,
 //   releaseHold, creatureLevel, holdWorthwhile
+import { relayFarmPeerEvidence } from '../m59-relay-farming.mjs';
 import { publishCooperativePresence } from '../m59-cooperative-logoff.mjs';
 import { publishFleetHealth } from '../m59-fleet-health.mjs';
 import { OF } from '../m59-parse.mjs';
@@ -315,6 +316,13 @@ export class SensesPart {
   // retaliation and says nothing at all about the square.
   observe() {
     try { publishCooperativePresence(this); } catch(e) { this.note('cooperative presence unavailable',{why:e.message}); }
+    if (this.mode === 'farm') {
+      this.s.relayFarmEvidence ??= vitals => relayFarmPeerEvidence(this, vitals);
+      this.s.relayFarmVigorEnabled ??= () => this.mode === 'farm' && this.policy?.relayBeforeRest === true;
+    } else {
+      this.s.relayFarmEvidence = null;
+      this.s.relayFarmVigorEnabled = null;
+    }
     publishFleetHealth(this.s);
     void Promise.resolve(this.s.activeSelfHealTick?.('keeper_observe')).catch(error=>this.note?.('active self heal failed',{why:error.message}));
     const s = this.s, c = s.client, me = c?.self;

@@ -168,6 +168,8 @@ export class PassFarmPart {
       // is something to do WHILE travelling, so only a real meal is worth the pass. Nothing
       // is lost by carrying on: the too-tired branch still refuses to start a fight below
       // the floor, so this cannot send anyone into combat empty.
+      // The Relay recovery path above owns the pass while it can safely rest.
+      // If it declined because no safe rest was available, feeding still works here.
       const plan = STRATEGIES[this.policy.strategy] || STRATEGIES.baseline;
       if (await this.provision(plan, v) === 'ate') return HANDLED;
 

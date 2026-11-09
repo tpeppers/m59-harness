@@ -212,6 +212,8 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'confine.roam', keys: ['roam'], faculty: 'movement', arg: 'roam', normalize: bool('confine.roam') },
   { path: 'vigor.fightAbove', keys: ['fightAboveVigor', 'vigorFloor'], faculty: 'work', arg: 'fight_above_vigor',
     normalize: normFightAbove },
+  { path: 'vigor.relayBeforeRest', keys: ['relayBeforeRest'], faculty: 'work', arg: 'relay_optimized_farming',
+    normalize: bool('vigor.relayBeforeRest') },
   // HOW HIGH TO EAT ONCE A CLIMB HAS STARTED (provision.mjs: below the fight floor it eats, up to this). The island band,
   // 2026-10-27: fight above 100 (rest caps at 80 and nobody had food, so 150 meant no fights), eat on to 195.
   { path: 'vigor.ceiling', keys: ['vigorCeiling'], faculty: 'work', arg: 'vigor_ceiling',

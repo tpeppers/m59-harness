@@ -2443,6 +2443,8 @@ export class Autopilot {
       // floor and eats nothing -- the skill refills it at 25 and rolls to improve. Operator 2026-11-05. OFF until a farm
       // strategy asks (`secondWind`): rolled out on the Icky Cave first, widened once its kill rate is in.
       secondWindFarming: 'off',
+      // Relay-optimized farming uses free recovery before buying the rest of the vigor with food.
+      relayBeforeRest: false,
       // CHASE ON FOOT (m59-chase.mjs): rank quarry by steps on foot and walk the planner's route to a quarry round a ledge.
       // OFF until a farm strategy asks (`chaseOnFoot`), for the same staged rollout. Off is origin/main's behaviour exactly.
       chaseOnFoot: false,

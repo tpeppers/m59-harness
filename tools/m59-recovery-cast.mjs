@@ -10,6 +10,6 @@ export async function sendRecoverySpell(s,c,spell,targets,valid){
   await s.pacer.submit('stand',()=>{if(!valid())return;c.stand();stood=true;},0,{urgent:true});
  }
  if(!valid()||!standing())return{sent,stood,reason:'recovery cast posture or ownership changed'};
- await s.pacer.submit('cast',()=>{if(!valid()||!standing())return;postureAtSend={...c.lastPostureCommand};c.cast(spell.id,targets);sent=true;},1050,{urgent:true});
+ await s.pacer.submit('cast',()=>{if(!valid()||!standing())return;postureAtSend={...c.lastPostureCommand};sent=c.cast(spell.id,targets)!==false;},1050,{urgent:true});
  return{sent,stood,posture_at_send:postureAtSend,reason:sent?null:'recovery cast conditions changed before send'};
 }

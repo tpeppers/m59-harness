@@ -2768,6 +2768,8 @@ class Session {
       // working while the keeper is inside a multi-minute travel await or held inert by
       // an errand — which is where 23 of the last 50 deaths happened. See m59-hits.mjs.
       if (ev.kind === 'stat' && ev.name === 'health') { this.noteHealth(ev); if(this.client===c)publishFleetHealth(this); }
+      if (ev.kind === 'stat' && ev.name === 'vigor' && this.client === c && this.relayFarmVigorEnabled?.() &&
+          Date.now() - (this._healthPublishedAt ?? 0) >= 1500) publishFleetHealth(this);
       if(this.client===c&&c.combatReady&&(ev.kind==='stat'&&ev.name==='health'||ev.kind==='inventory'||ev.kind==='spells'))void this.activeSelfHealTick?.(ev.kind==='stat'?'health_push':ev.kind+'_ready')?.catch(error=>c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_ERROR',reason:String(error.message).slice(0,300)}));
       if (ev.kind === 'travel-cast') {
         try { recordEvent(c.me?.name ?? this.name, 'travel_cast', { spell: ev.spell }); } catch {}

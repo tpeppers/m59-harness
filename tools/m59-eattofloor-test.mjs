@@ -55,9 +55,16 @@ ok('a non-farm mode eats in passFarm before the farm block',
 // parking both returned first, so neither eatToFloor nor passFarm's provision ever ran.
 const restAt = src.indexOf('    // 3. Hurt but safe.');
 const fleeAt = src.indexOf('  async passFleeAndRest(ctx)');
-ok('the rest stage eats before its first wall or rest',
+ok('ordinary recovery eats before its first wall or rest',
    restAt > fleeAt && fleeAt > 0 &&
    src.slice(Math.max(fleeAt, restAt - 1600), restAt).includes("if (await this.eatToFloor(ctx) === 'ate') return HANDLED;"));
+const survival = src.slice(fleeAt, src.indexOf('\n  async ', fleeAt + 30));
+const relayTry = survival.indexOf('await tryFarmRelay(this, ctx, relayProfile)');
+ok('Relay recovery only defers eating for the qualifying under-cap state',
+   /if \(!relayRest\) \{\s*if \(await this\.eatToFloor\(ctx\) === 'ate'\) return HANDLED;/.test(survival));
+ok('the final safe rest tries Relay first, then targets the personal cap',
+   relayTry > survival.indexOf('const canRelayRest') &&
+   relayTry < survival.indexOf('vigor: relayRest ? relayProfile.cap / skills.VIGOR_MAX : REST_VIGOR_CAP'));
 const ladder = src.indexOf("'passFleeAndRest',"), errand = src.indexOf("'passErrand',", ladder);
 ok('and that stage runs above passErrand and passFarm in the ladder', ladder > 0 && errand > ladder &&
    src.indexOf("'passFarm',", ladder) > errand);

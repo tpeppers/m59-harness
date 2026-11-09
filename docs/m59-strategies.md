@@ -111,6 +111,7 @@ export default {
 | `confine.station` | `assignedRoom` | movement | a room number |
 | `confine.roam` | `roam` | movement | boolean |
 | `vigor.fightAbove` | `fightAboveVigor`, `vigorFloor` | work | 0..200, as `applyFightAboveVigor` |
+| `vigor.relayBeforeRest` | `relayBeforeRest` | work | Boolean, default off. Enables [Relay-optimized farming](#relay-optimized-farming) where the cohort and drops qualify. |
 | `practice` | `practiceSpells` | work | `normalizePractice`, problems refused |
 | `huntArea` | `huntArea` | work | `normHuntArea`: `{ room, squares: [[row, col], ...] }` — in that room only quarry on a listed square is chosen, and an idle farmer walks back onto the area (`m59-hunt-area-test.mjs`) |
 | `gangUp` | `gangUp` | work | `normalizeGangUp`: `{ '<creature>': { min, radius } }` (defaults `min: 2`, `radius: 4`) — a listed creature is quarry only while `min - 1` other fleet-mates stand within `radius` squares of IT; see [Gang up](#gang-up-gangup-a-creature-fought-only-two-on-one) (`m59-gang-up-test.mjs`) |
@@ -141,6 +142,19 @@ The three committed examples, each one of 2026-10-02's real orders:
 | `qor-acid-touch-trees` | Camilla (t9): acid touch through the central touch support, living trees, station 536, entroot berries protected |
 | `wand-farmer-spiders-first` | Kermit (t1): spider + living tree, spiders first, from a spider only purple mushrooms, station 537, wand + entroot berry protected |
 | `cv-skeletons` | the Castle Victoria undead: battered skeleton, skeleton, zombie; hammer then mace; confined to 39 and its bridge room 38 |
+
+### Relay-optimized farming
+
+Set `vigor: { fightAbove: 140, ceiling: 200, relayBeforeRest: true }` on a farming strategy.
+The keeper uses the mode in a room with at least two verified automated farmers, Relay
+known by the farming cohort, and edible mushrooms in the spawn loot table. It uses the
+personal resting threshold reported by the game.
+
+A farmer below that threshold can spend vigor on an eligible ally before sitting safely
+to recover it for free. The food pass follows recovery and uses the usual larder. Relay
+costs five mana and one edible mushroom and only admits recipients below 150 vigor.
+The server adds a 25% transfer bonus, so the last cast can land slightly above 150.
+An Inky-cap mushroom provides 50 vigor when there is room under the 200 cap.
 
 ### Hooks
 
