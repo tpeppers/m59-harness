@@ -632,7 +632,15 @@ export class CooperativePart {
     this.survivalInterruptedPass = this.passes;
     s.cancelMovement?.(null, 'playing dead to avoid dying', {preserveId:decisionId,origin:keeperOrigin('play_dead')});
 
-    noteLogoff(String(this.s?.name ?? ''), { why, room: this.s.world?.room?.num ?? null });   // the one this session
+    const d = currentSurvivalDecision(s), before = client.vitals?.()?.health;
+    const bodyId = client.selfId, roomId = client.room?.id;
+    const canProveRecovery = room === 552 && this.mode === 'farm' && this.oceanRangedRecoveryEnabled() &&
+      d?.id === decisionId && d.strategy === 'logoff_safe' && typeof d.epoch === 'string' &&
+      spot?.proven === true && spot.room === room && client.self?.id === bodyId &&
+      Number.isSafeInteger(bodyId) && Number.isSafeInteger(roomId) &&
+      before?.value > 0 && before.value < before.max && client.ailments?.()?.length === 0;
+    this._safeLogoffRecovery = null;
+    const session = noteLogoff(String(s.name ?? ''), { why, room }); // the one this session
     const came = await this.reconnect('logging off rather than dying');
     if (!came.ok) {
       this.note('reconnect after logoff failed', { why: came.why });
@@ -644,7 +652,9 @@ export class CooperativePart {
       const back = me && me.col === spot.col && me.row === spot.row
         && s.world?.room?.num === spot.room && this.currentRecoveryWall();
       if (back) {
-        this.hold = { ...spot, takenAt: Date.now(), quietMs: 0, reclaimed: true };
+        const returned = s.client, returnedAt = this.rejoinedAt, generation = s.movementGeneration;
+        const returnedHealth = returned.vitals?.()?.health;
+        const reclaimedHold = this.hold = { ...spot, takenAt: Date.now(), quietMs: 0, reclaimed: true };
         this.tally.mulligans = (this.tally.mulligans || 0) + 1;
 
         // TURN. NOW. THIS IS THE WHOLE REASON A SAFE SPOT IS WORTH ANYTHING.
@@ -677,6 +687,20 @@ export class CooperativePart {
         const armed = await skills.turnInPlace(this.s, { verify: false })
                                   .catch(e => ({ turned: false, why: e.message }));
         if (armed.turned) this.turnedAt = Date.now();
+        // Only this successful, stationary reconnect can supply the post-logoff low reading.
+        // The proof is process-local and cannot survive a later reconnect or keeper handoff.
+        if (armed.turned && canProveRecovery && session?.logoffs === 1 && returned !== client &&
+            s.live && s.client === returned && s.client.combatReady === true && s.client.ailments?.()?.length === 0 &&
+            returned.selfId === bodyId && returned.self?.id === bodyId && returned.room?.id === roomId &&
+            s.world?.room?.num === room && (s.lifeBoundary ?? 0) === life && s.movementGeneration === generation &&
+            this.hold === reclaimedHold && currentSurvivalDecision(s) === d &&
+            returnedHealth?.max === before.max && returnedHealth.value >= before.value &&
+            returnedHealth.value < returnedHealth.max && returnedAt > session.last_logoff_at) {
+          this._safeLogoffRecovery = {
+            decision: d, decisionId, epoch: d.epoch, client: returned, bodyId, roomId, life, generation,
+            hold: reclaimedHold, logoffAt: session.last_logoff_at, returnedAt, returnedHealth: { ...returnedHealth },
+          };
+        }
 
         this.note('back on the safe spot', {
           where: { col: spot.col, row: spot.row }, proven: spot.proven,

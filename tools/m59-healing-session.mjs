@@ -64,14 +64,27 @@ export function closeIfHealed(agent, { hp = null, max = null, dir = healingDir()
   return s;
 }
 /** Record a real recovery after the logoff, so a later emergency can request fleet assistance. */
-export function noteHealingRecovery(agent, { decision, health, dir = healingDir(), now = Date.now() } = {}) {
+export function noteHealingRecovery(agent, { decision, health, safeLogoff = null, dir = healingDir(), now = Date.now() } = {}) {
   const max = health?.max, low = decision?.min_hp;
   if (!Number.isFinite(max) || health.value !== max || decision?.hp?.max !== max ||
-      !Number.isFinite(low) || low <= 0 || low >= max || decision.strategy !== 'rest_safe' ||
+      !Number.isFinite(low) || low <= 0 || low >= max ||
       decision.status !== 'recovering' || !Number.isFinite(decision.chosen_at) || decision.chosen_at > now) return false;
   const s = readSession(agent, { dir, now });
-  if (s?.logoffs !== 1 || s.recovered_at != null || !Number.isFinite(s.last_logoff_at) ||
-      decision.chosen_at <= s.last_logoff_at) return false;
+  if (s?.logoffs !== 1 || s.recovered_at != null || !Number.isFinite(s.last_logoff_at)) return false;
+  if (decision.strategy === 'rest_safe') {
+    if (decision.chosen_at <= s.last_logoff_at) return false;
+  } else {
+    // A safe-wall logoff is chosen before its own logout. Require the caller's
+    // current-body reconnect receipt and an actual below-full reading after it.
+    const returned = safeLogoff?.returnedHealth;
+    if (decision.strategy !== 'logoff_safe' || decision.phase !== 'reconnected_turn_and_heal' ||
+        decision.room !== 552 || s.room !== decision.room || decision.damage_taken !== 0 ||
+        !(decision.hp.value > 0 && decision.hp.value < max) ||
+        typeof decision.epoch !== 'string' || safeLogoff?.epoch !== decision.epoch ||
+        safeLogoff.decisionId !== decision.id || safeLogoff.logoffAt !== s.last_logoff_at ||
+        decision.chosen_at > s.last_logoff_at || !(safeLogoff.returnedAt > s.last_logoff_at && safeLogoff.returnedAt <= now) ||
+        returned?.max !== max || !(returned.value >= low && returned.value < max)) return false;
+  }
   s.recovered_at = now;
   writeSession(agent, s, dir);
   return true;

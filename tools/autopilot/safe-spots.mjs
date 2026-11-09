@@ -433,10 +433,26 @@ export class SafeSpotsPart {
   }
 
   async continueSurvivalDecisionStep() {
-    const s=this.s,d=currentSurvivalDecision(s);
-    if (!d || d.strategy==='yield_to_controller') return false;
+    const s=this.s,d=currentSurvivalDecision(s),client=s.client;
+    const receipt=this._safeLogoffRecovery;
+    if (!d || d.strategy==='yield_to_controller') {
+      this._safeLogoffRecovery=null;
+      return false;
+    }
     observeSurvivalDecision(s);
-    const v=s.client?.vitals?.(),hp=pct(v?.health);
+    const v=client?.vitals?.(),hp=pct(v?.health);
+    const sameLogoff = receipt && d === receipt.decision && d.epoch === receipt.epoch &&
+      this.mode === 'farm' && this.oceanRangedRecoveryEnabled() && s.world?.room?.num === 552 &&
+      !this.stopping && !(this.inert && !this.inert.travelling) && !s.combat?.active?.pvp &&
+      !this.facultyHeld('survival') && !this.facultyHeld('recovery') && !this.facultyHeld('combat') &&
+      s.live && client === receipt.client && client.combatReady === true && client.room?.id === receipt.roomId &&
+      client.selfId === receipt.bodyId && client.self?.id === receipt.bodyId && !client.self.predicted &&
+      (s.lifeBoundary ?? 0) === receipt.life && s.movementGeneration === receipt.generation &&
+      this.rejoinedAt === receipt.returnedAt && this.hold === receipt.hold &&
+      client.self.row === receipt.hold.row && client.self.col === receipt.hold.col &&
+      v?.health?.max === receipt.returnedHealth.max && client.ailments?.()?.length === 0 &&
+      d.damage_taken === 0 && !(s.damagedAt > receipt.returnedAt);
+    if (receipt && !sameLogoff) this._safeLogoffRecovery=null;
     if (s.world?.room?.num===1 || hp===0) {
       this.clearSurvivalJam('death');
       finishSurvivalDecision(s,d.id,'died','entered the Underworld');return false;
@@ -444,11 +460,14 @@ export class SafeSpotsPart {
     const scriptedReady=scriptedWalkDefersVigorRest(this,v),farmReady=farmVigorWorkReady(this,v);
     if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80 || scriptedReady || farmReady) {
       const hold=this.hold, refuge=d.chosen_refuge;
-      if (d.strategy==='rest_safe' && d.status==='recovering' && hp===1 && hold?.proven===true &&
+      if ((d.strategy==='rest_safe' || sameLogoff) && d.status==='recovering' && hp===1 && hold?.proven===true &&
           hold.room===s.world?.room?.num && refuge?.room===hold.room && refuge.row===hold.row && refuge.col===hold.col &&
-          s.client?.combatReady===true && s.client.ailments?.()?.length===0 && this.currentRecoveryWall()) {
-        noteHealingRecovery(String(s.name??''),{decision:d,health:v.health});
+          client?.combatReady===true && client.ailments?.()?.length===0 && this.currentRecoveryWall()) {
+        const rearmed=noteHealingRecovery(String(s.name??''),{decision:d,health:v.health,safeLogoff:sameLogoff ? receipt : null});
+        if(rearmed && sameLogoff)this.note('verified safe-wall recovery rearmed cooperative rescue',{
+          decision_id:d.id, room:hold.room, row:hold.row, col:hold.col, health:v.health.value });
       }
+      this._safeLogoffRecovery=null;
       finishSurvivalDecision(s,d.id,'recovered',farmReady?'healthy farm ready above its effective fighting vigor floor':scriptedReady?'scripted journey health and road vigor restored':'health and resting vigor restored');return false;
     }
     // A director leases movement for its entire run, while survival/recovery remain
