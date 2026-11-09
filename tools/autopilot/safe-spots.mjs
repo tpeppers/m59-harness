@@ -475,8 +475,18 @@ export class SafeSpotsPart {
     // these protected faculties. Its initial declaration already cancels old
     // movement. Only inert/human control or an explicit protected handoff yields
     // the replacement recovery; renewing an errand must not strand it.
-    const recoveryHandedOff = () => this.stopping || (this.inert && !this.inert.travelling) ||
-      this.facultyHeld('survival') || this.facultyHeld('recovery') || this.facultyHeld('combat');
+    const recoveryHandedOff = () => {
+      const travel = this.inert, refuge = d.chosen_refuge;
+      const order = liveMoveOrder(s);
+      // The exit itself takes a travelling hold to install its route guards.
+      // Only that hold can be ignored. Explicit combat and faculty claims still win.
+      const ownExit = d.strategy === 'leave_room' && d.status === 'approaching' && refuge?.kind === 'exit' &&
+        travel?.travelling === true && travel.origin?.source === 'keeper' && travel.origin.name === 'survival_exit' &&
+        order?.kind === 'travel' && order.to === refuge.destination && travel.to === order.to &&
+        order.origin?.source === 'keeper' && order.origin.name === 'survival_exit' && order.origin.at === travel.origin.at;
+      return this.stopping || (travel && !travel.travelling) || this.facultyHeld('survival') ||
+        this.facultyHeld('recovery') || this.facultyHeld('combat', { ignoreTravelHold: ownExit ? travel : null });
+    };
     if (recoveryHandedOff()) {
       chooseSurvivalDecision(s,{strategy:'yield_to_controller',reason:'survival control explicitly handed to another controller',
         reason_code:'controller_ownership',status:'yielded'},{because:'external control takes precedence'});return false;
