@@ -122,12 +122,12 @@ const makeAp = (people, { cfg = { enabled: true } } = {}) => {
   names.set(4000, 'Me');
   people.forEach(([name, flags = P], i) => {
     names.set(4001 + i, name);
-    objs.set(90 + i, { id: 90 + i, flags, nameRsc: 4001 + i });
+    objs.set(90 + i, { id: 90 + i, flags, nameRsc: 4001 + i, row: 1, col: 2 });
   });
   const casts = [];
   let mana = 60;
   const client = {
-    selfId: 1,
+    selfId: 1, self: { row: 1, col: 1 },
     inventory: [500, 501, 502, 503, 504].map((id, i) => ({ id, nameRsc: 2000 + i, amount: 50 })),
     spells: [{ id: 11, nameRsc: 3000 }, { id: 12, nameRsc: 3001 }, { id: 13, nameRsc: 3002 }],
     abilities: new Map([[11, { ability: 20 }], [12, { ability: 20 }], [13, { ability: 20 }]]),

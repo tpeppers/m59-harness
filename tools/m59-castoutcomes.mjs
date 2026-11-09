@@ -86,6 +86,12 @@ export const CAST_OUTCOMES = Object.freeze([
           'already dedicated to Kraanan." — over a base of "You are already enchanted."',
   },
   {
+    outcome: 'not_in_view', retryable: false,
+    re: /^you can't see your selected target\.?$/i,
+    why: 'the selected target was outside the caster’s view',
+    cites: 'player.kod:246 player_attack_not_in_view, TargetWithinSightAndRange',
+  },
+  {
     outcome: 'out_of_range', retryable: false,
     re: /\b(out of range|too far away)\b/i,
     why: 'the target was out of range',

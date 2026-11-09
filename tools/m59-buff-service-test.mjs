@@ -8,6 +8,7 @@
 // somebody who was already enchanted. Guessing there wastes reagents silently.
 
 import { Autopilot } from './m59-autopilot.mjs';
+import { Session } from './m59-game.mjs';
 import { OF } from './m59-parse.mjs';
 import * as party from './m59-party.mjs';
 import { mkdtempSync } from 'node:fs';
@@ -43,12 +44,12 @@ const makeAp = ({ pack = [], spells = [], others = 1, mana = 30, ability = 20,
   const spl = spells.map(([name, id], i) => { names.set(3000 + i, name);
                                               return { id, nameRsc: 3000 + i }; });
   const objs = new Map();
-  for (let i = 0; i < others; i++) objs.set(90 + i, { id: 90 + i, flags: OF.PLAYER, nameRsc: 4000 });
+  for (let i = 0; i < others; i++) objs.set(90 + i, { id: 90 + i, flags: OF.PLAYER, nameRsc: 4000, row: 1, col: 2 });
   names.set(4000, 'Ally');
   objs.set(1, { id: 1, flags: OF.PLAYER, nameRsc: 4000 });          // us
   const abilities = new Map(spl.map(sp => [sp.id, { ability }]));
   const client = {
-    selfId: 1, inventory: inv, spells: spl, abilities,
+    selfId: 1, self: { row: 1, col: 1 }, inventory: inv, spells: spl, abilities,
     rsc: { get: r => names.get(r) ?? '' },
     room: { objects: objs },
     vitals: () => ({ mana: { value: mana } }),
@@ -263,6 +264,72 @@ console.log('\nmagic shield (Kraanan level 3): its whole duration is promised, a
   apOk.lastBuffAt = 0;
   await apOk.buffAllies();
   ok('and not cast again on the same ally inside its window', apOk.s.client.casts === 1);
+}
+
+console.log('\nally buff facing and queued packet guards');
+{
+  const fixture = ({ distant = true, paid = true } = {}) => {
+    const ap = makeAp({ pack: FULL, spells: BOTH, paid });
+    const { s } = ap, c = s.client, aim = c.room.objects.get(90), actions = [];
+    c.room.id = 552;
+    if (distant) { c.self = { row: 3, col: 6 }; aim.row = 3; }
+    s.faceToward = Session.prototype.faceToward;
+    c.face = degrees => actions.push(['turn', degrees]);
+    const cast = c.cast;
+    c.cast = (id, ids) => { actions.push(['cast', ids[0]]); return cast(id, ids); };
+    return { ap, s, c, aim, actions };
+  };
+  const distant = fixture();
+  await distant.ap.buffAllies();
+  ok('face a distant ally in place before sending the cast',
+     JSON.stringify(distant.actions) === JSON.stringify([['turn', 180], ['cast', 90]]) &&
+     distant.ap.receipts[0]?.ok === true);
+  const close = fixture({ distant: false });
+  await close.ap.buffAllies();
+  ok('an adjacent ally needs no turn packet',
+     JSON.stringify(close.actions) === JSON.stringify([['cast', 90]]));
+
+  const leftBeforeTurn = fixture();
+  leftBeforeTurn.s.pacer.submit = async (kind, send) => {
+    if (kind === 'turn') leftBeforeTurn.c.room.objects.delete(90);
+    return send();
+  };
+  await leftBeforeTurn.ap.buffAllies();
+  ok('a departing ally cancels the queued turn and cast',
+     leftBeforeTurn.actions.length === 0 && leftBeforeTurn.ap.receipts.length === 0);
+
+  const movedBeforeCast = fixture();
+  movedBeforeCast.s.pacer.submit = async (kind, send) => {
+    if (kind === 'cast') movedBeforeCast.aim.row++;
+    return send();
+  };
+  await movedBeforeCast.ap.buffAllies();
+  ok('a changed bearing cancels the cast at its packet boundary',
+     movedBeforeCast.actions.length === 1 && movedBeforeCast.ap.receipts.length === 0);
+
+  const reused = fixture();
+  reused.c.face = () => { reused.aim.nameRsc++; };
+  await reused.ap.buffAllies();
+  ok('an object ID reused after facing is no longer the intended ally', reused.c.casts === 0);
+
+  const held = fixture();
+  held.s.pacer.holdStatus = () => ({ active: held.actions.length > 0 });
+  await held.ap.buffAllies();
+  ok('a concentration hold that opens after facing suppresses the cast',
+     held.actions.length === 1 && held.c.casts === 0);
+  const travelling = fixture();
+  travelling.s.moveOrder = { kind: 'travel', to: 202 };
+  await travelling.ap.buffAllies();
+  ok('an active movement order receives no buff turn or cast', travelling.actions.length === 0);
+
+  const refused = fixture({ paid: false });
+  refused.c.waitFor = async ({ match }) => {
+    const message = { kind: 'message', text: "You can't see your selected target." };
+    return { events: match(message) ? [message] : [] };
+  };
+  await refused.ap.buffAllies();
+  ok('the server facing refusal is classified without waiting for reagent payment',
+     refused.ap.receipts[0]?.outcome === 'not_in_view' && refused.ap.receipts[0].ok === false);
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -13,6 +13,7 @@
 import { allyVerdict } from '../m59-ally.mjs';
 import { classifyCast } from '../m59-castoutcomes.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
+import { liveMoveOrder } from '../m59-move-origin.mjs';
 import { castsAbove, folRoomsOf } from '../m59-chalice.mjs';
 import { buyHereWants, choosePractice, deskReserve, isReagent, normalizePractice, offeredServices, pickCreatureTarget, touchedCreatures } from '../m59-deskpractice.mjs';
 import { OF, affordances, buyLines } from '../m59-parse.mjs';
@@ -460,6 +461,13 @@ export class DeskPracticePart {
     const s = this.s, c = s.need();
     const gap = Number(cfg.gap_ms) > 0 ? Number(cfg.gap_ms) : 20_000;
     if (this.lastBuffAt && Date.now() - this.lastBuffAt < gap) return;
+    const roomId = c.room.id, life = s.lifeBoundary, movement = s.movementGeneration;
+    const available = () => s.client === c && c.room.id === roomId && s.lifeBoundary === life &&
+      s.movementGeneration === movement && !this.inert && !this.suspendedJourney &&
+      !s.job?.busy && !s.combat?.active && !liveMoveOrder(s) &&
+      !this.busyStatus() && !this.facultyHeld('work') && !this.facultyHeld('movement') &&
+      !s.pacer.holdStatus?.()?.active;
+    if (!available()) return;
 
     // ONE OF OURS, NOT MERELY ANOTHER PLAYER. Raw room objects carry flags, not the
     // snapshot's derived booleans — the same note medic() makes, and for the same reason.
@@ -547,17 +555,52 @@ export class DeskPracticePart {
     if (!next) return;
 
     const { target, key, buff, spell, holdMs } = next;
-    const before = buff.reagents.map(([name, cost]) => ({ name, cost, count: have(name) }));
+    const { id, nameRsc, flags } = target;
+    const readyTarget = () => {
+      const live = c.room.objects.get(id);
+      return available() && live?.id === id && live.nameRsc === nameRsc && live.flags === flags ? live : null;
+    };
+    let before, since;
     const paid = () => before.every(({ name, cost, count }) => count - have(name) >= cost);
-    const since = c.evSeq;
     this.lastBuffAt = now;
     this._buffedAt.set(key, { at: now, retryAt: now + gap });
-    const submitted = await withCastRite(s, { spell, targets: [target.id], why: 'buffAllies' }, () =>
-      s.pacer.submit('cast', () => c.cast(spell.id, [target.id]), 1050));
-    if (submitted === false || submitted?.held) {
+    const submitted = await withCastRite(s, { spell, targets: [id], why: 'buffAllies' }, async () => {
+      const live = readyTarget(), me = c.self;
+      const fromRow = me?.row, fromCol = me?.col, toRow = live?.row, toCol = live?.col;
+      const changed = { withheld: true };
+      if (![fromRow, fromCol, toRow, toCol].every(Number.isInteger)) return changed;
+      const sameAim = () => {
+        const current = readyTarget();
+        return current?.row === toRow && current.col === toCol && c.self?.row === fromRow && c.self.col === fromCol;
+      };
+      // KOD checks the forward half-plane for single-target spells beyond one square.
+      // Face in place after the gear rite, then recheck both endpoints at the packet.
+      if ((toRow - fromRow) ** 2 + (toCol - fromCol) ** 2 > 1) {
+        const obsoleteTurn = new Error('ally buff aim changed before turning');
+        let turned = false;
+        try {
+          await s.faceToward(live, { beforePacket: () => {
+            if (!sameAim()) throw obsoleteTurn;
+            turned = true;
+          } });
+        } catch (error) {
+          if (error !== obsoleteTurn) throw error;
+        }
+        if (!turned) return changed;
+      }
+      if (!sameAim()) return changed;
+      return s.pacer.submit('cast', () => {
+        if (!sameAim()) return changed;
+        before = buff.reagents.map(([name, cost]) => ({ name, cost, count: have(name) }));
+        since = c.evSeq;
+        return c.cast(spell.id, [id]);
+      }, 1050);
+    });
+    if (submitted === false || submitted?.held || submitted?.withheld) {
       const veto = s.lastReserveVeto;
       if (veto?.spell === buff.name && veto.at >= now) declineReserve(buff.name);
-      else this.declinedCast(buff.name, submitted?.held ? 'concentration hold' : 'cast packet withheld');
+      else this.declinedCast(buff.name, submitted?.held ? 'concentration hold'
+        : submitted?.withheld ? 'ally buff position or authority changed' : 'cast packet withheld');
       return;
     }
     const ev = await c.waitFor({ since, kinds: ['message', 'stat', 'changed', 'left', 'inventory'], timeoutMs: 3000,
@@ -567,7 +610,7 @@ export class DeskPracticePart {
     const outcome = classifyCast(said);
     if (outcome || !paid()) {
       this.recordCast(buff.name, { ok: false, target: c.rsc.get(target.nameRsc),
-        why: outcome?.why ?? 'no complete reagent payment observed', said: said.slice(0, 2) });
+        why: outcome?.why ?? 'no complete reagent payment observed', outcome: outcome?.outcome });
       return;
     }
 
