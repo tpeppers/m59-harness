@@ -905,14 +905,14 @@ export class TownShopsPart {
    * Does a farm town errand open a trip by itself? { trigger: 'curse' | 'hall', why } or null. Each is bounded by a
    * cooldown, because a trip that cannot fix what opened it must not open again on the next pass.
    */
-  farmTownErrand(carried = this.purseNow(), above = this.bankAboveNow(), now = Date.now()) {
+  farmTownErrand(carried = this.purseNow(), above = this.bankAboveNow(), now = Date.now(), { allowHall = true } = {}) {
     const town = this.policy?.farmTown;
     if (!town) return null;
     if (town.uncurse && now - (this._curseTripAt ?? 0) > 15 * 60_000 && now >= (this._curseStuckUntil ?? 0)) {
       const cursed = this.cursedWeaponCarried();
       if (cursed) return { trigger: 'curse', why: `${cursed.name} is cursed${cursed.wielded ? ' and in hand' : ''}: sell, then lift it in ${town.name ?? 'town'}` };
     }
-    if (town.hall && now - (this._hallTripAt ?? 0) > 30 * 60_000) {
+    if (allowHall && town.hall && now - (this._hallTripAt ?? 0) > 30 * 60_000) {
       const plan = hallDepositPlan(town, { purse: carried, keep: this.walkingFloat(), bankAbove: above,
         weapons: this.hallBoundWeaponIds().length });
       if (plan.go) return { trigger: 'hall', why: plan.why };

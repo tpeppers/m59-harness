@@ -162,16 +162,21 @@ console.log('\nbounded sale stock');
 
 console.log('\nselling without a banking threshold');
 {
-  const limited = normalizeFarmTown({ ...MARION, sellReserve: { mushroom: 48 } });
-  const c = { inventory: [], requestInventory() {}, async waitFor() {} };
-  const run = async (farmTown, trigger) => {
+  const limited = normalizeFarmTown({ ...MARION, sellReserve: { mushroom: 48 },
+    uncurse: { seller: 'Lady Aftyn', room: 205, item: 'remove curse potion' },
+    hall: { room: 714, magicWeapons: true, weaponsTripAt: 3 } });
+  const run = async (farmTown, trigger, { curse = false, hallCargo = 0 } = {}) => {
+    const c = { inventory: curse ? [{ id:15687, nameRsc:12, rarity:100 }] : [],
+      rsc: new Map([[12, 'mace']]), requestInventory() {}, async waitFor() {} };
     const k = Object.create(Autopilot.prototype);
     const trip = [];
     Object.assign(k, { policy: { farmTown, bankAbove: null, townTrips: true },
       s: { client: c, need: () => c, pacer: { submit: async (_kind, fn) => fn() },
         world: { room: { num: 552 }, route: room => ({ found: true, hops: [room] }) } },
       askTownStrategy: async () => null, poorFarmingActive: () => false,
-      checkIfShouldSell: () => ({ sell: true, trigger }), farmTownErrand: () => null,
+      checkIfShouldSell: () => ({ sell: !!trigger, trigger }),
+      _curseSuspect: curse ? { id:15687, certain:true } : null,
+      hallBoundWeaponIds: () => Array(hallCargo).fill(1),
       reagentCount: () => ({}), wantedFightFloor: () => 140,
       bansDestination: () => false, prepareFarmDelivery: () => {},
       farmCleanupBeforeSale: async () => {}, packWantsMarket: () => true, note: () => {},
@@ -186,6 +191,16 @@ console.log('\nselling without a banking threshold');
      market.handled === true && market.trip[0]?.target.room === 202 && market.trip[0]?.options.wantsMarket === true);
   ok('the opt-in leaves bank-disabled legacy strategies and supply triggers alone',
      (await run(town, 'load')).handled === false && (await run(limited, 'supply')).handled === false);
+  const curse = await run(limited, null, { curse:true });
+  ok('a server-confirmed curse opens a Marion market trip with no load or banking trigger',
+     curse.handled === true && curse.trip[0]?.target.room === 202 &&
+     curse.trip[0]?.options.sellCall.trigger === 'curse' && curse.trip[0]?.options.wantsMarket === true);
+  const curseWithShortage = await run(limited, 'supply', { curse:true });
+  ok('a concurrent supply shortage cannot redirect the market-only curse trip',
+     curseWithShortage.trip[0]?.options.sellCall.trigger === 'curse' &&
+     !curseWithShortage.trip[0]?.options.supplyTrip && !curseWithShortage.trip[0]?.options.needsCashFirst);
+  ok('hall cargo alone cannot open a market-only trip',
+     (await run(limited, null, { hallCargo:3 })).handled === false);
 }
 
 console.log('\nthe outfit errand');

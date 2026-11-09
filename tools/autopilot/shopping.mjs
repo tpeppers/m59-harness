@@ -477,13 +477,15 @@ export class ShoppingPart {
     // not poor, it is ILLIQUID, and `needsCashFirst` is the door that was built for
     // exactly that and never wired to this trigger.
     const poor = this.poorFarmingActive();
-    const supplyShort = !poor && sellCall.sell && sellCall.trigger === 'supply';
+    const supplyShort = !marketOnly && !poor && sellCall.sell && sellCall.trigger === 'supply';
     const packFull = sellCall.sell && sellCall.trigger !== 'supply';
-    if (marketOnly && (!packFull || !['load', 'stacks', 'unweighable'].includes(sellCall.trigger))) return false;
+    const marketLoad = packFull && ['load', 'stacks', 'unweighable'].includes(sellCall.trigger);
     // A FARM TOWN'S OWN ERRANDS (m59-farm-town.mjs): a cursed weapon to lift, or money over bank_above / loot magic weapons
     // for the guild hall. Each opens a trip to the town's counters -- sell first, as the operator ordered -- and the trip's
     // own steps do the rest ('lift the curse', 'hall deposit'). Silence (no farm town, or neither key) is null.
-    const farmErrand = this.farmTownErrand?.(carried, above) ?? null;
+    const farmErrand = this.farmTownErrand?.(carried, above, Date.now(),
+      { allowHall: !marketOnly || marketLoad }) ?? null;
+    if (marketOnly && !marketLoad && farmErrand?.trigger !== 'curse') return false;
 
     // AND AN EMPTY LARDER IS THE THIRD REASON, FOR EXACTLY THE REASON THE PACK WAS THE
     // SECOND: the food is in town and the only doors to town were money and a full pack.
