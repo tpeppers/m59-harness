@@ -5047,6 +5047,11 @@ class Session {
           cancelled = { at_swing: i };
           return;
         }
+        // Turning and queuing can outlive the previous health check.
+        if (abortBelow != null) {
+          const hp = healthPct();
+          if (hp != null && hp < abortBelow) { aborted = { at_health: hp, swing: i }; return; }
+        }
         if (!c.room.objects.has(targetId)) return;
         sent = true;
         if(observer){observer.after=c.evSeq;observer.armed=true;}
@@ -5081,8 +5086,10 @@ class Session {
     }
     // Health after the exchange, since deciding whether to keep fighting depends on
     // it and the stat only arrives when it changes.
-    await this.pacer.submit('read', () => c.stats(1));
-    await c.waitFor({ kinds: ['stat'], timeoutMs: 1500 });
+    if (!aborted) {
+      await this.pacer.submit('read', () => c.stats(1));
+      await c.waitFor({ kinds: ['stat'], timeoutMs: 1500 });
+    }
     // The trailing sweep. `said` is still excluded by `keep` — another player quoting hit
     // prose must never become evidence — and ordering by seq puts the resistance band back
     // immediately after the blow it describes, which is how a reader tells them apart.

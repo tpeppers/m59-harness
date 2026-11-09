@@ -991,12 +991,15 @@ export class PassCombatPart {
     }
     const holding = !!this.hold;
     this.doing = 'fighting';
+    const fightBack = { cornered, ordinary: !roadHunt && due.reason !== 'blocked' };
+    this.activeFightBack = fightBack;
     const f = await this.fightNow({
       target: pick.name, preferId: pick.o.id, exactTargetId: pick.o.id,
       rounds: cornered ? 1 : (this.policy.fightRounds ?? 10), disengageAt: cornered ? 0 : fleeAt, loot: true,
       holdPosition: holding || cornered, reach: REACH, weaponPriority: this.weaponPriorityNow(),
       bannedWeapons: this.bannedWeaponsNow(),
-    }).catch(e => ({ fought: false, killed: false, died: false, note: e.message }));
+    }).catch(e => ({ fought: false, killed: false, died: false, note: e.message }))
+      .finally(() => { if (this.activeFightBack === fightBack) this.activeFightBack = null; });
     // The clock restarts either way: ten more seconds of being hit re-arms it.
     if (w) w.attack = null;
 

@@ -3348,8 +3348,11 @@ async function fightWithIntent(s, {
     }
   }
 
-  await s.pacer.submit('read', () => c.stats(1));
-  await c.waitFor({ kinds: ['stat'], timeoutMs: 2000 });
+  // A mid-round abort already has the health push that demands recovery.
+  if (!disengaged?.mid_round) {
+    await s.pacer.submit('read', () => c.stats(1));
+    await c.waitFor({ kinds: ['stat'], timeoutMs: 2000 });
+  }
   const after = c.vitals();
   const landed = landedHitSummary(combatLines, foeName);
 

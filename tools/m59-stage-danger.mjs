@@ -15,7 +15,14 @@ export function watchFarmDanger(ap,stage,token,onDanger,{intervalMs=100}={}) {
   if(continuingProvenRefugeLeg(s))return;
   const lost=Number.isFinite(previous)&&h?.value<previous; previous=h?.value;
   if(!(h?.value>0&&h.max>0&&h.value/h.max<ap.safety().fleeAt&&(lost||ap.mortalDanger?.())))return;
-  if(retaliation&&!ap.deferOceanRangedRetaliation?.(h))return;
+  if(retaliation){
+   const active=ap.activeFightBack;
+   if(active?.cornered||ap.operatorSurvivalStandDown?.())return;
+   // A proved rock line can hand a travelling body to shelter as before. An
+   // exposed ordinary retaliation must also yield to observed melee damage.
+   if(!ap.deferOceanRangedRetaliation?.(h)&&
+      (!active?.ordinary||ap.currentRecoveryWall?.()))return;
+  }
   token.cancelled=true;clearInterval(timer);
   if(ap.farmCombat?.pending)ap.farmCombat={...ap.farmCombat,pending:false,interrupted_at:Date.now(),reason:"survival preemption"};
   const why=retaliation?'Ocean retaliation yielded to survival':stage==='passCooperative'?'cooperative distraction yielded to survival':'farm action yielded to survival';

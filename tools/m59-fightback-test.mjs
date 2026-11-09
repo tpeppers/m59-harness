@@ -22,7 +22,10 @@
 //
 // Drives the REAL prototype methods with a fake `this`, the way m59-passorder-test does.
 import './m59-test-ledger.mjs';        // FIRST — the ledger goes to a scratch file
-import { Autopilot, PASS_STAGES, HANDLED, CONTINUE } from './m59-autopilot.mjs';
+import assert from 'node:assert/strict';
+import { Autopilot, PASS_STAGES, HANDLED, CONTINUE, STAGE_OVERRAN } from './m59-autopilot.mjs';
+import { bodyAuthority } from './m59-body-command.mjs';
+import { Session } from './m59-game.mjs';
 import { CHECKED_MAP_FILE, loadMap } from './m59-map.mjs';
 import { OF } from './m59-parse.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
@@ -318,11 +321,83 @@ console.log('\nGreat Ocean retaliation during ranged exposure');
 
   const covered = coastal({ doing: 'fighting', far: { ...distant, col: 65 } });
   const coveredToken = { cancelled: false };
+  covered.k.activeFightBack = { cornered: false, ordinary: true };
+  covered.k.currentRecoveryWall = () => ({ ok: true, room: 552, row: 45, col: 55 });
   const stopCovered = watchFarmDanger(covered.k, 'passFightBack', coveredToken, () => {}, { intervalMs: 4 });
   covered.setHealth(51);
   await new Promise(resolve => setTimeout(resolve, 24));
   stopCovered();
   ok('retaliation from observed ranged cover keeps its existing fence', !coveredToken.cancelled && !covered.k.wantsForwardShelter);
+
+  const piggy = coastal({ doing: null, far: null });
+  piggy.k.currentRecoveryWall = () => null;
+  let started, release, sent = false;
+  const inFight = new Promise(resolve => { started = resolve; });
+  const finishFight = new Promise(resolve => { release = resolve; });
+  piggy.k.fightNow = async () => {
+    started();
+    await finishFight;
+    bodyAuthority(piggy.s).guard();
+    sent = true;
+    return { rounds: 1 };
+  };
+  const retaliation = piggy.k.runStageBounded('passFightBack', {
+    ...ctxFor(piggy.k, 89 / 121), room, v: { health: hp(89, 121) },
+  });
+  await inFight;
+  const invocation = piggy.k.stageInFlight.get('passFightBack');
+  assert.deepEqual(piggy.k.activeFightBack, { cornered: false, ordinary: true });
+  piggy.setHealth(35);
+  assert.equal(await retaliation, STAGE_OVERRAN);
+  release();
+  await invocation;
+  ok('Piggy-style owned exposed melee retaliation yields below the flee line and fences its late packet',
+    !sent && piggy.k.cancels.length === 1 && piggy.k.activeFightBack == null);
+
+  for (const [label, active, opts] of [
+    ['the last cornered swing', { cornered: true, ordinary: true }, {}],
+    ['a road or blocked-path fight', { cornered: false, ordinary: false }, { far: null }],
+    ['an externally owned body', { cornered: false, ordinary: true }, { far: null, external: true }],
+    ['active PvP', { cornered: false, ordinary: true }, { far: null, pvp: true }],
+  ]) {
+    const { k, s, setHealth } = coastal({ doing: 'fighting', ...opts });
+    k.activeFightBack = active;
+    k.currentRecoveryWall = () => null;
+    if (opts.external) k.operatorSurvivalStandDown = () => true;
+    if (opts.pvp) s.combat = { active: { pvp: true } };
+    const testToken = { cancelled: false };
+    const stop = watchFarmDanger(k, 'passFightBack', testToken, () => {}, { intervalMs: 4 });
+    setHealth(35);
+    await new Promise(resolve => setTimeout(resolve, 24));
+    stop();
+    ok(`${label} keeps its existing combat authority`, !testToken.cancelled && !k.cancels.length);
+  }
+}
+
+{
+  const s = new Session('piggy-paced-fight-fixture');
+  const health = hp(67, 122);
+  let swings = 0, trailingReads = 0;
+  const c = { state: 'game', evSeq: 0, selfId: 1,
+    room: { id: 1416, objects: new Map([[1, { id: 1 }], [40, { id: 40 }]]) },
+    vitals: () => ({ health }), attack: () => { swings++; },
+    stats: () => { trailingReads++; }, waitFor: async () => ({ events: [] }) };
+  Object.assign(s, { client: c, faceToward: async () => {}, healingWandTick: async () => {} });
+  s.pacer.minGapMs = 0;
+  let unblock, entered;
+  const pacerEntered = new Promise(resolve => { entered = resolve; });
+  const pacerGate = new Promise(resolve => { unblock = resolve; });
+  const blocker = s.pacer.submit('read', async () => { entered(); await pacerGate; });
+  await pacerEntered;
+  const exchange = s.attackRounds(40, 4, { abortBelow: 60 / 122 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(s.pacer.q[0]?.kind, 'attack', 'native attack is queued while still above the flee line');
+  health.value = 35;
+  unblock();
+  await blocker;
+  const result = await exchange;
+  ok('actual Session and Pacer recheck pushed health before sending a queued swing and return without a stale stat wait',
+    swings === 0 && trailingReads === 0 && result.aborted?.at_health === 35 / 122 && result.aborted?.swing === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
