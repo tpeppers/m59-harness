@@ -250,6 +250,63 @@ console.log('\nthe keeper, on the real prototype');
   ok('and the note says why', f.notes.some(n => /no bank/.test(n.what)));
 }
 
+console.log('\nmarket cooldown when purchases defer');
+{
+  function marketTrip(purse) {
+    const calls = [];
+    const client = {
+      inventory: [{ id: 1, nameRsc: 1, amount: 350 }, { id: 2, nameRsc: 2, amount: 1 },
+        { id: 3, nameRsc: 3, amount: purse }],
+      rsc: new Map([[1, 'blue mushroom'], [2, 'long sword'], [3, 'shilling']]),
+      stat: name => name === 'might' ? 15 : null,
+      evSeq: 0, requestInventory: () => {}, waitFor: async () => ({ events: [] }),
+    };
+    const world = { room: { num: 202 } };
+    const trip = { target: { room: 202 }, purpose: 'sell', trigger: 'load', nextService: 1, marketStops: town.sell };
+    const k = Object.create(Autopilot.prototype);
+    Object.assign(k, {
+      policy: { farmTown: town, maxCarry: 100 }, townTrip: trip,
+      s: { world, client, need: () => client, bankKnown: () => null, pacer: { submit: async (_kind, fn) => fn() } },
+      travelInterrupted: () => false, note: () => {}, standingOrderUnstarted: () => null,
+      overfarmHoldsTrip: () => null, supplyShortfall: () => ({ short: false }),
+      ownSalePlan: () => ({ items: [{ id: 2, name: 'long sword', amount: 1, sale_amount: 1, state: 'sell' }] }),
+      minSellTripValue: () => 0,
+      travel: async room => { calls.push(`walk ${room}`); world.room.num = room; return { arrived: true }; },
+      sellInTown: async ({ seller }) => { calls.push(`sell ${seller}`); return { sold: [], total_received: 0 }; },
+      shoppingPlan: () => ({ lines: [{ item: 'loaf of bread', amount: 1, cost: 60 }],
+        unpriced: [], required_purse: 60, expected_cost: 60, reserve: 0 }),
+      farmTownCurseErrand: async () => {}, guildTitheFromSale: async () => {}, farmTownHallVisit: async () => {},
+      bankSurplus: async () => {}, fundStandingOrder: async () => {},
+      restockInTown: async () => { calls.push('restock'); },
+      buyFoodInTown: async () => { calls.push('buy food'); },
+      buyReagentsInTown: async () => { calls.push('buy reagents'); },
+      chaliceTownCargo: async () => {}, chaliceBuyCargo: async () => {}, buyFarmDeliveryCargo: async () => {},
+      gatherTownFavors: async () => {}, vaultRunIfPassing: async () => {}, kocatanGateClear: async () => {},
+      progress: () => { calls.push('finished'); },
+    });
+    return { k, trip, calls };
+  }
+
+  const poor = marketTrip(20);
+  ok('the same pack would open a new load sale before visiting the counters',
+     poor.k.checkIfShouldSell().trigger === 'load');
+  const deferred = await poor.k.continueTownTrip();
+  ok('an empty circuit defers only at no-bank purchase funding, after both normal counters',
+     deferred === false && poor.k.townTrip === null && poor.k.deferredShoppingTrip === poor.trip &&
+     poor.trip.nextService === 7 && poor.calls.join('|') === 'sell Morrigan|walk 201|sell Colhorr');
+  ok('the completed market respects the existing cooldown while purchases are deferred',
+     Number.isFinite(poor.k.lastMarketServiceAt) && poor.k.lastTownServiceAt == null &&
+     poor.k.checkIfShouldSell().sell === false);
+
+  const funded = marketTrip(100);
+  const completed = await funded.k.continueTownTrip();
+  ok('a funded circuit still buys and completes in the usual order',
+     completed === true && funded.k.townTrip === null && !funded.k.deferredShoppingTrip &&
+     funded.calls.join('|') === 'sell Morrigan|walk 201|sell Colhorr|restock|buy food|buy reagents|finished');
+  ok('normal completion still starts the market cooldown from the full service stamp',
+     Number.isFinite(funded.k.lastTownServiceAt) && funded.k.lastMarketServiceAt === funded.k.lastTownServiceAt);
+}
+
 console.log('\nwired in');
 {
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
