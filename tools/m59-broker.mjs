@@ -18671,6 +18671,7 @@ const TOOLS = [
       let geo = s.world?.geometry;
       let room = s.world?.room;
       let me = s.world?.self ?? null;
+      let reportedSpot = null;
       let mustReach = a.reachable_only && typeof s.world?.reach === 'function'
         ? ((col, row) => s.world.reach(col, row)) : null;
       let geometrySource = geo ? 'the live session' : null;
@@ -18705,24 +18706,29 @@ const TOOLS = [
         try { geo = safeSpotGeometryFor(mapRoom); } catch { geo = null; }
         if (!geo) return { spots: [], note: `no geometry could be built for room ${roomNum}` };
         room = { num: mapRoom.num, name: mapRoom.name };
-        me = Number.isFinite(render?.you?.col) && Number.isFinite(render?.you?.row)
-          ? { col: render.you.col, row: render.you.row } : null;
+        me = render?.stale_render ? null : render?.you ?? null;
+        reportedSpot = render?.autopilot_status?.safe_spot;
         geometrySource = 'the world map .roo — this character is driven by a keeper process';
         if (a.reachable_only) {
           mustReach = null;
           reachNote = 'reachable_only was NOT applied: pathing from this character belongs to ' +
             'the keeper process that owns its position, so every geometric spot is listed';
         }
-      }
+      } else reportedSpot = autopilotIfAny(a.agent)?.status?.().safe_spot;
 
       const spots = safeSpots(geo, {
         limit: num(a.limit, 8),
         mustReach,
       });
-      const pilot = autopilotIfAny(a.agent);
+      // A keeper without a hold reports false. Use the current square's geometry
+      // in that case, and retain a measured failure for a hold at that square.
+      const standing = me && !me.predicted && Number.isInteger(me.row) && Number.isInteger(me.col)
+        ? { col: me.col, row: me.row } : null;
+      const matches = standing && reportedSpot?.at?.row === standing.row
+        && reportedSpot?.at?.col === standing.col && typeof reportedSpot.works === 'boolean';
       return {
         room: room ? { num: room.num, name: room.name } : null,
-        standing_at: me ? { col: me.col, row: me.row } : null,
+        standing_at: standing,
         // The question worth asking first, and the one the keeper answers from
         // evidence rather than from the grid.
         // ASKED THE SAME WAY THE KEEPER ASKS IT, WHICH IT WAS NOT. This read alone still
@@ -18746,10 +18752,9 @@ const TOOLS = [
         // The book is retired (see m59-safewall.mjs for the 89%-inverted failure column).
         // `standingVerdict` returns the same `{ at, works, evidence }` shape so every caller
         // keeps working while the SOURCE changes from a tally to a measurement.
-        in_a_safe_spot_now: pilot?.status?.().safe_spot ??
-          (geo && me ? standingVerdict(geo, { row: me.row, col: me.col }) : false),
+        in_a_safe_spot_now: matches ? reportedSpot : standingVerdict(geo, standing),
         spots: spots.map(x => ({ ...x,
-          distance: me ? Math.max(Math.abs(x.col - me.col), Math.abs(x.row - me.row)) : null,
+          distance: standing ? Math.max(Math.abs(x.col - standing.col), Math.abs(x.row - standing.row)) : null,
           // `tested` IS GONE, AND ITS ABSENCE IS THE FIX. It reported a square's standing in
           // the book — 'holds' / 'does not work' / 'untested' — and every consumer used it to
           // rank or to filter, which is how a retired book kept steering the fleet. The

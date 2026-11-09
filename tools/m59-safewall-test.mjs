@@ -32,10 +32,12 @@
 // recorded held wall came back longer, worst +9 steps — 4.5 points against a proof bonus
 // of 20. The last section here is the guard against that returning.
 import { readFileSync, existsSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { safeSpots, safeWalls, exposureAt, lineOfSight, nearestSafeSpot, geometryFor, MAX_ATTACKERS }
   from './m59-safespots.mjs';
 import { RoomGeometry } from './m59-roo.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
+import { standingVerdict } from './m59-safewall.mjs';
 
 let pass = 0, fail = 0, skipped = 0;
 const ok = (what, cond, detail) => {
@@ -46,12 +48,13 @@ const skip = (what, why) => { skipped++; console.log(`  --   ${what} — ${why}`
 
 const mapFile = new URL('../substrate/m59-map.json', import.meta.url);
 const bookFile = new URL('../substrate/m59-safespots.json', import.meta.url);
+const map = existsSync(mapFile) ? JSON.parse(readFileSync(mapFile, 'utf8')) : null;
+if (map) await testBrokerSafeSpotReport(map);
 if (!existsSync(mapFile) || !existsSync(bookFile)) {
-  skip('everything', 'no baked map or no safe-spot book on this machine');
+  skip('historical safe-wall comparisons', 'no baked map or no safe-spot book on this machine');
   console.log(`\n${pass} passed, ${fail} failed, ${skipped} skipped`);
-  process.exit(0);
+  process.exit(fail ? 1 : 0);
 }
-const map = JSON.parse(readFileSync(mapFile, 'utf8'));
 const book = JSON.parse(readFileSync(bookFile, 'utf8'));
 
 // The squares the fleet has stood on under attack and not been hit on. `failed` retires a
@@ -274,6 +277,52 @@ console.log('\nthe choice itself still lands on a proven wall');
   ok('and every square it picks is one nothing within reach can see',
      provenPicked === asked || provenPicked > asked * 0.95,
      `${provenPicked}/${asked} with attackers === 0`);
+}
+
+async function testBrokerSafeSpotReport(map) {
+  console.log('\nthe broker checks the current square when the keeper has no hold');
+  const source = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  const toolStart = source.indexOf("    name: 'safe_spots',");
+  const runStart = source.indexOf('    run: ', toolStart) + '    run: '.length;
+  const runEnd = source.indexOf('\n    },\n  },', runStart) + '\n    }'.length;
+  const room = map.rooms[552];
+  const geometry = geometryFor(room);
+  const wall = { row: 27, col: 1 };
+  const open = { row: 27, col: 2 };
+  let view, live;
+  const run = runInNewContext(`(${source.slice(runStart, runEnd)})`, {
+    session: () => live
+      ? { need() {}, world: { room, geometry, self: view.you } }
+      : { need() {}, perception: async () => view },
+    autopilotIfAny: () => live ? { status: () => view.autopilot_status } : null,
+    safeSpotGeometryFor: geometryFor, safeSpots, standingVerdict, worldMap: map,
+    num: (value, fallback) => value ?? fallback,
+  });
+  for (live of [true, false]) {
+    const backend = live ? 'in-process' : 'keeper-backed';
+    view = { room, you: wall, autopilot_status: { safe_spot: false } };
+    let out = await run({ agent: 'fixture', limit: 1 });
+    ok(`${backend} fallback recognises the exact Great Ocean wall`,
+      out.in_a_safe_spot_now?.works === true && out.standing_at?.col === wall.col &&
+      out.in_a_safe_spot_now?.at?.row === out.standing_at?.row);
+
+    const failure = { at: wall, works: false, evidence: 'observed hit while holding' };
+    view.autopilot_status.safe_spot = failure;
+    out = await run({ agent: 'fixture', limit: 1 });
+    ok(`${backend} keeps failed evidence for the current wall`, out.in_a_safe_spot_now === failure);
+
+    view.you = open;
+    view.autopilot_status.safe_spot = { at: wall, works: true };
+    out = await run({ agent: 'fixture', limit: 1 });
+    ok(`${backend} does not report a hold at a previous square`,
+      out.in_a_safe_spot_now?.works === false && out.in_a_safe_spot_now?.at?.col === open.col);
+
+    view.you = live ? { ...wall, predicted: true } : wall;
+    if (!live) view.stale_render = 'keeper room and room view disagree';
+    out = await run({ agent: 'fixture', limit: 1 });
+    ok(`${backend} cannot certify an uncertain position`,
+      out.standing_at === null && out.in_a_safe_spot_now === false);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed, ${skipped} skipped`);
