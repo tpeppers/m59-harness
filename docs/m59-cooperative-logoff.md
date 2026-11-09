@@ -21,6 +21,16 @@ controlled fleetmate on the same server, roster and room, also visible to the vi
 A room admission lock excludes existing offline waiters and reserves the last helper;
 the fleet cannot deliberately put every participating body offline at once.
 
+A keeper that already logged off can request another cooperative rescue after a
+later recovery at verified cover restored lost health to full and cleared its
+ailments. The next emergency must be off cover and below the flee line. An
+admitted request spends the new episode's allowance. Ordinary play-dead and
+breakout relogs retain their five-minute guard.
+
+In the opted-in Ocean recovery policy, if no melee threat is in reach, a request
+can capture visible rock-throwing mollusks within ten squares with confirmed
+geometry and line of sight.
+
 The victim cancels its old movement and disconnects normally. Its reconnect waits
 for observed outgoing hits against each captured nearby monster. A timer, an attack
 submission, an incoming hit or a miss is not proof. A scoped native exchange
