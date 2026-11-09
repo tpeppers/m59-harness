@@ -15,6 +15,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mock } from 'node:test';
 process.env.M59_HEALING_DIR = mkdtempSync(join(tmpdir(), 'm59-healing-'));
 
 let pass = 0, fail = 0;
@@ -74,6 +75,72 @@ console.log('a handoff keeps it');
   ok('the new keeper may not log off again', !fresh.mayLogoff('piggy') && fresh.readSession('piggy')?.room === 599);
 }
 
+console.log('native full-health pushes close a settled session while a keeper rung is awaiting');
+{
+  const [{ Session }, { M59Client }] = await Promise.all([import('./m59-game.mjs'), import('./m59-client.mjs')]);
+  const actor = name => {
+    const s = Object.assign(Object.create(Session.prototype), { name, hitBook: () => null });
+    const c = new M59Client({ host: '127.0.0.1', port: 1 });
+    Object.assign(c, { state: 'game', combatReady: true, selfId: 4446 });
+    s.client = c;
+    c.onEvent = ev => { if (ev.kind === 'stat' && ev.name === 'health') s.noteHealth(ev, c); };
+    const push = (value, max = 124) => c.noteStat({ group: 1, num: 1, name: 'health', value, currentMax: max });
+    return { s, c, push };
+  };
+  mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-11-09T15:07:48.903Z') });
+  try {
+    const piggy = actor('native-full-edge');
+    H.noteLogoff(piggy.s.name);
+    piggy.push(106);
+    mock.timers.tick(H.SESSION_MIN_MS + 17_382);
+    piggy.push(124);
+    mock.timers.tick(3_263);
+    piggy.push(106);
+    ok('Piggy’s brief settled full push closes the session before damage and without another keeper pass', H.mayLogoff(piggy.s.name));
+
+    const animal = actor('native-full-until-settled');
+    H.noteLogoff(animal.s.name);
+    mock.timers.tick(20_000);
+    animal.push(124);
+    const timer = animal.s._healingFullHealth.timer;
+    animal.push(124);
+    ok('duplicate full pushes keep the one scheduled check', animal.s._healingFullHealth.timer === timer);
+    mock.timers.tick(H.SESSION_MIN_MS - 20_001);
+    ok('earlier full health cannot close before the five-minute guard', !H.mayLogoff(animal.s.name));
+    mock.timers.tick(1);
+    ok('a same-body full reading still current at the deadline closes an otherwise blocked town session', H.mayLogoff(animal.s.name));
+
+    for (const [name, invalidate] of [
+      ['damage', ({ push }) => push(122)],
+      ['new socket', ({ s }) => { s.client = { state: 'game', combatReady: true }; }],
+      ['unready', ({ c }) => { c.combatReady = false; }],
+      ['renumbered body', ({ c }) => { c.selfId++; }],
+      ['new life', ({ s }) => { s.lifeBoundary = 1; }],
+    ]) {
+      const f = actor(`native-invalid-${name}`);
+      H.noteLogoff(f.s.name);
+      f.push(124);
+      invalidate(f);
+      mock.timers.tick(H.SESSION_MIN_MS);
+      ok(`${name} invalidates an earlier full-health timer`, !H.mayLogoff(f.s.name));
+      if (name === 'unready') {
+        f.c.combatReady = true;
+        f.push(124);
+        ok('a new ready full observation may replace discarded timer evidence', H.mayLogoff(f.s.name));
+      }
+    }
+    const stale = actor('native-stale-socket');
+    H.noteLogoff(stale.s.name, { now: Date.now() - H.SESSION_MIN_MS });
+    stale.s.client = { state: 'game', combatReady: true };
+    stale.push(124);
+    ok('a full push from the previous client cannot close a settled session', !H.mayLogoff(stale.s.name));
+    const over = actor('native-over-max');
+    H.noteLogoff(over.s.name, { now: Date.now() - H.SESSION_MIN_MS });
+    over.push(125);
+    ok('an unsettled over-max pair is not an exact full-health observation', !H.mayLogoff(over.s.name));
+  } finally { mock.timers.reset(); }
+}
+
 console.log('the keeper refuses the second logoff');
 const { Autopilot } = await import('./m59-autopilot.mjs');
 {
@@ -109,7 +176,8 @@ console.log('a proved recovery re-arms cooperative rescue while routine reconnec
     credentials: { host: 'fixture.invalid', port: 15959 }, fleetStateFile: join(directory, 'fleet.json'),
     cooperativeLogoffDirectory: directory, world: { room: { num: 552 } },
     client: { combatReady: true, self: body, selfId: body.id, me: { name: body.nameRsc }, vitals, ailments,
-      room: { id: 827, objects: new Map(bodies.map(o => [o.id, o])) }, rsc: { get: x => x } },
+      room: { id: 827, contentsAt: Date.now(), objects: new Map(bodies.map(o => [o.id, o])) },
+      idsAsOf: () => ({ last_save_at: null }), rsc: { get: x => x } },
     _askStrategies: async () => ({ strategy: 'fixture-private', answer: { enabled: true, helper_health: 1 } }),
   });
   const vitals = value => ({ health: { value, max: 100 }, vigor: { value: 180 } });

@@ -29,6 +29,7 @@ import { classifyCombatLine } from './m59-combatlog.mjs';
 import { groundEffectOnSegment, groundEffectSquares } from './m59-ground-effects.mjs';
 import { hazardFacts } from './m59-joint-facts.mjs';
 import { traceSurvival } from './m59-survival-trace.mjs';
+import { observeHealingHealth } from './m59-healing-session.mjs';
 import { cancelSurvivalDecision, observeSurvivalDecision, currentSurvivalDecision,
   finishSurvivalDecision } from './m59-survival-decision.mjs';
 import {saleBlocked} from './m59-inventory-intent.mjs';
@@ -1782,6 +1783,7 @@ class Session {
     observeSurvivalDecision(this, value);
     if (value <= 0) this.lifeBoundary = (this.lifeBoundary ?? 0) + 1;
     if (value <= 0) finishSurvivalDecision(this, currentSurvivalDecision(this)?.id, 'died', 'health reached zero');
+    observeHealingHealth(this, client, ev);
     if (before == null || value >= before) return;      // a heal, or the first reading
     // TOOK A HIT. STAMP IT, BECAUSE THE WALKER NEEDS TO KNOW *NOW* AND NOT AT THE END OF
     // THE LEG IT IS IN THE MIDDLE OF.
