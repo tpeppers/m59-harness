@@ -34,6 +34,7 @@ import { join } from 'node:path';
 process.env.M59_LEDGER_DIR = mkdtempSync(join(tmpdir(), 'm59-sr-ledger-'));
 process.env.M59_RUNLOCK_DIR = mkdtempSync(join(tmpdir(), 'm59-sr-lock-'));
 process.env.M59_CONTROL_URL = 'http://127.0.0.1:1/';
+process.env.M59_KEEPER_BEAT_MS = '15';
 const BAND_DIR = mkdtempSync(join(tmpdir(), 'm59-sr-band-'));
 writeFileSync(join(BAND_DIR, 'keeper-bands.json'), JSON.stringify({ testfleet: 19950 }));
 process.env.M59_KEEPER_BAND_REGISTRY = join(BAND_DIR, 'keeper-bands.json');
@@ -44,6 +45,7 @@ const { keeperOrigin, moveOrigin, sameIssuer, walkOrderState, journeyResumeOptio
   await import('./m59-move-origin.mjs');
 const { stateFileFor } = await import('./m59-fleetpath.mjs');
 const { fleetScript, walk } = await import('./m59-fleetscript.mjs');
+const { chooseSurvivalDecision } = await import('./m59-survival-decision.mjs');
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => {
@@ -157,6 +159,50 @@ ok('options are sanitised: a hazard override never travels without its reason',
    journeyResumeOptions({ allowHazard: true }) === null
    && journeyResumeOptions({ allowHazard: true, hazardWhy: 'rescue' })?.hazardWhy === 'rescue');
 
+console.log('pack-blocked release retires only the exact suspended route');
+{
+  const { s, k } = keeperWalking();
+  const why = 'a travel guard rung taking the character back';
+  s.cancelMovement(null, why, { origin: keeperOrigin('travel_guard') });
+  k.revive(why);
+  s.job.done = true;
+  s.client = { stat: () => 20, inventory: [{ name: 'blue mushroom', amount: 420 }],
+    vitals: () => ({ health: { value: 121, max: 121 } }), self: { row: 16, col: 16 },
+    room: { objects: new Map() } };
+  k.armed = () => false;
+  const ownership = { faculties: ['work', 'movement', 'economy'], by: `fleetscript:${FS.name}` };
+  k.claimFaculties(ownership);
+  const held = k.suspendedJourney, generation = s.movementGeneration;
+  const blocked = { stage: 'passArm', at: Date.now(), bulk_free: 0, needs: 70,
+    what: 'unarmed and cannot hold what the spell would make' };
+  k.lastDecision = blocked;
+  const retire = () => k.retirePackBlockedJourney(713, FS, held.at);
+  ok('the same script name from a different run cannot retire it',
+     !k.retirePackBlockedJourney(713, { ...FS, run_id: 'foreign' }, held.at).retired && k.suspendedJourney === held);
+  ok('an older walk from the same run cannot be retired on behalf of a newer walk',
+     !k.retirePackBlockedJourney(713, FS, held.at + 1).retired && k.suspendedJourney === held);
+  s.moveOrder = { kind: 'travel', to: 38, origin: { source: 'operator', name: 'tim' }, generation };
+  ok('newer movement is untouched', !retire().retired && s.moveOrder.to === 38 && k.suspendedJourney === held);
+  s.moveOrder = null;
+  s.client.trade = {};
+  ok('an open trade keeps the route', !retire().retired && k.suspendedJourney === held);
+  s.client.trade = null;
+  const decision = chooseSurvivalDecision(s, { strategy: 'rest', status: 'recovering' });
+  ok('real recovery keeps the route', !retire().retired && k.suspendedJourney === held);
+  decision.status = 'complete';
+  s.client.inventory[0].amount = 405;
+  ok('newly freed pack space keeps the route even with a fresh old blocker',
+     !retire().retired && k.suspendedJourney === held);
+  s.client.inventory[0].amount = 420;
+  k.lastDecision = { ...blocked, at: blocked.at - 6_000 };
+  ok('stale arming evidence cannot retire a journey', !retire().retired && k.suspendedJourney === held);
+  k.lastDecision = blocked;
+  const r = retire();
+  ok('the exact current pack blocker retires the suspended route without another movement cancel',
+     r.retired && k.suspendedJourney == null && s.movementGeneration === generation, JSON.stringify(r));
+  drop(s);
+}
+
 console.log('walkOrderState: four answers, and only one of them is a failure');
 {
   const label = originLabel(FS);
@@ -186,12 +232,21 @@ console.log('walkOrderState: four answers, and only one of them is a failure');
 // A minimal broker: `status` answers room/health/movement from the case's own clock, `autopilot
 // status` answers the keeper's suspended journey, `travel` records and does NOT move the body --
 // arriving is the case's decision, the way it is the world's.
-function fakeBroker({ room, phase, health = () => ({ value: 121, max: 121 }), dead = () => false }) {
+function fakeBroker({ room, phase, health = () => ({ value: 121, max: 121 }), dead = () => false,
+                      keeper = null }) {
   const sent = [];
-  globalThis.fetch = async (_url, opts) => {
+  globalThis.fetch = async (url, opts) => {
+    if (keeper && String(url) === 'http://127.0.0.1:19950/live')
+      return { ok: true, json: async () => ({ agent: 't8', character: 'Robin', pid: 110 }) };
     if (!opts || opts.method !== 'POST') return { json: async () => ({ ok: true, fleet: 'testfleet', state: stateFileFor('testfleet') }) };
     const body = JSON.parse(opts.body);
-    if (!body.params) return { json: async () => ({}) };            // a keeper port: nobody home
+    if (!body.params) {
+      if (!keeper) return { json: async () => ({}) };              // a keeper port: nobody home
+      const name = body.name ?? 'cancel';
+      sent.push({ name: `keeper:${name}`, ...body.args });
+      const payload = await keeper(name, body.args ?? {}, sent);
+      return { json: async () => payload };
+    }
     const { name, arguments: a } = body.params;
     sent.push({ name, ...a, t: Date.now() });
     const travels = sent.filter(c => c.name === 'travel');
@@ -267,6 +322,44 @@ console.log('(b) a FleetScript walk waits THROUGH a survival pause and completes
   const res = r.results?.t8 ?? {};
   ok('a pause that outlasts the allowance still ends the walk', res.ok === false, JSON.stringify(res));
   ok('within the allowance plus the ordinary budgets, not for ever', Date.now() - began < 10_000, `${Date.now() - began}ms`);
+}
+
+console.log('a confirmed pack block ends the FleetScript and hands back its faculties');
+{
+  let retired = false, renewalFinished = false;
+  const sent = fakeBroker({
+    room: () => 48,
+    keeper: async (name, args, calls) => {
+      if (name === 'commander_claim') return { granted: ['work', 'movement', 'economy'] };
+      if (name === 'commander_heartbeat') {
+        await new Promise(resolve => setTimeout(resolve, 65));
+        calls.push({ name: 'keeper:heartbeat_finished' });
+        renewalFinished = true;
+        return { renewed: [] };
+      }
+      if (name === 'retire_pack_blocked_journey' && args.to === 713 && args.origin?.run_id && Number.isFinite(args.since)) {
+        retired = true;
+        return { retired, bulk_free: 0, needs: 70 };
+      }
+      return {};
+    },
+    phase: ({ sent, travels, mine }) => travels.length && sent.some(c => c.name === 'keeper:commander_heartbeat')
+      ? { autopilot: { suspended_journey: { to: 713, ordered_by: label(mine), trigger: 'unarmed' },
+                       last_decision: { stage: 'passArm', bulk_free: 0, needs: 70 } } }
+      : {},
+  });
+  const r = await run(sent);
+  const res = r.results?.t8 ?? {};
+  const names = sent.map(c => c.name);
+  ok('one walk returns the explicit pack-block outcome', retired && res.outcome === 'travel_pack_blocked' &&
+     names.filter(n => n === 'travel').length === 1, JSON.stringify(res));
+  ok('the pending heartbeat settles before releasing, without another claim',
+     renewalFinished && names.indexOf('keeper:heartbeat_finished') < names.indexOf('keeper:commander_release') &&
+     names.filter(n => n === 'keeper:commander_claim').length === 1, JSON.stringify(names));
+  ok('only the initial takeover and send clear movement, with no generic release on exit',
+     names.filter(n => n === 'keeper:cancel').length === 1 &&
+     names.filter(n => n === 'cancel_movement').length === 1 &&
+     names.filter(n => n === 'keeper:release').length === 1, JSON.stringify(names));
 }
 
 console.log('(c) a genuine terminal end still ends the walk, with its reason, and is not re-issued');

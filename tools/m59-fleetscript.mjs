@@ -2716,7 +2716,14 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
       const quick = walkOrderState({ movement: now.movement }, { mine, to, since: takenSince });
       if (quick.state === 'live') return quick;
       const ap = await call('autopilot', { agent, action: 'status' }, 30_000).catch(() => null);
-      return walkOrderState({ movement: now.movement, autopilot: ap }, { mine, to, since: takenSince });
+      const st = walkOrderState({ movement: now.movement, autopilot: ap }, { mine, to, since: takenSince });
+      const decision = (ap?.autopilot_status ?? ap)?.last_decision;
+      if (st.state === 'paused' && decision?.stage === 'passArm' &&
+          Number.isFinite(decision.bulk_free) && decision.bulk_free < decision.needs) {
+        const r = await ctx.holds?.get(agent)?.retirePackBlockedJourney?.(to, mine, launchedAt);
+        if (r?.retired) return { state: 'pack_blocked', ...r };
+      }
+      return st;
     };
     while (Date.now() < until) {
       await sleep(ctx.pollMs);
@@ -2732,6 +2739,10 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
         return { ok: false, terminal: true, taken_by: st.by, ...preemptedFields(),
                  why: `the walk to ${to} was ended by ${st.by}, not by the keeper: ${st.why} — ` +
                       'not re-issued, because that would override them' };
+      if (st.state === 'pack_blocked')
+        return { ok: false, outcome: 'travel_pack_blocked', ...preemptedFields(),
+                 why: `the walk to ${to} cannot resume unarmed with ${st.bulk_free}/${st.needs} free bulk — ` +
+                      'the keeper retired the suspended route so the pack can be cleared' };
       if (st.state === 'paused') {
         if (!paused) {
           paused = { at: t, trigger: st.trigger };
@@ -3073,7 +3084,7 @@ export async function holdKeeper(ctx, agent, fleet) {
     throw Error(`keeper busy announcement refused: ${busy.error ?? busy.refused}`);
   }
 
-  let done = false;
+  let done = false, renewal = null, retiredPackBlocked = false;
   // GUARANTEE: A DEAD BODY DOES NOT KEEP ITS LEASE.
   //
   // This beat used to have no opinion about whether the character was still alive — it just
@@ -3095,6 +3106,7 @@ export async function holdKeeper(ctx, agent, fleet) {
     if (done) return;
     done = true;
     clearInterval(beat);
+    await renewal;
     await ask('commander_release',
       { faculties: KEEPER_FACULTIES, by: `fleetscript:${ctx.name}` }).catch(() => {});
     ctx.log(agent, why ?? 'gave work, movement and economy back to the keeper');
@@ -3133,12 +3145,12 @@ export async function holdKeeper(ctx, agent, fleet) {
   };
   const beat = setInterval(() => {
     if (done) return;
-    driverMoved().then(async moved => {
-      if (moved && await refresh()) {
+    renewal ??= driverMoved().then(async moved => {
+      if (!done && moved && await refresh()) {
         who.spectate = (await keeperPorts(fleet, { wantAgent: agent }).catch(() => null))?.get(agent)?.spectate === true;
         ctx.log(agent, `the keeper driving this character changed -- now ${who.spectate ? 'a spectate keeper' : 'its own keeper'} :${who.port}`);
       }
-    }).catch(() => {}).then(() => ask('commander_heartbeat', { by, lease_ms: KEEPER_LEASE_MS })).then(async hb => {
+    }).catch(() => {}).then(() => done ? null : ask('commander_heartbeat', { by, lease_ms: KEEPER_LEASE_MS })).then(async hb => {
       if (done) return;
       const renewed = Array.isArray(hb?.renewed) ? hb.renewed : null;
       if (!renewed || KEEPER_FACULTIES.every(f => renewed.includes(f))) return;
@@ -3154,8 +3166,8 @@ export async function holdKeeper(ctx, agent, fleet) {
                      (!got.length ? 'and the keeper would not give it back'
                        : walking ? `took ${got.join(', ')} back and left the errand's own walk running`
                        : `took ${got.join(', ')} back and stopped whatever the keeper started`));
-      if (got.length && !walking) await cancelNow();
-    }).catch(() => {});
+      if (!done && got.length && !walking) await cancelNow();
+    }).catch(() => {}).finally(() => { renewal = null; });
     // The read is what makes this a guard rather than a timer, so a failed read must not be
     // mistaken for a death — an unreadable character keeps its lease and the next beat asks
     // again. Only a positive `dead` releases.
@@ -3181,14 +3193,23 @@ export async function holdKeeper(ctx, agent, fleet) {
      * go back or the keeper inherits a journey it never chose.
      */
     cancelJourney: async why => {
+      if (retiredPackBlocked) return;
       const r = await ask('release', { why: why ?? 'the errand ended' })
         .catch(e => ({ error: e.message }));
       if (r?.error) ctx.log(agent, `could not cancel the journey: ${r.error}`);
       return r;
     },
     release: () => releaseNow(),
+    retirePackBlockedJourney: async (to, origin, since) => {
+      const r = await ask('retire_pack_blocked_journey', { to, origin, since }).catch(() => null);
+      if (r?.retired === true) retiredPackBlocked = true;
+      return r;
+    },
     /** A walk this errand issued, in flight until `untilMs`: a take-back must not cancel it. */
-    ownWalk: untilMs => { own.walkUntil = Math.max(own.walkUntil, Number(untilMs) || 0); },
+    ownWalk: untilMs => {
+      retiredPackBlocked = false;
+      own.walkUntil = Math.max(own.walkUntil, Number(untilMs) || 0);
+    },
     endOwnWalk: () => { own.walkUntil = 0; },
   };
 }

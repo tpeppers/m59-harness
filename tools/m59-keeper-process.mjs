@@ -3247,6 +3247,10 @@ const server = createServer(async (req, res) => {
                             args.token ?? null));
             return;
           }
+          case 'retire_pack_blocked_journey': {
+            json(autopilot?.retirePackBlockedJourney(Number(args.to), callerOrigin(args), args.since) ?? { retired: false });
+            return;
+          }
           case 'release': {
             json(releaseKeeper(String(args.why ?? 'errand finished'), args.token ?? null));
             return;
