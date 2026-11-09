@@ -199,7 +199,8 @@ function fixture({ protect = [], dropRefuses = new Set(), heldBack = new Set(), 
   const t0 = 1_000_000_000;
   const first = await f.ap.unarmedMakeSpace(f.c, t0);
   ok('hook: drops sale-plan items for the weapon (+margin), then re-arms', first === true && armCalls === 1 &&
-     f.ledger[0]?.needed?.bulk === 80 && f.ledger[0].dropped.every(d => !['herb', 'shilling', 'spider eye'].includes(d.name)),
+     f.ledger[0]?.needed?.bulk === 100 && f.ledger[0]?.needed?.weight === 100 &&
+     f.ledger[0].dropped.every(d => !['herb', 'shilling', 'spider eye'].includes(d.name)),
      JSON.stringify(f.ledger[0]));
   const again = await f.ap.unarmedMakeSpace(f.c, t0 + 60_000);
   ok('hook: rate-bounded — a second call inside the window does nothing', again === false && armCalls === 1 && f.ledger.length === 1);
