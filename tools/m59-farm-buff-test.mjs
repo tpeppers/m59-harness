@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { OF } from './m59-parse.mjs';
 import { Autopilot } from './m59-autopilot.mjs';
 import { M59Client } from './m59-client.mjs';
+import { prepareKaraholHoldReconnect } from './m59-karahol-hold.mjs';
 import { HOOKS } from './m59-strategies.mjs';
 
 let n = 0;
@@ -150,7 +151,7 @@ await ok('each own health push during confirmed Karahol Hold is a reviewable hit
   ap.ledgerEvent = (kind, row) => rows.push({ kind, ...row });
   const emit = (kind, fields) => M59Client.prototype.emit.call(c, kind, fields);
   const add = (id, name) => {
-    const added = { id, name };
+    const added = { id, name, type: 1 };
     enchantments.set(id, added);
     emit('enchantment', { added });
   };
@@ -187,6 +188,78 @@ await ok('each own health push during confirmed Karahol Hold is a reviewable hit
   }
   assert.equal(ap.tally.karahol_hold_damage_events, 2);
   assert.equal(ap.tally.karahol_hold_damage_hp, 10);
+});
+
+await ok('the attributed Hold survives one verified socket replacement and captures the first new-socket HP loss', async () => {
+  const identity = { character: 'Janice', host: 'fixture.invalid', port: 5959 };
+  const socket = (client = {}, overrides = {}) => {
+    const active = new Map();
+    Object.assign(client, { me: { name: identity.character }, room: { id: 1416 }, selfId: 7, inGame: true,
+      maxEvents: 500, waiters: [], events: [], evSeq: 0, send() {}, enchantments: () => [...active.values()], ...overrides });
+    const emit = (kind, fields) => M59Client.prototype.emit.call(client, kind, fields);
+    const add = (id, name) => {
+      const added = { id, name, type: 1 };
+      active.set(id, added);
+      emit('enchantment', { added });
+    };
+    return { client, emit, add, hp: value => emit('stat', { name: 'health', value, max: 70 }) };
+  };
+  const settle = () => new Promise(resolve => setTimeout(resolve, 180));
+  const setup = async () => {
+    const { ap } = keeper({ answer: { cast: "Kara'hol's curse" } });
+    ap.s.world.room.num = 552;
+    ap.s.credentials = identity;
+    ap.policy.farmStrategy = 'great-ocean-marion';
+    const rows = [];
+    ap.ledgerEvent = (kind, detail) => rows.push({ kind, ...detail });
+    const old = socket(ap.s.client);
+    await ap.farmBuffAsk('before_swing');
+    old.add(10, "Kara'hol's curse");
+    old.add(20, 'Hold');
+    assert.equal(prepareKaraholHoldReconnect(ap.s, 3000), null, 'an unrelated Hold cannot be carried');
+    old.emit('message', { text: 'Your body freezes as total exhaustion grips your limbs.' });
+    const resume = prepareKaraholHoldReconnect(ap.s, 3000, (character, kind, detail) => rows.push({ character, kind, ...detail }));
+    assert.equal(typeof resume, 'function');
+    ap.s.client = null;
+    return { ap, rows, resume };
+  };
+  const good = await setup();
+  const replacement = socket();
+  good.resume(replacement.client, identity);
+  replacement.hp(68);   // establish a baseline on this socket, independently of the old one
+  replacement.hp(63);
+  assert.deepEqual(good.rows, []);
+  M59Client.prototype.requestEnchantments.call(replacement.client);
+  replacement.add(20, 'Hold');
+  await settle();
+  assert.deepEqual(good.rows.map(r => [r.character, r.hp_before, r.hp_after, r.observed_after_reconnect]),
+    [['Janice', 68, 63, true]]);
+  good.ap.s.client = replacement.client;
+  replacement.hp(60);
+  replacement.emit('message', { text: 'The magical hold lifts and you are able to move once more.' });
+  replacement.hp(50);
+  assert.deepEqual(good.rows.map(r => r.hp_lost), [5, 3]);
+  assert.equal(prepareKaraholHoldReconnect(good.ap.s, 3000), null, 'a carried Hold cannot be carried again');
+
+  for (const [label, config] of [
+    ['changed body', { socket: { selfId: 8 } }],
+    ['changed room', { socket: { room: { id: 1417 } } }],
+    ['different spell identity', { holdId: 21 }],
+    ['unsolicited icon', { unsolicited: true }],
+    ['fresh Hold onset', { message: 'A magical tingling pulses through your body.  You are unable to move.' }],
+    ['expired Hold', { message: 'The magical hold lifts and you are able to move once more.' }],
+  ]) {
+    const rejected = await setup();
+    const next = socket({}, config.socket);
+    rejected.resume(next.client, identity);
+    next.hp(68);
+    next.hp(61);
+    if (!config.unsolicited) M59Client.prototype.requestEnchantments.call(next.client);
+    next.add(config.holdId ?? 20, 'Hold');
+    if (config.message) next.emit('message', { text: config.message });
+    await settle();
+    assert.deepEqual(rejected.rows, [], label);
+  }
 });
 
 await ok('no_engage refuses the pull before walking out; go_to_safe_spot only when off it', async () => {

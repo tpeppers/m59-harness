@@ -66,6 +66,7 @@ import { noteFactionLine } from './m59-faction-intel.mjs';
 // Write-only, and safe to import anywhere: the ledger pulls in no keeper and no hook loader
 // at module scope — `attachHooks` is wired by whoever actually loads hooks. See m59-ledger.mjs.
 import { recordEvent } from './m59-ledger.mjs';
+import { prepareKaraholHoldReconnect } from './m59-karahol-hold.mjs';
 import * as descriptions from './m59-describe.mjs';
 import { RemainingRequiredToLearnNewSkills, PointsToNextLevelOfTarget } from '../compendium/tools/learn.mjs';
 import { StorageCache } from './m59-storage.mjs';
@@ -2648,6 +2649,9 @@ class Session {
     // needs these.
     this.credentials = { account, password, character, host, port };
     const c = new M59Client({ host, port, verbose: false, resources });
+    const resumeKarahol = this.resumeKaraholHold;
+    this.resumeKaraholHold = null;
+    try { resumeKarahol?.(c, { character, host, port }); } catch { /* telemetry never blocks login */ }
     // Install before login: fatal messages/stat pushes can precede this.client = c.
     let evidence=null;
     try{
@@ -3182,12 +3186,19 @@ class Session {
     // SPECTATE: an attached client's socket is not the character's connection, so closing it would
     // log nobody off. Ask the proxy to do it on the person's connection first (m59-proxy.mjs logoffAway).
     if (this.client?.attach) await this.client.attachedLogoff?.().catch(() => false);
+    const pauseMs = Math.max(800, Math.min(60_000, Number(offlineMs) || 0));
+    const resumeKarahol = prepareKaraholHoldReconnect(this, pauseMs);
+    this.resumeKaraholHold = resumeKarahol;
     try { this.client?.sock?.destroy(); } catch { /* already gone */ }
     this.client = null;
     markCooperativeOffline(this);
     // `offlineMs`: stay out that long before logging back in (a private farmBuff strategy waiting out a hold).
-    await new Promise(r => setTimeout(r, Math.max(800, Math.min(60_000, Number(offlineMs) || 0))));
-    return this.join(this.credentials);
+    try {
+      await new Promise(r => setTimeout(r, pauseMs));
+      return await this.join(this.credentials);
+    } finally {
+      if (this.resumeKaraholHold === resumeKarahol) this.resumeKaraholHold = null;
+    }
   }
 
   // "NOT IN GAME" IS TRUE OF TWO DIFFERENT FAULTS AND ONLY ONE OF THEM IS A CONNECTION.
