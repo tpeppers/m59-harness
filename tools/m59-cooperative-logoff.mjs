@@ -130,6 +130,22 @@ export function publishCooperativePresence(pilot,{now=Date.now()}={}) {
 // seen again deletes the receipt. The gate accepts it only while it is fresh and its writer's
 // presence is fresh and in the room -- the same rules a hit receipt meets.
 export const GONE_MS=15000, GONE_GAP_MS=3000, GONE_REFRESH_MS=5000;
+const RECEIPT_MS=30000;
+// A recent receipt stops replacement work only while the login gate could use its witness.
+function cooperativeReceiptSatisfied(store,r,t,now,maxAge=RECEIPT_MS) {
+  const receipt=r.receipts?.[t.id],at=receipt?.kind==='gone'?receipt.at:receipt?.hit_at;
+  if(!(receipt?.request_id===r.id&&receipt.target_id===t.id&&receipt.name===t.name&&
+    at>=r.offline_at&&at<=now&&now-at<maxAge))return false;
+  const p=store.read('presence',receipt.helper);
+  if(!(fresh(p,now)&&p.body===receipt.helper_body&&p.room===r.room&&p.room_object===r.room_object&&
+    !pending(store.read('request',receipt.helper))))return false;
+  return receipt.kind==='gone'?at-receipt.seen_absent_since>=GONE_MS:true;
+}
+
+function suppressGoneReceipt(store,r,t,now) {
+  return cooperativeReceiptSatisfied(store,r,t,now,r.receipts?.[t.id]?.kind==='gone'?GONE_REFRESH_MS:RECEIPT_MS);
+}
+
 export function observeCooperativeTargets(pilot,{now=Date.now(),store=cooperativeStore(pilot.s)}={}) {
   const s=pilot.s,c=s?.client;if(!store||!s?.name)return 0;
   const seen=s._cooperativeGoneSeen??=new Map(),ids=c?.idsAsOf?.()??null;
@@ -152,12 +168,11 @@ export function observeCooperativeTargets(pilot,{now=Date.now(),store=cooperativ
     const continued=!!prior&&now>=prior.last&&now-prior.last<=GONE_GAP_MS;
     const since=continued?prior.since:now,n=continued?prior.n+1:1;
     seen.set(key,{since,last:now,n});
-    const had=r.receipts?.[t.id];
-    if(n<2||now-since<GONE_MS||had&&now-(had.kind==='gone'?had.at:had.hit_at)<(had.kind==='gone'?GONE_REFRESH_MS:30000))continue;
+    if(n<2||now-since<GONE_MS||suppressGoneReceipt(store,r,t,now))continue;
     wrote+=store.lock(room,()=>{const cur=store.read('request',r.agent);
       // Only an 'offline' record: 'returning' is requester-owned (see cooperativeAfterLogin).
       if(cur?.id!==r.id||cur.state!=='offline'||cur.room!==room||cur.room_object!==roomObject)return 0;
-      const old=cur.receipts?.[t.id];if(old&&old.kind!=='gone'&&now-old.hit_at<30000)return 0;
+      if(suppressGoneReceipt(store,cur,t,now))return 0;
       cur.receipts={...(cur.receipts??{}),[t.id]:{kind:'gone',request_id:cur.id,target_id:t.id,name:t.name,
         helper:s.name,helper_body:c.selfId,seen_absent_since:since,observations:n,at:now}};
       store.write('request',cur.agent,cur);return 1;})?1:0;
@@ -385,12 +400,7 @@ function gateStep(session,store,now) {
     return false;
   }
   const receipts=Object.values(r.receipts??{});
-  const satisfied=t=>{
-    const hit=r.receipts?.[t.id],p=hit&&store.read('presence',hit.helper),at=hit?.kind==='gone'?hit.at:hit?.hit_at;
-    if(!(hit?.request_id===r.id&&hit.target_id===t.id&&hit.name===t.name&&at>=r.offline_at&&at<=now()&&now()-at<30000&&
-      fresh(p,now())&&p.body===hit.helper_body&&p.room===r.room&&p.room_object===r.room_object&&!pending(store.read('request',hit.helper))))return false;
-    return hit.kind==='gone'?at-hit.seen_absent_since>=GONE_MS:true;
-  };
+  const satisfied=t=>cooperativeReceiptSatisfied(store,r,t,now());
   const targets=r.targets??[];
   const valid=targets.every(satisfied);
   if(valid&&receipts.length){
@@ -500,16 +510,15 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
   const {config}=offered,s=pilot.s,store=cooperativeStore(s);if(!store||!cooperativeHelperReady(pilot,config,{now:now()}))return false;
   const c=s.client,room=s.world.room.num;
   const geometry = s.world.geometry;
-  const origin = room === 552 && pilot.policy?.molluskCoverRecovery === true &&
+  const oceanRoad = room === 544 && Number(pilot.policy?.assignedRoom) === 552;
+  const origin = (room === 552 || oceanRoad) && pilot.policy?.molluskCoverRecovery === true &&
     geometry?.collisionReady && Number.isInteger(geometry.security) && c.room.security === geometry.security
     ? position(c.self) : null;
   const requests=store.list('request').filter(r=>r.state==='offline'&&now()-r.offline_at>=800&&now()-(r.last_attempt_at??0)>=2000&&r.room===room&&r.room_object===c.room.id&&r.helpers.includes(s.name)).sort((a,b)=>a.created_at-b.created_at);
   for(const request of requests){
     // Work on live targets while the absence observer collects proof for missing ones.
     const target = request.targets.find(candidate => {
-      const receipt = request.receipts?.[candidate.id];
-      const receivedAt = receipt?.kind === 'gone' ? receipt.at : receipt?.hit_at;
-      if (receipt && now() - receivedAt < 30000) return false;
+      if (cooperativeReceiptSatisfied(store,request,candidate,now())) return false;
       const object = c.room.objects.get(candidate.id);
       if (!object || object.nameRsc !== candidate.name_rsc || c.rsc.get(object.nameRsc) !== candidate.name ||
           !(object.flags & OF.ATTACKABLE) || (object.flags & OF.PLAYER)) return false;
@@ -520,7 +529,8 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
         s.world.approachSquare?.(aim.col, aim.row)?.steps > 0);
     });
     if(!target)continue;
-    const lock=store.lock(room,()=>{const r=store.read('request',request.agent);if(r?.id!==request.id||r.state!=='offline'||r.claim&&r.claim.until>now())return null;
+    const lock=store.lock(room,()=>{const r=store.read('request',request.agent);if(r?.id!==request.id||r.state!=='offline'||r.claim&&r.claim.until>now()||
+      cooperativeReceiptSatisfied(store,r,target,now()))return null;
       r.claim={helper:s.name,token:randomUUID(),until:now()+config.attempt_ms+4000};store.write('request',r.agent,r);return r.claim;});
     if(!lock)continue;
     const generation=s.movementGeneration,save=c.idsAsOf?.()?.last_save_at;

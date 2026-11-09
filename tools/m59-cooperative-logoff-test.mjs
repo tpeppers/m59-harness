@@ -364,6 +364,49 @@ try{
   console.log('PASS a proved distant Ocean helper skips the shared claim, considers another target, and records refusals');
  }
  {
+  const f=fixture('ocean-road-helper');
+  const {loadMap,CHECKED_MAP_FILE}=await import('./m59-map.mjs');
+  const {World}=await import('./m59-world.mjs');
+  const {SHORT_FIGHT_APPROACH_SQUARES}=await import('./m59-skills.mjs');
+  const map=loadMap(CHECKED_MAP_FILE),room=map.rooms[544];
+  // Fozzie's 14:05:55.368Z and 14:05:56.347Z room frames bracket his Camilla rescue claim.
+  const farther={id:16895,nameRsc:'fungus beast',flags:OF.ATTACKABLE,row:6,col:15,x:992,y:416};
+  const nearby={...farther,id:16850,row:3,col:23,x:1504,y:224};
+  for(const actor of [f.a,f.b]){
+   Object.assign(actor.c,{roomNameRsc:room.nameRsc,roomRsc:room.roomRsc});
+   Object.assign(actor.c.room,{id:1383});
+   actor.s.world=new World(actor.c,map);
+   actor.c.room.security=actor.s.world.geometry.security;
+   actor.c.room.objects.delete(40);
+   actor.c.room.objects.set(farther.id,farther);
+   actor.c.room.objects.set(nearby.id,nearby);
+  }
+  Object.assign(f.b.c.self,{row:3,col:23,x:1504,y:224});
+  assert(Math.hypot(farther.row-f.b.c.self.row,farther.col-f.b.c.self.col)>SHORT_FIGHT_APPROACH_SQUARES);
+  assert.equal(f.b.s.world.approachSquare(farther.col,farther.row).steps,7,'real room 544 geometry proves positive coarse approach');
+  assert.equal(Math.hypot(nearby.row-f.b.c.self.row,nearby.col-f.b.c.self.col),0,'second fungus is already in melee on the live grid');
+  f.b.pilot.policy={assignedRoom:552,molluskCoverRecovery:true};
+  const r=await f.setup();f.offline();
+  assert.deepEqual(r.targets.map(t=>t.id),[farther.id,nearby.id]);
+  const hits=[];
+  f.b.pilot.fightNow=async o=>(hits.push(o.exactTargetId),{target_id:o.exactTargetId,landed_hits:0});
+  assert(await cooperativeAssist(f.b.pilot));
+  assert.deepEqual(hits,[nearby.id]);
+  const again=()=>{
+   const row=f.store().read('request','victim');delete row.last_attempt_at;f.store().write('request','victim',row);
+   return cooperativeAssist(f.b.pilot);
+  };
+  f.b.pilot.policy.assignedRoom=544;
+  assert(await again());
+  f.b.pilot.policy.assignedRoom=552;f.b.pilot.policy.molluskCoverRecovery=false;
+  assert(await again());
+  f.b.pilot.policy.molluskCoverRecovery=true;f.b.c.room.security++;
+  assert(await again());
+  assert.deepEqual(hits,[nearby.id,farther.id,farther.id,farther.id],
+    'unrelated assignment, non-opted-in policy and unverified geometry keep ordinary helper selection');
+  console.log('PASS the actual 544 Ocean return fixture skips the distant fungus and retains unrelated helper behavior');
+ }
+ {
   const f=fixture('confirmed');let options;
   for(const actor of [f.a,f.b])actor.s.world.room.num=552;
   f.b.pilot.policy={molluskCoverRecovery:true};
@@ -531,6 +574,37 @@ try{
  // repeated observation from a helper in the request's room -- never by a single read.
  const watch=(f,from,to,step=1000)=>{f.b.s._cooperativePublishedAt=0;for(let t=from;t<=to;t+=step)publishCooperativePresence(f.b.pilot,{now:t});};
  const gate=(f,at,why='still waiting')=>cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{now:()=>at,wait:async()=>{throw Error(why);}});
+ const seedHit=(f,r,at,room)=>{
+  const store=f.store();
+  const prior={request_id:r.id,target_id:40,name:'daemon skeleton',helper:'second',helper_body:3,hit_at:at,landed_hits:1};
+  store.write('request','victim',{...r,receipts:{40:prior}});
+  store.write('presence','second',{at,live:true,body:3,room,room_object:8270,health:{value:100,max:100}});
+  return prior;
+ };
+ {
+  const f=fixture('replace-invalid-hit');await f.setup();const r=f.offline(),T=r.offline_at+2000;
+  const prior=seedHit(f,r,T-100,827);
+  assert.equal(await cooperativeAssist(f.b.pilot,{now:()=>T}),false,'a still-valid witness suppresses another hit');
+  assert.deepEqual(f.store().read('request','victim').receipts[40],prior);
+  const p=f.store().read('presence','second');f.store().write('presence','second',{...p,room:828});
+  await assert.rejects(gate(f,T),/still waiting/,'the gate does not admit a victim on this invalid witness');
+  assert(await cooperativeAssist(f.b.pilot,{now:()=>T}),'a hit is not blocked for 30s after the witness leaves');
+  assert.equal(f.store().read('request','victim').receipts[40].helper,'helper');
+  await gate(f,T+100);
+  console.log('PASS an invalid recent witness can be replaced by a confirmed helper hit before expiry');
+ }
+ {
+  const f=fixture('replace-invalid-hit-with-gone');await f.setup();const r=f.offline(),T=r.offline_at+1000;
+  const prior=seedHit(f,r,T,828);
+  f.b.c.room.objects.delete(40);
+  watch(f,T,T+14000);
+  assert.deepEqual(f.store().read('request','victim').receipts[40],prior,'the invalid hit cannot shorten the absence requirement');
+  watch(f,T+15000,T+15000);
+  const receipt=f.store().read('request','victim').receipts[40];
+  assert.equal(receipt.kind,'gone');assert.equal(receipt.helper,'helper');assert.equal(receipt.seen_absent_since,T);
+  await gate(f,T+15100);
+  console.log('PASS an invalid recent hit cannot block a complete independent absence proof');
+ }
  {
   const f=fixture('gone-satisfies');await f.setup();const r=f.offline(),T=r.offline_at+1000;
   f.b.c.room.objects.delete(40);f.b.s.combat={active:{}};
