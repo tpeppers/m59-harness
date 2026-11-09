@@ -7,7 +7,7 @@ export const REFUGE_PROGRESS_MS = 8000;
 export const REFUGE_NO_PROGRESS_REASON = 'shelter approach made no confirmed route progress';
 
 export function isStalledRefugeRetry(decision) {
-  return decision?.status === 'pending' && decision.strategy === 'route_refuge' &&
+  return decision?.status === 'pending' && ['route_refuge', 'nearest_refuge'].includes(decision.strategy) &&
     decision.reason_code === 'approach_interrupted' && decision.reason === REFUGE_NO_PROGRESS_REASON;
 }
 

@@ -207,14 +207,19 @@ try{
   console.log('PASS Ocean mixed/ranged escape runs before the caster exit only with live proof, budget and admitted fleet help');
 
   // Waldorf's final confirmed pose after the first refuge's no-progress cancellation.
-  const stalled = async (label, helper = true) => {
+  const stalled = async (label, helper = true, {
+   strategy='route_refuge',
+   at={row:47,col:47,x:3040,y:3040},
+   health={value:17,max:121},
+   bodies=[[13099,46,47,3043,2963],[13085,47,48,3114,3051],[13094,44,55,3546,2836]],
+  } = {}) => {
    const f = await setup(label), {s,c,pilot} = f.a;
-   Object.assign(c.self,{row:47,col:47,x:3040,y:3040});
-   c.vitals=()=>({health:{value:17,max:121},vigor:{value:188}});
+   Object.assign(c.self,at);
+   c.vitals=()=>({health,vigor:{value:188}});
    for (const actor of [f.a,f.b]) {
     actor.c.room.objects.delete(f.rock.id);
     actor.c.room.objects.delete(f.melee.id);
-    for (const [id,row,col,x,y] of [[13099,46,47,3043,2963],[13085,47,48,3114,3051],[13094,44,55,3546,2836]])
+    for (const [id,row,col,x,y] of bodies)
      actor.c.room.objects.set(id,{...f.rock,id,row,col,x,y});
    }
    let paths=0;
@@ -222,8 +227,8 @@ try{
     rememberSurvivalJam:()=>{},blinkPastSurvivalJam:async()=>false,lureSparedBlocker:async()=>false,armedForSure:()=>true,
     takeRecoverySpot:async(why,opts)=>{paths++;assert.equal(opts.decisionId,retry.id);},
    });
-   const retry=chooseSurvivalDecision(s,{strategy:'route_refuge',reason:'shelter approach made no confirmed route progress',
-    reason_code:'approach_interrupted',source:'travel',replan_count:1});
+   const retry=chooseSurvivalDecision(s,{strategy,reason:'shelter approach made no confirmed route progress',
+    reason_code:'approach_interrupted',source:strategy==='route_refuge'?'travel':'recovery',replan_count:1});
    if(helper)await configureCooperativeLogoff(f.b.pilot,'helper');
    return {...f,retry,paths:()=>paths,step:()=>Autopilot.prototype.continueSurvivalDecisionStep.call(pilot)};
   };
@@ -232,6 +237,24 @@ try{
   assert.equal(rescued.paths(),0,'no second 44-step refuge before an admitted rescue');
   assert.equal(rescued.counts().rejoins,1);
   assert.deepEqual(rescued.store().read('request',rescued.a.s.name).targets.map(t=>t.id),[13099,13085,13094]);
+
+  // Rizzo's local recovery used nearest_refuge for the same no-progress cancellation.
+  const rizzo={
+   strategy:'nearest_refuge',at:{row:39,col:54,x:3471,y:2511},health:{value:36,max:122},
+   bodies:[[16833,38,54,3497,2449],[17176,39,50,3230,2535],[17160,46,53,3432,2965]],
+  };
+  const local=await stalled('rizzo-pending-retry',true,rizzo);
+  assert.equal(await local.step(),true);
+  assert.equal(local.paths(),0,'no second 33-step refuge before an admitted rescue');
+  assert.equal(local.counts().rejoins,1);
+  assert.deepEqual(local.store().read('request',local.a.s.name).targets.map(t=>t.id),[16833,17176,17160]);
+
+  const localRefused=await stalled('rizzo-no-helper',false,rizzo);
+  assert.equal(await localRefused.step(),true);
+  assert.equal(localRefused.paths(),1);
+  assert.equal(localRefused.counts().rejoins,0);
+  assert.equal(currentSurvivalDecision(localRefused.a.s),localRefused.retry);
+  assert.equal(localRefused.retry.replan_count,1);
 
   for(const [label,helper,configure,expectedPaths] of [
    ['no-helper',false,()=>{},1],
