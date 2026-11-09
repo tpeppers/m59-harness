@@ -15,6 +15,7 @@
 // healed; a body that comes back OFF a spot flees to the nearest reachable one first (staysPut), and a refused logoff is
 // replaced by something that moves it (spentLogoffReplacement). Persisted per character (substrate/.healing/), so a keeper
 // handoff cannot hand out a second logoff.
+// A later emergency can use cooperation after a separate, verified full recovery, without rearming routine logoffs.
 // Pure apart from the small file.
 import { readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -32,6 +33,7 @@ export const SESSION_MAX_MS = 2 * 3_600_000;
 // shorter than this.
 export const SESSION_MIN_MS = Number(process.env.M59_HEALING_MIN_MS || 5 * 60_000);
 const fileOf = (agent, dir) => join(dir, `${String(agent ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+const recoveredAfterLogoff = (s, now) => s?.logoffs === 1 && s.recovered_at > s.last_logoff_at && s.recovered_at <= now;
 
 // A keeper always has a name; a nameless one is a test fake or a body not yet logged in, and gets no session -- one
 // shared 'unknown' file would hand every such fake the same spent logoff.
@@ -61,15 +63,32 @@ export function closeIfHealed(agent, { hp = null, max = null, dir = healingDir()
   if (settled && Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp >= max) { writeSession(agent, null, dir); return null; }
   return s;
 }
-/** May this body play dead (log off) now? Only if no logoff has happened in the open session. */
-export function mayLogoff(agent, { dir = healingDir(), now = Date.now() } = {}) {
+/** Record a real recovery after the logoff, so a later emergency can request fleet assistance. */
+export function noteHealingRecovery(agent, { decision, health, dir = healingDir(), now = Date.now() } = {}) {
+  const max = health?.max, low = decision?.min_hp;
+  if (!Number.isFinite(max) || health.value !== max || decision?.hp?.max !== max ||
+      !Number.isFinite(low) || low <= 0 || low >= max || decision.strategy !== 'rest_safe' ||
+      decision.status !== 'recovering' || !Number.isFinite(decision.chosen_at) || decision.chosen_at > now) return false;
   const s = readSession(agent, { dir, now });
+  if (s?.logoffs !== 1 || s.recovered_at != null || !Number.isFinite(s.last_logoff_at) ||
+      decision.chosen_at <= s.last_logoff_at) return false;
+  s.recovered_at = now;
+  writeSession(agent, s, dir);
+  return true;
+}
+
+/** Routine logoffs keep the five-minute guard. A completed recovery can rearm cooperation only. */
+export function mayLogoff(agent, { afterRecovery = false, dir = healingDir(), now = Date.now() } = {}) {
+  const s = readSession(agent, { dir, now });
+  if (afterRecovery) return recoveredAfterLogoff(s, now);
   return !s || !(s.logoffs >= 1);
 }
 /** Record the logoff, opening the session if none is open. `cooperative`: a fleet-mate's distraction logoff. */
 export function noteLogoff(agent, { why = null, room = null, cooperative = false, dir = healingDir(), now = Date.now() } = {}) {
   if (!named(agent)) return null;
-  const s = readSession(agent, { dir, now }) ?? { started_at: now, logoffs: 0 };
+  const prior = readSession(agent, { dir, now });
+  const newEpisode = cooperative && recoveredAfterLogoff(prior, now);
+  const s = newEpisode || !prior ? { started_at: now, logoffs: 0 } : prior;
   s.logoffs = (s.logoffs ?? 0) + 1; s.last_logoff_at = now; s.why = why; s.room = room;
   if (cooperative) s.cooperative = true;
   writeSession(agent, s, dir);

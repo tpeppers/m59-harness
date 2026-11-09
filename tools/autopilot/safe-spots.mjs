@@ -13,7 +13,7 @@
 //   recoverFromTravelFallback, recordSurvivalPath, currentRecoveryWall, adoptRecoveryWall,
 //   continueSurvivalDecision, continueSurvivalDecisionStep, leaveRoomForRecovery, blinkPastSurvivalJam,
 //   takeRecoverySpot, watchRecoveryApproach, takeSafeSpotObserved
-import { spentSessionExit } from '../m59-healing-session.mjs';
+import { noteHealingRecovery, spentSessionExit } from '../m59-healing-session.mjs';
 import { keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import { affordableHeal, castRecoveryHeal } from '../m59-recovery-heal.mjs';
@@ -413,6 +413,12 @@ export class SafeSpotsPart {
     }
     const scriptedReady=scriptedWalkDefersVigorRest(this,v),farmReady=farmVigorWorkReady(this,v);
     if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80 || scriptedReady || farmReady) {
+      const hold=this.hold, refuge=d.chosen_refuge;
+      if (d.strategy==='rest_safe' && d.status==='recovering' && hp===1 && hold?.proven===true &&
+          hold.room===s.world?.room?.num && refuge?.room===hold.room && refuge.row===hold.row && refuge.col===hold.col &&
+          s.client?.combatReady===true && s.client.ailments?.()?.length===0 && this.currentRecoveryWall()) {
+        noteHealingRecovery(String(s.name??''),{decision:d,health:v.health});
+      }
       finishSurvivalDecision(s,d.id,'recovered',farmReady?'healthy farm ready above its effective fighting vigor floor':scriptedReady?'scripted journey health and road vigor restored':'health and resting vigor restored');return false;
     }
     // A director leases movement for its entire run, while survival/recovery remain

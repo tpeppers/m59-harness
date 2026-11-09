@@ -55,6 +55,12 @@ console.log('a logoff at FULL health is still the session\'s one logoff');
   H.noteLogoff('robin', { why: 'logging off rather than dying', now: t0 });
   H.closeIfHealed('robin', { hp: 79, max: 79, now: t0 + 3000 });
   ok('full health three seconds after the logoff does not close the session', !H.mayLogoff('robin', { now: t0 + 3000 }));
+  const recovery = { strategy: 'rest_safe', status: 'recovering', chosen_at: t0 + 1000, hp: { max: 79 }, min_hp: 79 };
+  const proof = { health: { value: 79, max: 79 }, now: t0 + 3000 };
+  ok('a wall decision with only full-health readings cannot re-arm cooperation',
+    !H.noteHealingRecovery('robin', { ...proof, decision: recovery }));
+  ok('a low reading from before the logoff cannot re-arm cooperation',
+    !H.noteHealingRecovery('robin', { ...proof, decision: { ...recovery, chosen_at: t0 - 1000, min_hp: 60 } }));
   H.closeIfHealed('robin', { hp: 79, max: 79, now: t0 + 68_000 });
   ok('nor a minute later (the breakout came at +68 s)', !H.mayLogoff('robin', { now: t0 + 68_000 }));
   H.closeIfHealed('robin', { hp: 79, max: 79, now: t0 + H.SESSION_MIN_MS + 1 });
@@ -85,6 +91,66 @@ const { Autopilot } = await import('./m59-autopilot.mjs');
   let reached = false; k.suspendJourney = () => { reached = true; throw new Error('stop'); };
   await k.playDead('healed, then hit again').catch(() => {});
   ok('healed to full: the next playDead is allowed through', reached);
+}
+
+console.log('a proved recovery re-arms cooperative rescue while routine reconnects stay blocked');
+{
+  const { chooseSurvivalDecision } = await import('./m59-survival-decision.mjs');
+  const { configureCooperativeLogoff, cooperativeStore } = await import('./m59-cooperative-logoff.mjs');
+  const { OF } = await import('./m59-parse.mjs');
+  const party = await import('./m59-party.mjs');
+  const directory = join(process.env.M59_HEALING_DIR, 'cooperation');
+  const bodies = [
+    { id: 1, nameRsc: 'Victim', flags: OF.PLAYER, row: 10, col: 10 },
+    { id: 2, nameRsc: 'Helper', flags: OF.PLAYER, row: 10, col: 11 },
+    { id: 3, nameRsc: 'mollusk creature', flags: OF.ATTACKABLE, row: 11, col: 10 },
+  ];
+  const actor = (name, body, vitals, ailments) => ({ name, live: true, movementGeneration: 1,
+    credentials: { host: 'fixture.invalid', port: 15959 }, fleetStateFile: join(directory, 'fleet.json'),
+    cooperativeLogoffDirectory: directory, world: { room: { num: 552 } },
+    client: { combatReady: true, self: body, selfId: body.id, me: { name: body.nameRsc }, vitals, ailments,
+      room: { id: 827, objects: new Map(bodies.map(o => [o.id, o])) }, rsc: { get: x => x } },
+    _askStrategies: async () => ({ strategy: 'fixture-private', answer: { enabled: true, helper_health: 1 } }),
+  });
+  const vitals = value => ({ health: { value, max: 100 }, vigor: { value: 180 } });
+  let health = 86, ailments = [], atWall = true, reconnects = 0;
+  const s = actor('recovered-victim', bodies[0], () => vitals(health), () => ailments);
+  const helper = actor('recovered-helper', bodies[1], () => vitals(100), () => []);
+  const wall = { room: 552, row: 10, col: 10, proven: true };
+  const k = Object.assign(Object.create(Autopilot.prototype), { s, tally: {}, hold: wall,
+    policy: { fleeBelow: .4, breakOutViaLogoff: true },
+    safety: () => ({ fleeAt: .5 }),
+    threat: () => ({ near: [1, 2], engaged: 2, names: ['mollusk creature'] }),
+    currentRecoveryWall: () => atWall ? wall : null, sessionSpotHere: () => atWall,
+    operatorSurvivalStandDown: () => false, suspendJourney: () => {}, resumeCooperativeReturn: async () => {},
+    inReachOfUs: () => [bodies[2]], note: () => {}, reconnect: async () => { reconnects++; return { ok: true }; },
+  });
+  party.setRosterSource(() => new Set(['Victim', 'Helper']));
+  try {
+    H.noteLogoff(s.name, { why: 'breaking out of a crowded safe spot', room: 552, now: Date.now() - 20_000 });
+    chooseSurvivalDecision(s, { strategy: 'rest_safe', status: 'recovering', chosen_refuge: wall });
+    health = 100;
+    await k.continueSurvivalDecisionStep();
+    ok('a post-logoff recovery from 86 to full at a proven wall re-arms cooperation', H.mayLogoff(s.name, { afterRecovery: true }));
+    ok('a routine crowded-wall breakout still cannot log off at full', !(await k.breakOut('leaving the wall')).did && reconnects === 0);
+    atWall = false; k.hold = null; health = 48;
+    const newDanger = () => chooseSurvivalDecision(s, { strategy: 'logoff_open', status: 'pending', reason: 'failed refuge', replan_count: 1 });
+    newDanger();
+    ok('no admitted helper leaves the recovery evidence intact', !(await k.fleetLogoff('no helper', { afterRecovery: true })) &&
+      H.mayLogoff(s.name, { afterRecovery: true }));
+    await configureCooperativeLogoff({ s: helper, inReachOfUs: () => [bodies[2]] }, 'helper');
+    health = 51;
+    ok('the re-arm cannot be used above the flee line', !(await k.fleetLogoff('still above the line', { afterRecovery: true })));
+    health = 48; ailments = [{ name: 'poison' }];
+    ok('the re-arm cannot be used to start a poison relog loop', !(await k.fleetLogoff('poisoned', { afterRecovery: true })));
+    ailments = [];
+    ok('the later emergency admits a cooperative request and consumes exactly one logoff',
+      await k.playDead('renewed danger after completed recovery') && reconnects === 1 &&
+      cooperativeStore(s).read('request', s.name)?.state === 'preparing' && H.readSession(s.name)?.logoffs === 1 &&
+      !H.mayLogoff(s.name, { afterRecovery: true }));
+    newDanger();
+    ok('the new healing session still refuses repeated rescue while hurt', !(await k.playDead('same emergency, still hurt')) && reconnects === 1);
+  } finally { party.setRosterSource(null); }
 }
 
 console.log('every logoff records itself, and the loop is gone');

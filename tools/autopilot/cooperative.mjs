@@ -117,7 +117,7 @@ export class CooperativePart {
     this.farmStrategyHook('onKill',{creature:f.target,room:request.room,looted:[]});
   }
 
-  async fleetLogoff(why) {
+  async fleetLogoff(why, { afterRecovery = false } = {}) {
     // A NEEDLE KEEPER DOES NOT LOG OFF FOR A DISTRACTION (live 2026-11-06: Camilla went NOT IN GAME at 23:30:44Z and
     // 23:42:08Z, "rejoin: cooperative logoff: wait for distraction", from a threat-0 archer station). Its square is one no
     // monster in reach can see; it stays in the game and the rest of the ladder decides.
@@ -126,9 +126,22 @@ export class CooperativePart {
         this.note('no cooperative logoff: holding a needle slot',{why,room:this.s?.world?.room?.num});}
       return false;
     }
-    const s=this.s,offered=await configureCooperativeLogoff(this,'request');
-    const request=offered&&requestCooperativeLogoff(this,offered);
+    const s=this.s,client=s.client,generation=s.movementGeneration,room=s.world?.room?.num;
+    const decisionId=currentSurvivalDecision(s)?.id;
+    const eligible=()=>{
+      const active=currentSurvivalDecision(s),health=pct(client?.vitals?.()?.health);
+      return s.live && s.client===client && s.movementGeneration===generation && s.world?.room?.num===room &&
+        client?.combatReady===true &&
+        !this.operatorSurvivalStandDown() && !s.combat?.active?.pvp &&
+        active?.id===decisionId && active?.strategy==='logoff_open' && active.status==='pending' &&
+        health>0 && health<this.safety().fleeAt && client.ailments?.()?.length===0 && !this.currentRecoveryWall() &&
+        mayLogoff(String(s.name??''),{afterRecovery:true});
+    };
+    if(afterRecovery && !eligible())return false;
+    const offered=await configureCooperativeLogoff(this,'request');
+    const request=offered&&(!afterRecovery||eligible())&&requestCooperativeLogoff(this,offered);
     if(!request)return false;
+    if(afterRecovery)this.suspendJourney(why);
     const decision=chooseSurvivalDecision(s,{strategy:'logoff_open',reason:why,
       reason_code:'cooperative_logoff',status:'active',mitigation:'wait offline for confirmed fleetmate distraction hits'},
       {because:'private cooperative strategy and a controlled fleetmate in this room'});
@@ -187,6 +200,10 @@ export class CooperativePart {
       const me=String(this.s?.name??''),h=this.s.client?.vitals?.()?.health;
       closeIfHealed(me,{hp:h?.value,max:h?.max});
       if(!mayLogoff(me)){
+        if(mayLogoff(me,{afterRecovery:true})){
+          try { if(await this.fleetLogoff(why,{afterRecovery:true}))return true; }
+          catch(e) { this.note('cooperative logoff unavailable',{why:e.message}); }
+        }
         if(!this._oneLogoffSaid){this._oneLogoffSaid=true;
           this.note('not logging off again this healing session',{why,
             rule:'one play-dead logoff per healing session, until healed to full; keep the spot and heal'});}
