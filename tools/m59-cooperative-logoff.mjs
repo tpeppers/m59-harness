@@ -179,7 +179,7 @@ export async function configureCooperativeLogoff(pilot,phase) {
 
 function oceanRockThreats(pilot, objects) {
   const { client, world } = pilot.s;
-  if (pilot.mode !== 'farm' || pilot.policy?.molluskCoverRecovery !== true ||
+  if (!['farm', 'idle', 'survive'].includes(pilot.mode) || pilot.policy?.molluskCoverRecovery !== true ||
       world?.room?.num !== 552 || client?.combatReady !== true) return [];
   const geo = world.geometry, self = position(client.self);
   if (!self || !geo?.collisionReady || !Number.isInteger(geo.security) ||

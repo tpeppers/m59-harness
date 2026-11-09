@@ -111,6 +111,13 @@ try{
   f.a.pilot.policy.molluskCoverRecovery = false;
   assert.deepEqual((await offer()).ctx.monsters, []);
   f.a.pilot.policy.molluskCoverRecovery = true;
+  for (const mode of ['idle', 'survive']) {
+   f.a.pilot.mode = mode;
+   assert.deepEqual((await offer()).ctx.monsters, [{ id: mollusk.id, name: mollusk.nameRsc }]);
+  }
+  f.a.pilot.mode = 'train';
+  assert.deepEqual((await offer()).ctx.monsters, []);
+  f.a.pilot.mode = 'farm';
   await configureCooperativeLogoff(f.b.pilot, 'helper');
   const request = requestCooperativeLogoff(f.a.pilot, await offer());
   assert.deepEqual(request?.targets.map(t => t.id), [mollusk.id]);
