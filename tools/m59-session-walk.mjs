@@ -45,6 +45,7 @@ import { recordEvent } from './m59-ledger.mjs';
 import {waitForVerticalSettlement} from './m59-vertical-motion.mjs';
 import {withProvenRefugeLeg} from './m59-refuge-leg.mjs';
 import {turnAtProvedRefuge} from './m59-refuge-activation.mjs';
+import {recoveryOccupiedSquares} from './m59-recovery-refuge.mjs';
 import { chooseTrafficBlink } from './m59-blink-rung.mjs';
 import { recallTrack, tracksLeavingBy, strikeTrack, clearStrikes, loadTracks } from './m59-tracks.mjs';
 import { sheltersAlong, shelterAhead } from './m59-safespots.mjs';
@@ -529,7 +530,11 @@ export function sessionWalkPrototype(deps) {
           // anything behind that, because a character got hurt somewhere and walking back
           // through it to a wall it has already passed is a longer way to die.
           const at = planSteps.length - remaining.length;
-          const stop = shelterAhead(shelter.spots, at, { maxDetour: shelter.maxDetour ?? 5 });
+          // The route was planned earlier. Reject a wall now occupied by a
+          // live body before adding an otherwise avoidable recovery detour.
+          const occupied = recoveryOccupiedSquares(c.room.objects, c.selfId, c.playersOnline);
+          const available = shelter.spots.filter(spot => !occupied.has(`${spot.row},${spot.col}`));
+          const stop = shelterAhead(available, at, { maxDetour: shelter.maxDetour ?? 5 });
           if (stop) {
             divertedTo = stop; diverted++;
             // ONE MORE WAYPOINT, NOT A NEW PLAN. The rest of the route is untouched and is

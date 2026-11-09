@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {Session} from './m59-game.mjs';
 import {Autopilot,HANDLED} from './m59-autopilot.mjs';
 import {protocolToClient} from './m59-roo.mjs';
+import {OF} from './m59-parse.mjs';
 import {attachSurvivalDecisions,currentSurvivalDecision,chooseSurvivalDecision} from './m59-survival-decision.mjs';
 let passed=0,failed=0;
 async function test(name,fn){try{await fn();passed++;console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+': '+e.message);}}
@@ -138,6 +139,23 @@ await test('a real refuge requires actual onward progress before another routine
  await Session.prototype.walkPivots.call(s,route,geo,{shelter,maxMoves:7});
  assert.deepEqual(events.slice(0,9),['divert 11','step 11','arrive 11','deferred','step 11','deferred','step 12','divert 13','step 13']);
  assert.equal(events.at(-1),'arrive 13');
+});
+await test('a live body on a planned refuge sends the walker to the next free wall', async () => {
+  const route = [{row:7,col:72}, {row:7,col:73}, {row:7,col:74}];
+  const occupied = {id:4461, flags:OF.PLAYER, row:8, col:73, x:4704, y:528};
+  const corpse = {id:601, flags:0, row:7, col:73};
+  const c = {selfId:10, self:{row:7,col:71,x:4576,y:480},
+    room:{id:552,objects:new Map([[occupied.id,occupied], [corpse.id,corpse]])}};
+  const geo = {standPoint:(row,col)=>clientPoint({x:col*64+32,y:row*64+32}),
+    stringPull:points=>({points,proved:points.slice(1).map(()=>false)})};
+  const stops = [];
+  let cancelled = false;
+  const s = {client:c,need:()=>c,movementGeneration:0,movementWasCancelled:()=>cancelled,
+    step:async(col,row)=>{c.self={row,col,x:col*64+32,y:row*64+32};return {moved:true};}};
+  const shelter = {spots:[{row:8,col:73,atStep:0,detour:0}, {row:7,col:73,atStep:1,detour:0}],need:()=>true,
+    onDivert:spot=>stops.push(spot),onArrive:async()=>{cancelled=true;}};
+  await Session.prototype.walkPivots.call(s,route,geo,{shelter,maxMoves:4});
+  assert.deepEqual(stops, [shelter.spots[1]]);
 });
 for(const waiting of ['shelter','backoff'])await test('farming cannot replace a journey waiting for '+waiting,async()=>{
  const f=keeperFixture();if(waiting==='backoff')f.k.suspendedJourney.next_try_at=Date.now()+5000;
