@@ -204,6 +204,43 @@ console.log('a broken rest inside a spent session keeps the spot');
   ok('and it says why', notes.some(n => /staying put/.test(n.w)));
 }
 
+console.log('an Ocean rest with fresh attack evidence leaves a failed wall within the same session');
+{
+  const { loadMap, CHECKED_MAP_FILE } = await import('./m59-map.mjs');
+  const { sharedRoomGeometry } = await import('./m59-roo.mjs');
+  const { OF } = await import('./m59-parse.mjs');
+  const room = loadMap(CHECKED_MAP_FILE).rooms[552];
+  const geometry = sharedRoomGeometry(room);
+  const mollusk = { id: 11790, nameRsc: 'mollusk creature', flags: OF.ATTACKABLE,
+    row: 55, col: 41, x: 2653, y: 3567 };
+  for (const [name, proof, melee, expectedMoves] of [
+    ['ocean-rest-ranged', true, false, 1],
+    ['ocean-rest-melee', true, true, 1],
+    ['ocean-rest-stale', false, false, 0],
+    ['ocean-rest-no-progress', true, false, 0],
+  ]) {
+    H.noteLogoff(name, { why: 'prior healing logoff' });
+    const c = { combatReady: true, selfId: 100, self: { id: 100, row: 49, col: 44, x: 2848, y: 3168 },
+      room: { id: 1416, security: geometry.security, objects: new Map(melee ? [] : [[mollusk.id, mollusk]]) },
+      rsc: { get: x => x }, vitals: () => ({ health: { value: 84, max: 122 } }) };
+    let moves = 0, failures = 0, reconnects = 0;
+    const k = Object.assign(Object.create(Autopilot.prototype), {
+      s: { name, live: true, client: c, world: { room, geometry },
+        lastFleetDamage: { client: c, bodyId: c.selfId, roomId: c.room.id, at: Date.now() - (proof ? 0 : 6000) } },
+      mode: 'farm', policy: { molluskCoverRecovery: true }, tally: {},
+      hold: { row: 49, col: 44, room: 552, proven: true },
+      inReachOfUs: () => melee ? [mollusk] : [],
+      note: () => {}, progress: () => {},
+      releaseHold: () => { k.hold = null; }, noteFailedRestSpot: () => { failures++; },
+      reconnect: async () => { reconnects++; return { ok: true }; },
+      takeRecoverySpot: async () => { moves++; return { took: true }; },
+    });
+    await k.restBroken(room, [], { interruptedByAttack: name !== 'ocean-rest-no-progress' });
+    ok(name, moves === expectedMoves && failures === expectedMoves && !!k.hold === !expectedMoves &&
+       reconnects === 0 && H.readSession(name)?.logoffs === 1, JSON.stringify({ moves, failures, reconnects }));
+  }
+}
+
 console.log('off a safe spot it never stands still: it flees to the nearest reachable one');
 {
   // Operator, 2026-10-27: "if it logs in and it's not in a safe spot it basically should never stay still: the log-off

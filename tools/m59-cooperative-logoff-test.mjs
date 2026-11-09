@@ -325,7 +325,8 @@ try{
  {
   const f=fixture('native-play-dead');await configureCooperativeLogoff(f.b.pilot,'helper');
   const p=f.a.pilot;
-  Object.assign(p,{operatorSurvivalStandDown:()=>false,suspendJourney(){},adoptRecoveryWall:()=>false,playerThreatPresent:()=>false,
+  Object.assign(p,{operatorSurvivalStandDown:()=>false,oceanRangedRecoveryEnabled:()=>false,
+   suspendJourney(){},adoptRecoveryWall:()=>false,playerThreatPresent:()=>false,
    fleetLogoff:Autopilot.prototype.fleetLogoff,reconnect:Autopilot.prototype.reconnect,
    resumeCooperativeReturn:Autopilot.prototype.resumeCooperativeReturn});
   let recoveryCalls=0;
@@ -476,13 +477,16 @@ try{
   const f=fixture('gone-mixed');
   for(const actor of [f.a,f.b])actor.c.room.objects.set(41,{id:41,nameRsc:'narthyl worm',flags:OF.ATTACKABLE,row:10,col:11});
   await f.setup();const r=f.offline(),T=r.offline_at+1000;
-  f.b.c.room.objects.delete(41);watch(f,T,T+15000);
-  await assert.rejects(gate(f,T+15100),/still waiting/,'one gone target does not release a victim with another live attacker');
+  assert.deepEqual(r.targets.map(t=>t.id),[40,41]);
+  f.b.c.room.objects.delete(40);
   let hit;f.b.pilot.fightNow=async o=>(hit=o.exactTargetId,{target_id:o.exactTargetId,landed_hits:1});
-  assert(await cooperativeAssist(f.b.pilot,{now:()=>T+15000}));assert.equal(hit,40,'the helper does not chase the gone target');
-  const receipts=f.store().read('request','victim').receipts;assert.equal(receipts[41].kind,'gone');assert.equal(receipts[40].landed_hits,1);
+  assert(await cooperativeAssist(f.b.pilot,{now:()=>T}));assert.equal(hit,41,'a missing first target does not block a live second target');
+  const receipts=f.store().read('request','victim').receipts;assert.equal(receipts[40],undefined);assert.equal(receipts[41].landed_hits,1);
+  await assert.rejects(gate(f,T+100),/still waiting/,'the missing first target still requires its own proof');
+  watch(f,T,T+15000);
+  assert.equal(f.store().read('request','victim').receipts[40].kind,'gone');
   await gate(f,T+15100);assert.equal(f.store().read('request','victim').state,'returning');
-  console.log('PASS one hit target plus one gone target together satisfy the gate');
+  console.log('PASS a missing first target does not block distraction of a live target, and both still need proof');
  }
  {
   const norm=(await import('./m59-cooperative-logoff.mjs')).normalizeCooperativeLogoff;

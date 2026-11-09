@@ -8,14 +8,17 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 17 methods: reagentCount, overfarmScale, overfarmHoldsTrip, supplyShortfall, cookSomething,
-//   makeWeapon, armSelf, rouletteTarget, trainingWeaponRoulette, knowsCreateWeapon,
+// 18 methods: reagentCount, overfarmScale, overfarmHoldsTrip, supplyShortfall, cookSomething,
+//   makeWeapon, clearShatteredWeaponSpace, armSelf, rouletteTarget, trainingWeaponRoulette, knowsCreateWeapon,
 //   wearLootedArmour, savedArmourName, wearIntoEmptySlots, wearArmourIfNeeded, startOverdrive,
 //   endOverdrive, recordAte
 import { withCastRite } from '../m59-castrite.mjs';
 import { clearConjureHoard } from '../m59-conjure-cleanup.mjs';
+import { idsCurrent } from '../m59-idgen.mjs';
+import { saleBlocked } from '../m59-inventory-intent.mjs';
+import { weighItem } from '../m59-items.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
-import { wantsOf } from '../m59-loadout.mjs';
+import { keepTest, wantsOf } from '../m59-loadout.mjs';
 import * as skills from '../m59-skills.mjs';
 import { CONJURABLE_WEAPONS, CONJURED_WEAPON_BULK, CONJURE_HOARD_LIMIT, CREATE_FOOD_MANA, ROULETTE_UNTIL, SPELL_EXERTION_VIGOR, conjurePowerEstimate, pct, vigorOf } from '../m59-autopilot.mjs';
 
@@ -293,7 +296,8 @@ export class GearPart {
     // unknown load still attempts the cast. Certainty in one direction only.
     const cap = skills.carryCapacity(c);
     const bulkFree = cap?.room_for?.bulk ?? null;
-    if (bulkFree != null && bulkFree < CONJURED_WEAPON_BULK)
+    const bulkShort = bulkFree != null && bulkFree < CONJURED_WEAPON_BULK;
+    if (bulkShort && !await this.clearShatteredWeaponSpace(bulkFree).catch(() => false))
       return this.declinedCast('create weapon', 'no room for the weapon',
         { bulk_free: bulkFree, needs: CONJURED_WEAPON_BULK,
           why: 'ReqNewHold refuses on bulk and creaweap.kod deletes the weapon after the ' +
@@ -324,7 +328,7 @@ export class GearPart {
     let held = new Set(), keepNames = [];
     try { held = this.heldBackIds?.(c) ?? new Set(); } catch { held = new Set(); }
     try { keepNames = this.protectedItemNames?.() ?? []; } catch { keepNames = []; }
-    await skills.freeRoomFor(s, {
+    if (!bulkShort) await skills.freeRoomFor(s, {
       precious: d => held.has(Number(d.id)) || skills.itemIsProtected(d.name, keepNames),
     }).catch(() => null);
     const had = new Set((c.inventory || []).map(o => o.id));
@@ -389,6 +393,57 @@ export class GearPart {
       caveat: 'a made weapon is temporary — it buys this fight and the walk to a shop' });
     this.progress('armed itself');
     return true;
+  }
+
+  // A shattered spare can block the cast before the usual cleanup runs. In sanctuary,
+  // clear just one confirmed weapon that can make the cast fit. Mend refuses at zero hits.
+  async clearShatteredWeaponSpace(bulkFree) {
+    const s = this.s, c = s.client;
+    const room = s.world?.room?.num, generation = s.movementGeneration;
+    const idEpoch = c.idsAsOf?.();
+    const sameIds = () => {
+      const live = c.idsAsOf?.();
+      return idsCurrent(live) && live.saves_seen === idEpoch?.saves_seen && live.last_save_at === idEpoch?.last_save_at;
+    };
+    const ready = () => this.s === s && s.client === c && sameIds() &&
+      room != null && s.world?.room?.num === room && s.movementGeneration === generation &&
+      this.sanctuary() && this.policy.dropJunk !== false && !c.trade && !c.pvpGearActive && !s.combat?.active &&
+      !this.facultyHeld('economy') && c.equipment?.()?.known === true && !skills.isArmed(c);
+    const now = Date.now();
+    if (!ready() || !this.knowsCreateWeapon() || now - (this._shatteredSpaceAt ?? 0) < 30_000) return false;
+    const eligible = (item, name) => item.rarity === 0 && !skills.equippedNow(c)?.has(item.id) && !this.wontDrop?.has(item.id) &&
+      !this.heldBackIds(c).has(item.id) && !s.lootDisposition?.(item) && !saleBlocked(s, { id: item.id, name }) &&
+      !skills.isCursedItem(c, item, name) && !keepTest(this.loadout())?.(name) &&
+      !skills.itemIsProtected(name, [...(this.policy.protectedItems ?? []), ...(this.policy.vaultItems ?? []),
+        ...Object.keys(this._holderCargo?.items ?? {}), ...(this._curseCycleCfg?.keep ?? [])]);
+    const nameOf = item => c.rsc.get(item.nameRsc) || '';
+    const broken = skills.brokenSet(c);
+    const item = (c.inventory ?? []).find(item => {
+      if (!broken.has(item.id)) return false;
+      const name = nameOf(item);
+      return skills.weaponScore(name) > 0 && bulkFree + (weighItem(name)?.bulk ?? 0) >= CONJURED_WEAPON_BULK &&
+        eligible(item, name);
+    });
+    if (!item) return false;
+    const name = nameOf(item);
+    this._shatteredSpaceAt = now;
+    if (await skills.confirmBroken(s, item.id) !== 'broken') return false;
+    const sent = await s.pacer.submit('drop', () => {
+      const live = (c.inventory ?? []).find(o => o.id === item.id && o.nameRsc === item.nameRsc);
+      const free = skills.carryCapacity(c)?.room_for?.bulk ?? null;
+      if (!live || free == null || free >= CONJURED_WEAPON_BULK || free + weighItem(name).bulk < CONJURED_WEAPON_BULK ||
+          !ready() || !eligible(live, name)) return false;
+      c.drop([this.dropSpec(live)]);
+      return true;
+    });
+    if (sent !== true) return false;
+    const since = c.evSeq;
+    await s.pacer.submit('read', () => c.requestInventory());
+    const reply = await c.waitFor({ since, kinds: ['inventory'], timeoutMs: 3000 });
+    if (reply.timedOut || !sameIds() || (c.inventory ?? []).some(o => o.id === item.id)) return false;
+    const after = skills.carryCapacity(c)?.room_for?.bulk ?? null;
+    this.note('cleared shattered weapon for rearming', { item: name, id: item.id, bulk_free_before: bulkFree, bulk_free_after: after });
+    return ready() && after != null && after >= CONJURED_WEAPON_BULK;
   }
 
   // ARE WE ACTUALLY ARMED, and if not, fix it with what we are carrying or can cast.

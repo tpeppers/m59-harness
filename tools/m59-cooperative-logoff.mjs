@@ -500,11 +500,16 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
   const c=s.client,room=s.world.room.num;
   const requests=store.list('request').filter(r=>r.state==='offline'&&now()-r.offline_at>=800&&now()-(r.last_attempt_at??0)>=2000&&r.room===room&&r.room_object===c.room.id&&r.helpers.includes(s.name)).sort((a,b)=>a.created_at-b.created_at);
   for(const request of requests){
-    // A gone receipt carries `at`, not `hit_at`; reading hit_at off one would be NaN and never retry.
-    const target=request.targets.find(t=>{const x=request.receipts?.[t.id];return !x||!(now()-(x.kind==='gone'?x.at:x.hit_at)<30000);});
+    // Work on live targets while the absence observer collects proof for missing ones.
+    const target = request.targets.find(candidate => {
+      const receipt = request.receipts?.[candidate.id];
+      const receivedAt = receipt?.kind === 'gone' ? receipt.at : receipt?.hit_at;
+      if (receipt && now() - receivedAt < 30000) return false;
+      const object = c.room.objects.get(candidate.id);
+      return object && object.nameRsc === candidate.name_rsc && c.rsc.get(object.nameRsc) === candidate.name &&
+        (object.flags & OF.ATTACKABLE) && !(object.flags & OF.PLAYER);
+    });
     if(!target)continue;
-    const object=c.room.objects.get(target.id);
-    if(!object||object.nameRsc!==target.name_rsc||c.rsc.get(object.nameRsc)!==target.name||!(object.flags&OF.ATTACKABLE)||(object.flags&OF.PLAYER))continue;
     const lock=store.lock(room,()=>{const r=store.read('request',request.agent);if(r?.id!==request.id||r.state!=='offline'||r.claim&&r.claim.until>now())return null;
       r.claim={helper:s.name,token:randomUUID(),until:now()+config.attempt_ms+4000};store.write('request',r.agent,r);return r.claim;});
     if(!lock)continue;

@@ -1110,7 +1110,10 @@ export class PassSurvivalPart {
       // three seconds after the fact instead of at the end of the leash, which is the
       // entire point. Give the square up now rather than resting into it again on the
       // next pass and waiting for observe() to reach the same conclusion a minute later.
-      if (r.interrupted) { await this.restBroken(room, near).catch(() => {}); return HANDLED; }
+      if (r.interrupted) {
+        await this.restBroken(room, near, { interruptedByAttack: true }).catch(() => {});
+        return HANDLED;
+      }
 
       // AND A REST THAT GAINS NOTHING IS THE SAME EVIDENCE AS ONE THAT IS CUT SHORT.
       //
