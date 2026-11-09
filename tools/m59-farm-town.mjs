@@ -36,6 +36,7 @@
 //   * `keep` is never offered at these counters. It is a SALE exclusion only, not `protect`: a kept elderberry is still a
 //     spare a fleet-mate who ran dry may be handed (m59-sharing.mjs), which `protect` would forbid.
 //   * `sellReserve` makes only excess units available at those counters and enables pack-triggered sales without a banking threshold.
+//   * `sellOverflow` lets named reserve surpluses pass ordinary fleet wants. Personal and guild protections still apply.
 //
 // WHOLE ITEM NAMES, like lootOnly and the supply tool: "loaf of bread", not "bread" (the broker's resolveItemName refuses
 // the abbreviation and says what it meant). Seller names match the NPC's own name case-blind, as a word sequence, so
@@ -45,7 +46,7 @@
 import { itemNameKey } from './m59-items.mjs';
 
 export const FARM_TOWN_KINDS = Object.freeze(['food', 'weapons', 'armor', 'reagents']);
-const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep', 'sellReserve', 'hall', 'uncurse']);
+const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep', 'sellReserve', 'sellOverflow', 'hall', 'uncurse']);
 // The public door to the Barloque guild halls (the reagent coop enters the hall from here, m59-reagent-coop-runtime.mjs) and
 // Frular's room (the rent, m59-tithe.mjs FRULAR_ROOM). A farm town's `hall` road may leave the confinement for these three.
 export const NORTH_BARLOQUE = 101;
@@ -84,7 +85,7 @@ const plain = v => v !== null && typeof v === 'object' && !Array.isArray(v);
  */
 export function normalizeFarmTown(v, { resolveItem = null } = {}) {
   if (v === null || v === undefined) return null;
-  if (!plain(v)) throw new Error('town must be { name?, sell, buy, bank?, keep?, sellReserve?, hall?, uncurse? } or null');
+  if (!plain(v)) throw new Error('town must be { name?, sell, buy, bank?, keep?, sellReserve?, sellOverflow?, hall?, uncurse? } or null');
   for (const k of Object.keys(v)) if (!TOP_KEYS.includes(k)) throw new Error(`town: unrecognised key ${k} (known: ${TOP_KEYS.join(', ')})`);
   const out = { name: null, sell: [], buy: {}, bank: null, keep: [], hall: null, uncurse: null };
   if (v.name != null) { if (typeof v.name !== 'string' || !v.name.trim()) throw new Error('town.name must be a word'); out.name = v.name.trim(); }
@@ -132,6 +133,12 @@ export function normalizeFarmTown(v, { resolveItem = null } = {}) {
     if (entries.some(([, amount]) => !Number.isSafeInteger(amount) || amount < 0))
       throw new Error('town.sellReserve quantities must be nonnegative whole numbers');
     out.sellReserve = Object.fromEntries(names.map((name, i) => [name, entries[i][1]]));
+  }
+  if (v.sellOverflow != null) {
+    out.sellOverflow = itemList('town.sellOverflow', v.sellOverflow, resolveItem);
+    const reserved = new Set(Object.keys(out.sellReserve ?? {}).map(itemNameKey));
+    if (!out.sellOverflow.every(name => reserved.has(itemNameKey(name))))
+      throw new Error('town.sellOverflow requires a sellReserve quantity for every listed item');
   }
   // THE GUILD HALL INSTEAD OF A BANK (operator 2026-11-07: "let them deposit in the guild chest instead of banking").
   if (v.hall != null) {
@@ -244,8 +251,11 @@ export const farmTownKeep = (town, protect = []) =>
 export function farmTownSaleLoadout(town, loadout, spellFloors = new Map()) {
   if (!town?.sellReserve) return loadout;
   const base = loadout ?? { keep: [], sell: [], gear: { weapon: [], slots: {} } };
-  const minima = Object.entries(town.sellReserve).map(([item, min]) =>
-    ({ item, min: Math.max(min, spellFloors.get(item) ?? 0), match: 'exact' }));
+  const overflow = new Set((town.sellOverflow ?? []).map(itemNameKey));
+  const minima = Object.entries(town.sellReserve).map(([item, amount]) => {
+    const min = Math.max(amount, spellFloors.get(item) ?? 0);
+    return { item, min, match: 'exact', ...(overflow.has(itemNameKey(item)) ? { max: min, merchantOnly: true } : {}) };
+  });
   return { ...base, carry: [...(base.carry ?? []), ...minima] };
 }
 

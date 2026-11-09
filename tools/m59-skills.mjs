@@ -4152,13 +4152,19 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
   const held=[];
   const excluded = new Set([...(exclude ?? [])].map(Number));
   const remaining = pack.map(x => ({ ...x }));
+  const merchantOverflow = new Set((loadout?.carry ?? []).filter(entry=>entry.merchantOnly).map(entry=>itemNameKey(entry.item)));
+  const dropLoadout = merchantOverflow.size ? { ...loadout, carry: loadout.carry.filter(entry=>!entry.merchantOnly) } : loadout;
   const candidates=pack.filter(x=>x.name).map(x=>{
     const normal=sellable({name:x.name,worn:x.equipped,keepRe,loadout,armoured,pack});
-    const allowance=saleAllowance(loadout,x.name,remaining);
+    // The live pack represents uncounted objects as zero, but a zero in this
+    // simulated pack means a prior planned sale consumed the entire row.
+    const remainingPack=remaining.filter(item=>item.amount>0);
+    const allowance=saleAllowance(loadout,x.name,remainingPack);
     const saleAmount=Math.min(x.amount,allowance.amount);
     const disposition=s.lootDisposition?.(x.o);
     const recommended=disposition ? disposition.action==='sell' : equipment.sell.has(x.id)||(!equipment.keep.has(x.id)&&normal.sell);
     let blocked=error||(!equipped?'equipment is not known':null);
+    let merchantOnly=false;
     if(excluded.has(Number(x.id)))blocked='held out of the offer by the caller';
     else if(itemIsProtected(x.name,protect))blocked='protected item';
     else if(equipment.keep.has(x.id))blocked=equipment.keep.get(x.id);
@@ -4167,9 +4173,13 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
     // low price. `c._madeItemIds` is the keeper's READING of "shimmers insubstantially"
     // (m59-weapon-magic.mjs); an item nobody has looked at is offered as before.
     else if(c._madeItemIds instanceof Set&&c._madeItemIds.has(x.id))blocked='conjured (IA_MADE): no merchant takes a made item';
-    else if(!allowance.overflow&&!equipment.sell.has(x.id)&&interest.anyoneWants(x.name,{except:s.name})) {
-      blocked='wanted by the fleet';
-      if(recommended)held.push({name:x.name,wanted_by:interest.wantedBy(x.name,{except:s.name})});
+    else if(!equipment.sell.has(x.id)&&(!allowance.overflow||merchantOverflow.has(itemNameKey(x.name)))&&
+            interest.anyoneWants(x.name,{except:s.name})) {
+      if(allowance.overflow) merchantOnly=!saleAllowance(dropLoadout,x.name,remainingPack).overflow;
+      else {
+        blocked='wanted by the fleet';
+        if(recommended)held.push({name:x.name,wanted_by:interest.wantedBy(x.name,{except:s.name})});
+      }
     }
     // Explicit clicks may nominate ordinary carried loot, but do not override
     // configured keep floors or reserve lists, equipped gear, or fleet needs.
@@ -4183,7 +4193,8 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
     const role=weaponScore(x.name)>0?'weapon':slot==='armour'?'armor':
       slot==='shield'?'shield':slot==='helm'?'helmet':foods.has(x.id)?'food':'other';
     // Intent metadata carries appearance, never grants an action capability.
-    return {...x,sale_amount:saleAmount,role,actions:[],recommended,blocked,disposition,reason:disposition?.reason||equipment.sell.get(x.id)||normal.why};
+    return {...x,sale_amount:saleAmount,role,actions:[],recommended,blocked,disposition,
+      ...(merchantOnly ? { merchant_only: true } : {}),reason:disposition?.reason||equipment.sell.get(x.id)||normal.why};
   });
   return {identity,revision:doc?.revision??0,items:planInventory(candidates,doc),held,error};
 }
