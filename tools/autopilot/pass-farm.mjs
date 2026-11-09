@@ -12,6 +12,7 @@
 //   recordFarmFightOutcome
 import {cooperativePass} from '../m59-cooperative-combat.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
+import { tryFarmFoodCache } from '../m59-farm-food-cache.mjs';
 import { publishGroupQuarry, spreadGroupQuarries } from '../m59-group-quarry.mjs';
 import { chaseCache, orderByAttackOrWalk, orderByWalk } from '../m59-chase.mjs';
 import { molluskRockThreatAt } from '../m59-casters.mjs';
@@ -236,8 +237,9 @@ export class PassFarmPart {
       // If it declined because no safe rest was available, feeding still works here.
       const relaySurplus = relayFarmVigor(this, ctx, { surplus: true });
       if (relaySurplus.active && await tryFarmRelay(this, ctx, relaySurplus).catch(() => false)) return HANDLED;
+      const withdrewFood = await tryFarmFoodCache(this);
       const plan = STRATEGIES[this.policy.strategy] || STRATEGIES.baseline;
-      if (await this.provision(plan, v) === 'ate') return HANDLED;
+      if (await this.provision(plan, v) === 'ate' || withdrewFood) return HANDLED;
 
       // THE STRATEGY MAY SAY THIS FARM SHOULD NOT RUN (m59-strategy-gate.mjs): the body lacks what the file
       // `requires` (a troll crew without a magic weapon), or its kill-rate `floor` tripped. Then no quarry is
