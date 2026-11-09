@@ -228,6 +228,10 @@ export class CooperativePart {
     if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
     if(this.operatorSurvivalStandDown())return false;
     const s = this.s, c = s.client, health = c?.vitals?.()?.health;
+    const room = s.world?.room?.num, life = s.lifeBoundary ?? 0;
+    const sameLife = () => s.client === c && (s.lifeBoundary ?? 0) === life && s.world?.room?.num === room &&
+      room !== 1 && c?.vitals?.()?.health?.value !== 0;
+    if (!sameLife()) return false;
     if (this.mode === 'farm' && this.oceanRangedRecoveryEnabled() && health?.max > 0 && health.value === health.max) {
       const decision = currentSurvivalDecision(s);
       const failedApproach = decision?.status === 'pending' && decision.reason === why &&
@@ -254,6 +258,7 @@ export class CooperativePart {
         if(mayLogoff(me,{afterRecovery:true})){
           try { if(await this.fleetLogoff(why,{afterRecovery:true}))return true; }
           catch(e) { this.note('cooperative logoff unavailable',{why:e.message}); }
+          if (!sameLife()) return false;
         }
         if(!this._oneLogoffSaid){this._oneLogoffSaid=true;
           this.note('not logging off again this healing session',{why,
@@ -318,6 +323,7 @@ export class CooperativePart {
     if(!atWall){
       try { if(typeof this.fleetLogoff==='function'&&await this.fleetLogoff(why))return true; }
       catch(e) { this.note('cooperative logoff unavailable',{why:e.message}); }
+      if (!sameLife()) return false;
     }
     if (!atWall && !this.playerThreatPresent()) {
 
@@ -384,6 +390,7 @@ export class CooperativePart {
     let did=false;
     try { did=await this.playDeadObserved(why,d.id); }
     catch(e) { this.note('play dead failed',{why:e.message}); }
+    if (!did && !sameLife()) return false;
     if(currentSurvivalDecision(s)?.id===d.id) {
       if(did) updateSurvivalDecision(s,d.id,{status:'recovering',
         phase:this.frozenUntil>Date.now()?'frozen_without_action'
@@ -481,6 +488,7 @@ export class CooperativePart {
 
   async playDeadObserved(why, decisionId) {
     const s = this.s;
+    const client = s.client, room = s.world?.room?.num, life = s.lifeBoundary ?? 0;
 
     // THE LOGOFF IS THE ANSWER, AND IT NO LONGER ASKS PERMISSION. Operator, 2026-09-10:
     //
@@ -598,6 +606,10 @@ export class CooperativePart {
                 note: 'sent BEFORE the logoff — during the freeze a tell would wake the room' },
     };
     await this.tellPilot(this.debug).catch(() => {});
+    // The paced tell can outlive a death or a newer recovery. Lew was already
+    // in the Underworld when an old Ocean recovery spent his next logout.
+    if (s.client !== client || s.world?.room?.num !== room || room === 1 || (s.lifeBoundary ?? 0) !== life ||
+        client?.vitals?.()?.health?.value === 0 || currentSurvivalDecision(s)?.id !== decisionId) return false;
     // Keep our own copy: rejoin() renumbers everything, and observe() will not have
     // run again by the time we need to know where we were standing.
     const spot = this.hold ? { ...this.hold } : null;

@@ -189,6 +189,35 @@ console.log('every named cause, in Robin\'s order, at full health: one logoff');
   ok('then the crowded-spot breakout and the hit-while-resting do not', reconnects.length === 1, JSON.stringify(reconnects));
 }
 
+console.log('a stale recovery cannot spend a logout after a death or handoff');
+{
+  const { chooseSurvivalDecision, currentSurvivalDecision } = await import('./m59-survival-decision.mjs');
+  for (const change of ['already in Underworld', 'fatal hit during tell', 'new decision during tell']) {
+    const name = `lew-replay-${change}`;
+    const health = { value: change === 'already in Underworld' ? 1 : 7, max: 121 };
+    const room = { num: change === 'already in Underworld' ? 1 : 552 };
+    const client = { vitals: () => ({ health }), self: { row: 12, col: 67 }, room: { objects: new Map() } };
+    const s = { name, client, world: { room }, lifeBoundary: 4 };
+    let reconnects = 0, tells = 0;
+    const k = Object.assign(Object.create(Autopilot.prototype), {
+      s, tally: {}, policy: {}, hold: { room: 552, row: 12, col: 67, proven: true },
+      note() {}, operatorSurvivalStandDown: () => false, suspendJourney() {},
+      adoptRecoveryWall: () => true, holdWorks: () => true, logoffDeclined: () => null,
+      reconnect: async () => { reconnects++; return { ok: true }; },
+      async tellPilot() {
+        tells++;
+        if (change === 'fatal hit during tell') { s.lifeBoundary++; room.num = 1; health.value = 1; }
+        if (change === 'new decision during tell')
+          chooseSurvivalDecision(s, { strategy: 'nearest_refuge', reason: 'new owner' });
+      },
+    });
+    ok(`stale Ocean play-dead (${change}) spends no logout`,
+      await k.playDead('exposed to mollusk rock throws after taking damage') === false &&
+      reconnects === 0 && H.readSession(name) == null && tells === (change === 'already in Underworld' ? 0 : 1));
+    if (change === 'new decision during tell') ok('the newer recovery decision remains in charge',
+      currentSurvivalDecision(s)?.reason === 'new owner');
+  }
+}
 console.log('a broken rest inside a spent session keeps the spot');
 {
   H.noteLogoff('rowlf', { why: 'doomed' });
