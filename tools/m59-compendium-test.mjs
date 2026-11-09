@@ -18,9 +18,13 @@
 // So this checks the translation against the compendium's real vocabulary, and pins
 // the proficiency names against the server's own resource strings.
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { buildFromCharacter, COOKIE, importUrl, parseAccess, accessHost, allowRequest, createServer } from './m59-compendium.mjs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { createServer as createNetServer } from 'node:net';
+import { buildFromCharacter, COOKIE, importUrl, parseAccess, accessHost, allowRequest, createServer, fleetArgs } from './m59-compendium.mjs';
 import { networkInterfaces } from 'node:os';
 import { proficiencyFor, WEAPON_PROFICIENCY } from './m59-skills.mjs';
 
@@ -229,6 +233,40 @@ console.log('\nover a real socket, from the LAN side');
     ok(`local: the LAN address cannot connect at all (${st})`, st === 'refused');
     await new Promise(r => server.close(r));
   }
+}
+
+// THE FLEET REACHES THE CHILD. On a `!require-explicit` checkout the server dies at import
+// unless told which fleet, and the terminal is told on its ARGV, which a child does not
+// inherit. 2026-11-08: the C key and the prod compendium both "could not start" for exactly
+// this, silently, because the child's stdio was ignored.
+console.log('\nthe fleet is handed to every child');
+{
+  const req = 'C:/nonexistent/fleet-default';
+  eq('argv --fleet prod is passed on', fleetArgs(['--fleet', 'prod'], {}), ['--fleet', 'prod']);
+  eq('M59_FLEET is passed on as a flag', fleetArgs([], { M59_FLEET: 'shadow', M59_FLEET_DEFAULT_FILE: req }), ['--fleet', 'shadow']);
+  eq('--fleet - stays the unnamed fleet, which an env var cannot say', fleetArgs(['--fleet', '-'], {}), ['--fleet', '-']);
+
+  // End to end: a parent that knows its fleet ONLY from argv, on a checkout that refuses to
+  // guess, starts a real server. Unnamed fleet so no ledger directory is invented; scheduler
+  // off so nothing can launch a sale; a free port so nothing live is touched.
+  const dir = mkdtempSync(join(tmpdir(), 'm59-comp-'));
+  const def = join(dir, 'fleet-default');
+  writeFileSync(def, '!require-explicit\n');
+  const port = await new Promise(r => { const s = createNetServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+  const driver = join(dir, 'driver.mjs');
+  writeFileSync(driver,
+    `const m = await import(${JSON.stringify(pathToFileURL(fileURLToPath(new URL('./m59-compendium.mjs', import.meta.url))).href)});\n` +
+    `try { console.log(JSON.stringify(await m.ensureServing(${port}, { access: 'local' }))); }\n` +
+    `catch (e) { console.log(JSON.stringify({ error: e.message })); }\n` +
+    `process.exit(0);\n`);
+  const env = { ...process.env, M59_FLEET_DEFAULT_FILE: def, M59_GUILD_SALE_SCHEDULER: 'off' };
+  delete env.M59_FLEET;
+  const r = spawnSync(process.execPath, [driver, '--fleet', '-'], { env, encoding: 'utf8', timeout: 30000 });
+  let got = {};
+  try { got = JSON.parse(r.stdout.trim().split(/\r?\n/).pop()); } catch { got = { error: r.stdout + r.stderr }; }
+  ok('a child started from an argv-only parent answers /_health', got.started === true, JSON.stringify(got));
+  if (got.pid) { try { process.kill(got.pid); } catch { /* already gone */ } }
+  rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

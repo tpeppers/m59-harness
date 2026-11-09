@@ -67,10 +67,23 @@ import { liveBoard, liveCouriers, readSales, saveSellPlan, addJob, cancelJob, ne
 
 // The m59-research reports, rendered on request from wherever this machine keeps them.
 import { serveReports, reportsDir } from '../compendium/tools/reports.mjs';
+import { resolveFleetName } from './m59-fleetpath.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
 const ROOT = path.join(REPO, 'compendium');
+
+// THE FLEET GOES TO EVERY CHILD BY NAME. This module imports the ledger, which resolves the
+// fleet when it LOADS -- so on a checkout whose substrate/fleet-default is `!require-explicit`
+// a child told nothing dies before it opens a socket. The terminal is started as
+// `--fleet prod` (argv, not env), and `ensureServing` used to hand its child only `--port`
+// with stdio ignored: the C key waited six seconds and said "never answered /_health", with
+// the one line that explained it thrown away. Resolved here, in the parent, which has already
+// been told; `-` is the unnamed fleet asked for on purpose, which an env var cannot say.
+export function fleetArgs(argv = process.argv.slice(2), env = process.env) {
+  return ['--fleet', resolveFleetName(argv, env).name || '-'];
+}
+export const STARTUP_LOG = path.join(REPO, 'substrate', 'compendium-start.log');
 
 export const COMPENDIUM_PORT = Number(process.env.M59_COMPENDIUM_PORT || 8099);
 export const ACCESS_MODES = ['local', 'lan-read', 'lan-write'];
@@ -167,7 +180,7 @@ export const SCHEDULER = {
       const logFile = jobLogFile(job.id);
       fs.mkdirSync(path.dirname(logFile), { recursive: true });
       const fd = fs.openSync(logFile, 'a');
-      const child = spawn(process.execPath, [path.join(REPO, 'tools', 'm59-guild-sale.mjs'), 'run', '--job', job.id],
+      const child = spawn(process.execPath, [path.join(REPO, 'tools', 'm59-guild-sale.mjs'), 'run', '--job', job.id, ...fleetArgs()],
                           { cwd: REPO, detached: true, stdio: ['ignore', fd, fd], windowsHide: true, env: process.env });
       child.unref();
       fs.closeSync(fd);
@@ -881,18 +894,31 @@ export async function ensureServing(port = COMPENDIUM_PORT, { access = process.e
   if (up?.foreign)
     throw new Error(`something else is already listening on ${port} — set M59_COMPENDIUM_PORT`);
   const mode = parseAccess(access);
+  // Its output goes to a file rather than nowhere: a child that dies at import has exactly one
+  // line to say why, and `stdio: 'ignore'` is what made this failure silent.
+  fs.mkdirSync(path.dirname(STARTUP_LOG), { recursive: true });
+  const fd = fs.openSync(STARTUP_LOG, 'w');
   const child = spawn(process.execPath,
-                      [fileURLToPath(import.meta.url), '--port', String(port), '--access', mode],
-                      { detached: true, stdio: 'ignore', windowsHide: true });
+                      [fileURLToPath(import.meta.url), '--port', String(port), '--access', mode, ...fleetArgs()],
+                      { cwd: REPO, detached: true, stdio: ['ignore', fd, fd], windowsHide: true });
+  fs.closeSync(fd);
+  let exited = null;
+  child.on('exit', code => { exited = code ?? 'signal'; });
   child.unref();
+  const tail = () => {
+    try { return fs.readFileSync(STARTUP_LOG, 'utf8').trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' | '); }
+    catch { return ''; }
+  };
   // Wait for it rather than assuming: a browser opened against a socket that is not
   // listening yet shows an error page, and the reader reads that as the key not working.
   for (let i = 0; i < 40; i++) {
     await new Promise(r => setTimeout(r, 150));
+    if (exited !== null)
+      throw new Error(`the compendium server exited (${exited}) before answering: ${tail() || 'no output'} -- see ${STARTUP_LOG}`);
     const ok = await probe(port, 400);
     if (ok && !ok.foreign) return { started: true, pid: ok.pid, port, access: ok.access };
   }
-  throw new Error(`started a compendium server on ${port} but it never answered /_health`);
+  throw new Error(`started a compendium server on ${port} but it never answered /_health: ${tail() || 'no output'} -- see ${STARTUP_LOG}`);
 }
 
 // The default browser, on whichever platform this is.
