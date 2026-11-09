@@ -47,7 +47,8 @@ const idleAt = src.indexOf("if (await this.hibernate('idle: no job to do')");
 ok('the idle branch eats before it hibernates',
    idleAt > 0 && src.slice(Math.max(0, idleAt - 300), idleAt).includes('this.eatToFloor(ctx)'));
 ok('a non-farm mode eats in passFarm before the farm block',
-   /if \(this\.mode !== 'farm' && await this\.eatToFloor\(ctx\) === 'ate'\) return HANDLED;/.test(src));
+   /const farming = this\.mode === 'farm' && this\.policy\?\.neverAttack !== true;/.test(src) &&
+   /if \(!farming && await this\.eatToFloor\(ctx\) === 'ate'\) return HANDLED;\s*if \(farming\)/.test(src));
 
 
 // 2026-09-27, the second half: those two call sites are BELOW the rungs that take the pass. The
@@ -64,7 +65,7 @@ ok('Relay recovery only defers eating for the qualifying under-cap state',
    /if \(!relayRest\) \{\s*if \(await this\.eatToFloor\(ctx\) === 'ate'\) return HANDLED;/.test(survival));
 ok('the final safe rest tries Relay first, then targets the personal cap',
    relayTry > survival.indexOf('const canRelayRest') &&
-   relayTry < survival.indexOf('vigor: relayRest ? relayProfile.cap / skills.VIGOR_MAX : REST_VIGOR_CAP'));
+   relayTry < survival.indexOf('relayRest ? relayProfile.cap / skills.VIGOR_MAX : REST_VIGOR_CAP'));
 const ladder = src.indexOf("'passFleeAndRest',"), errand = src.indexOf("'passErrand',", ladder);
 ok('and that stage runs above passErrand and passFarm in the ladder', ladder > 0 && errand > ladder &&
    src.indexOf("'passFarm',", ladder) > errand);

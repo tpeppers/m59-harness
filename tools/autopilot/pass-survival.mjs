@@ -19,6 +19,17 @@ import * as skills from '../m59-skills.mjs';
 import { AILING_SHELTER_BELOW, belowRoomRetreatHealth, CONTINUE, farmVigorWorkReady, HANDLED, healAllowOf, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorOf, vigorPct } from '../m59-autopilot.mjs';
 import { roomIsNoCombat } from '../m59-hazards.mjs';
 
+function oceanSupportCanRestOpen(pilot, s, c) {
+  const karma = c.statsById?.get('karma')?.value;
+  if (pilot.policy?.neverAttack !== true || !['idle', 'survive'].includes(pilot.mode) ||
+      s.world?.room?.num !== 552 || s.client !== c || !s.live || s.combat?.active ||
+      !c.self || c.self.predicted || pilot.hold || !Number.isFinite(karma) || karma <= 0)
+    return false;
+  const health = c.vitals?.()?.health;
+  return health?.max > 0 && health.value === health.max && !(c.ailments?.() ?? []).length &&
+    !(s.damagedAt > 0 && Date.now() - s.damagedAt < 5000);
+}
+
 export class PassSurvivalPart {
   // @part 1
 
@@ -390,13 +401,16 @@ export class PassSurvivalPart {
     const healthNeedsRest = hp !== null && hp < restAt;
     const hurt = healthNeedsRest || ((vig !== null && vig < vigorRestAt) || spent)&&!scriptedWalkDefersVigorRest(this,v)&&!farmVigorWorkReady(this,v);
     const relayVigorOnly = relayRest && hp !== null && !healthNeedsRest;
+    // A healthy, positive-karma Ocean support post can recover vigor in place.
+    // Do not turn a two-point vigor deficit into emergency wall or logoff work.
+    const openSupportRest = hurt && !healthNeedsRest && oceanSupportCanRestOpen(this, s, c);
     if ((hurt || relayRest) && this.hold && !recoveryWallStillHolds()) {
       this.releaseHold('live ranged cover is no longer proved for recovery');
       sheltered = false;
     }
     // In a NO_COMBAT room nothing can swing, so recovery needs no wall: rest where we stand (see continueSurvivalDecision).
     const noCombatHere = roomIsNoCombat(s);
-    if((hurt || relayRest) && !noCombatHere && this.currentRecoveryWall()) {
+    if((hurt || relayRest) && !openSupportRest && !noCombatHere && this.currentRecoveryWall()) {
       if (relayVigorOnly) this.adoptRecoveryWall();
       else await this.takeRecoverySpot('recovery needed while already at a safe wall');
       // TAKE THE SPOT AS A SIDE EFFECT AND LET THE PASS CARRY ON — the same correction the
@@ -604,7 +618,7 @@ export class PassSurvivalPart {
     }
 
     const spawnsHere = !this.sanctuary();
-    if ((hurt || relayRest) && !noCombatHere && (combatZone || spawnsHere) && !sheltered && !testing && !this.hold
+    if ((hurt || relayRest) && !openSupportRest && !noCombatHere && (combatZone || spawnsHere) && !sheltered && !testing && !this.hold
         && (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000)) {
       this.wallTriedAt = Date.now();
       // A voluntary vigor stop can use the same cover without the emergency
@@ -659,7 +673,7 @@ export class PassSurvivalPart {
     // exhausted characters walking instead of resting.
     const vigorNow2 = vigorOf(v);
     const restCeiling = REST_VIGOR_CAP * skills.VIGOR_MAX;      // 0.4 * 200 = 80
-    if (hurt && combatZone && !sheltered && !testing && !this.hold &&
+    if (hurt && !openSupportRest && combatZone && !sheltered && !testing && !this.hold &&
         vigorNow2 != null && vigorNow2 > restCeiling) {
       this.note('not waiting this out — moving to somewhere I can heal', {
         health: hp === null ? null : Math.round(hp * 100) + '%',
@@ -948,8 +962,8 @@ export class PassSurvivalPart {
     }
 
     const canRelayRest = noCombatHere || sheltered || testing || (!combatZone && !spawnsHere);
-    if ((((!combatZone || sheltered || testing) && hurt) || (relayRest && canRelayRest)) &&
-        recoveryWallStillHolds()) {
+    if ((((!combatZone || sheltered || testing || openSupportRest) && hurt) || (relayRest && canRelayRest)) &&
+        (openSupportRest || recoveryWallStillHolds())) {
       // After a packet, reobserve before resting. A failed or unavailable cast
       // falls straight through to rest. Probing an unproved wall stays a rest.
       if (relayRest && (sheltered || !combatZone) && await tryFarmRelay(this, ctx, relayProfile).catch(() => false))
@@ -1054,13 +1068,14 @@ export class PassSurvivalPart {
       // full rather than to a threshold — the next fight starts from whatever we
       // stand up with, and there is nothing to spend the difference on.
       const r = await skills.restUntil(s, {
-        shouldCancel: rangedRecovery ? () => !recoveryWallStillHolds() : null,
+        shouldCancel: openSupportRest ? () => !oceanSupportCanRestOpen(this, s, c)
+          : (rangedRecovery ? () => !recoveryWallStillHolds() : null),
         // Always finish above the threshold that sent us here, or the next pass sends
         // us straight back and the character rests in one-second slices forever.
         health: Math.min(0.99, Math.max(0.95, restAt + 0.02)),
         // Use a threshold resting can reach. The Relay mode has a confirmed
         // personal cap, while ordinary recovery keeps its existing target.
-        vigor: relayRest ? relayProfile.cap / skills.VIGOR_MAX : REST_VIGOR_CAP,
+        vigor: openSupportRest ? vigorRestAt : (relayRest ? relayProfile.cap / skills.VIGOR_MAX : REST_VIGOR_CAP),
         // A short leash while the spot is only a hypothesis: resting does not look at
         // anything, so a two-minute rest in a corner that does not work is two minutes
         // of being hit with nobody watching.
@@ -1076,7 +1091,7 @@ export class PassSurvivalPart {
         // So the leash is the SHORT one whenever the present crowd is bigger than the
         // one the square was proven against. Not a demotion — the square may well still
         // work — just a refusal to bet two minutes of not looking on it.
-        maxSeconds: testing ? 15
+        maxSeconds: openSupportRest ? 9 : testing ? 15
                   : (sheltered ? (near.length > (this.hold?.mostAttackers ?? 0) ? 20 : 150)
                                : 90) });
       this.note('rested', { seconds: r.seconds, to: r.vitals?.health, reached: r.reached_target, why: r.note,
