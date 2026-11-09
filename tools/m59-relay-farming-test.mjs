@@ -76,6 +76,31 @@ test('a below-cap farmer can give once, then a confirmed rest cap resets its cyc
   assert.equal(profile().cycle.sent, false);
 }));
 
+test('surplus Relay can put a rested peer back on the fight floor and keeps a donor reserve', () =>
+  fixture(async ({ donor, peer, publish, profile, now, read, claim }) => {
+    donor.vitals.vigor.value = 191;
+    peer.vitals.vigor.value = 115;
+    peer.pilot.policy.vigorFloor = 140;
+    assert(publish());
+    assert.equal(profile().active, false, 'surplus is never offered in the recovery path');
+    const surplus = relayFarmVigor(donor.pilot, {}, { now: now(), read, surplus: true });
+    assert.equal(surplus.reserve, 150);
+    assert.equal(await tryFarmRelay(donor.pilot, {}, surplus, { now, read, claim }), true);
+    assert.deepEqual(donor.sent, [{ spell: 10, targets: [2] }]);
+    assert.equal(await tryFarmRelay(donor.pilot, {}, surplus, { now, read, claim }), false);
+  }));
+
+test('surplus Relay declines when the live headroom would take the donor below its reserve', () =>
+  fixture(async ({ donor, peer, publish, now, read, claim }) => {
+    donor.vitals.vigor.value = 190;
+    peer.vitals.vigor.value = 109;
+    assert(publish());
+    const surplus = relayFarmVigor(donor.pilot, {}, { now: now(), read, surplus: true });
+    assert(surplus.active);
+    assert.equal(await tryFarmRelay(donor.pilot, {}, surplus, { now, read, claim }), false);
+    assert.deepEqual(donor.sent, []);
+  }));
+
 test('fresh peer evidence is scoped to fleet, room object, name, body and opt-in policy', () => fixture(async ({ donor, peer, object, now, read, profile, publish }) => {
   assert(publish());
   assert(profile().active);

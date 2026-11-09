@@ -151,7 +151,10 @@ known by the farming cohort, and edible mushrooms in the spawn loot table. It us
 personal resting threshold reported by the game.
 
 A farmer below that threshold can spend vigor on an eligible ally before sitting safely
-to recover it for free. The food pass follows recovery and uses the usual larder. Relay
+to recover it for free. A healthy farmer can also help a rested ally who is below its
+fight floor when the entire possible donation leaves the donor with at least 150 vigor
+and its own fight floor. Optional top-offs in the assigned room save edible mushrooms
+for Relay. A farmer who needs food to reach its fight floor can still eat them. Relay
 costs five mana and one edible mushroom and only admits recipients below 150 vigor.
 The server adds a 25% transfer bonus, so the last cast can land slightly above 150.
 An Inky-cap mushroom provides 50 vigor when there is room under the 200 cap.

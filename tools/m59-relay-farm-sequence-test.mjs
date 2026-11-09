@@ -8,6 +8,7 @@ import { publishFleetHealth } from './m59-fleet-health.mjs';
 import { setRosterSource } from './m59-party.mjs';
 import { OF } from './m59-parse.mjs';
 import { relayFarmPeerEvidence } from './m59-relay-farming.mjs';
+import { Stomach } from './m59-skills.mjs';
 
 const room = { num: 552 };
 const positions = new Map([
@@ -121,4 +122,22 @@ test('real survival pass spends one Relay, rests past 80 to the personal cap, th
     else process.env.M59_FLEET_HEALTH_DIR = old;
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('optional Ocean top-offs keep edible mushrooms for Relay', async () => {
+  const donor = session(1, 198, 94, 'fixture');
+  donor.p.policy.vigorCeiling = 200;
+  donor.p.stomach = new Stomach();
+  donor.p.fightFloor = () => 140;
+  donor.p.poorFarmingActive = () => false;
+  donor.p.warnedThroughput = true;
+  donor.p.notOursToEat = () => [];
+  donor.p.recordAte = () => {};
+  donor.c.requestInventory = () => {};
+  donor.c.apply = id => donor.records.push(id);
+  await donor.p.provision({}, donor.c.vitals());
+  assert.deepEqual(donor.records, []);
+  donor.s.world.room = { num: 544 };
+  await donor.p.provision({}, donor.c.vitals());
+  assert.deepEqual(donor.records, [10], 'the same food remains edible outside the assigned Relay room');
 });

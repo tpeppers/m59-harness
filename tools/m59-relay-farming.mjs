@@ -15,6 +15,7 @@ import { currentSurvivalDecision, isActiveRecoveryDecision } from './m59-surviva
 const SPAWN_FILE = process.env.M59_SPAWN_FILE || new URL('../substrate/m59-spawns.json', import.meta.url);
 const RELAY = 'relay', MAX_TARGET_VIGOR = 150, MANA_COST = 5, MIN_DONOR_VIGOR = 15;
 const REPORT_MAX_AGE_MS = 3500, CLAIM_COOLDOWN_MS = 4000;
+const SURPLUS_PROBE_MS = 5000, SURPLUS_CAST_MS = 15_000, MIN_SURPLUS_GAIN = 8;
 const cycles = new WeakMap();
 const fleetScopes = new Map();
 const relayRooms = new WeakMap();
@@ -118,27 +119,36 @@ function peerFor(c, room, scope, credentials, object, now, read) {
 function cycleFor(pilot, c, cap, vigor) {
   let cycle = cycles.get(pilot);
   const roomId = c?.room?.id;
-  if (cycle?.client !== c || cycle?.roomId !== roomId || !cycle || (cap != null && vigor >= cap && cycle.sent)) {
-    cycle = { client: c, roomId, sent: false };
+  if (!cycle || cycle.client !== c || cycle.roomId !== roomId) {
+    cycle = { client: c, roomId, sent: false, surplusProbeAt: -Infinity, surplusCastAt: -Infinity };
     cycles.set(pilot, cycle);
   }
+  if (cap != null && vigor >= cap) cycle.sent = false;
   return cycle;
 }
 
-export function relayFarmVigor(pilot, ctx = {}, { now = Date.now(), read = readFleetHealth, spawns } = {}) {
+export function relayFarmVigor(pilot, ctx = {}, { now = Date.now(), read = readFleetHealth, spawns, surplus = false } = {}) {
   if (pilot.policy?.relayBeforeRest !== true) return { active: false, belowCap: false, cap: null };
   const s = ctx.s ?? pilot.s, c = ctx.c ?? s?.client, room = ctx.room?.num ?? s?.world?.room?.num;
   const vitals = c?.vitals?.() ?? ctx.v;
   const cap = relayRestCap(vitals), vigor = vitals?.vigor?.value;
   const cycle = cycleFor(pilot, c, cap, vigor);
   const inactive = { active: false, belowCap: false, cap };
-  if (cap == null || !(vigor < cap)) return inactive;
+  if (cap == null || !Number.isFinite(vigor)) return inactive;
+  const belowCap = vigor < cap;
+  const reserve = surplus ? Math.max(MAX_TARGET_VIGOR, pilot.wantedFightFloor?.() ?? 0)
+    : Math.max(20, pilot.policy.ordinaryVigorFloor ?? 20);
+  if (surplus) {
+    if (belowCap || vigor - reserve < MIN_SURPLUS_GAIN || now - cycle.surplusProbeAt < SURPLUS_PROBE_MS ||
+        now - cycle.surplusCastAt < SURPLUS_CAST_MS || !edibleMushrooms(c)) return inactive;
+    cycle.surplusProbeAt = now;
+  } else if (!belowCap) return inactive;
   const own = relayFarmPeerEvidence(pilot, vitals);
   if (!own?.can_receive || !roomDropsRelayMushrooms(room, spawns)) return inactive;
   const { scope } = own;
   const peers = [...(c.room.objects?.values?.() ?? [])].map(o => peerFor(c, room, scope, s.credentials, o, now, read)).filter(Boolean);
   if (!peers.some(peer => peer.optedIn) || peers.some(peer => peer.knows !== true)) return inactive;
-  return { active: true, belowCap: true, cap, scope, peers, cycle };
+  return { active: true, belowCap, cap, scope, peers, cycle, reserve, surplus };
 }
 
 function edibleMushrooms(c) {
@@ -148,23 +158,26 @@ function edibleMushrooms(c) {
       ? count + (Number(item.amount) || 1) : count, 0);
 }
 
-function safeDonor(pilot, s, c, duringRite = false) {
+function safeDonor(pilot, s, c, profile, duringRite = false) {
   const v = c.vitals?.(), hp = v?.health;
+  const cap = relayRestCap(v), vigor = v?.vigor?.value;
   if (!farmingBody(pilot, s, c, s.world?.room?.num) || s.combat?.active || !c.self || (!duringRite && s._rite) ||
       ['work', 'movement', 'survival', 'recovery'].some(key => pilot.facultyHeld?.(key)) ||
       isActiveRecoveryDecision(currentSurvivalDecision(s)) || c.ailments?.()?.length ||
       !(hp?.max > 0 && hp.value / hp.max >= Math.max(0.95, pilot.safety?.()?.engageAt ?? 0.95)) ||
-      !(v?.vigor?.value > MIN_DONOR_VIGOR) || !(v.vigor.value < relayRestCap(v)) ||
-      secondWind(c, relayRestCap(v)) || !(v?.mana?.value >= MANA_COST + 4) || !edibleMushrooms(c)) return false;
+      cap == null || !(vigor > MIN_DONOR_VIGOR) || secondWind(c, cap) ||
+      (profile.surplus ? vigor - profile.reserve < MIN_SURPLUS_GAIN || vigor < cap : vigor >= cap) ||
+      !(v?.mana?.value >= MANA_COST + 4) || !edibleMushrooms(c)) return false;
   return !(pilot.threat?.()?.landing > 0) && (pilot.holdWorks?.() === true || !pilot.inReachOfUs?.()?.length);
 }
 
-function receiverUseful(peer, vigor, reserve) {
+function receiverUseful(peer, vigor, { reserve, surplus }) {
   // No guessed spell power: cap the worst possible donation using the
   // receiver's actual remaining headroom, preserving the donor's escape bar.
   const headroom = MAX_TARGET_VIGOR - peer.vigor;
   return peer.canReceive && peer.vigor >= peer.cap && headroom > 0 && headroom <= vigor - reserve &&
-    (peer.vigor < peer.fightFloor || headroom >= 8);
+    (surplus ? peer.vigor < peer.fightFloor && headroom >= MIN_SURPLUS_GAIN
+      : peer.vigor < peer.fightFloor || headroom >= 8);
 }
 
 function receiverRank(peer) {
@@ -177,13 +190,14 @@ function receiverRank(peer) {
 
 export async function tryFarmRelay(pilot, ctx = {}, profile = relayFarmVigor(pilot, ctx),
                                   { now = Date.now, read = readFleetHealth, claim = claimFleetAid } = {}) {
-  if (!profile.active || !profile.belowCap || !profile.cycle || profile.cycle.sent) return false;
+  if (!profile.active || !profile.cycle || (profile.surplus
+    ? now() - profile.cycle.surplusCastAt < SURPLUS_CAST_MS
+    : !profile.belowCap || profile.cycle.sent)) return false;
   const s = ctx.s ?? pilot.s, c = s.client, room = s.world?.room?.num;
   const spell = relaySpell(c);
-  if (!spell || typeof s.faceToward !== 'function' || !safeDonor(pilot, s, c)) return false;
-  const reserve = Math.max(20, pilot.policy.ordinaryVigorFloor ?? 20);
+  if (!spell || typeof s.faceToward !== 'function' || !safeDonor(pilot, s, c, profile)) return false;
   const vigor = c.vitals().vigor.value;
-  const ranked = profile.peers.filter(peer => receiverUseful(peer, vigor, reserve))
+  const ranked = profile.peers.filter(peer => receiverUseful(peer, vigor, profile))
     .map(peer => ({ peer, rank: receiverRank(peer) }))
     .sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.peer.bodyId - b.peer.bodyId)
     .map(row => row.peer);
@@ -193,16 +207,17 @@ export async function tryFarmRelay(pilot, ctx = {}, profile = relayFarmVigor(pil
     const valid = () => {
       if (s.client !== c || c.selfId !== self || c.room?.id !== roomId || c.saveCount !== save ||
           s.world?.room?.num !== room || s.movementWasCancelled?.(generation) ||
-          !safeDonor(pilot, s, c, true) || relaySpell(c)?.id !== spell.id) return false;
+          !safeDonor(pilot, s, c, profile, true) || relaySpell(c)?.id !== spell.id) return false;
       const peer = peerFor(c, room, profile.scope, s.credentials, target(), now(), read);
-      return !!peer && fold(peer.name) === fold(candidate.name) && receiverUseful(peer, c.vitals().vigor.value, reserve);
+      return !!peer && fold(peer.name) === fold(candidate.name) && receiverUseful(peer, c.vitals().vigor.value, profile);
     };
     if (!valid() || !claim(candidate.identity, { kind: RELAY, scope: profile.scope, room, bodyId: candidate.bodyId,
       now: now(), cooldownMs: CLAIM_COOLDOWN_MS })) continue;
     const seq = c.evSeq;
     let result;
     try {
-      result = await withCastRite(s, { spell, targets: [candidate.bodyId], why: 'Relay before resting' }, async () => {
+      result = await withCastRite(s, { spell, targets: [candidate.bodyId],
+        why: profile.surplus ? 'Relay from vigor above the fight reserve' : 'Relay before resting' }, async () => {
         if (!valid()) return null;
         await s.faceToward(target(), { beforePacket: () => { if (!valid()) throw new Error('Relay target changed'); } });
         return sendRecoverySpell(s, c, spell, [candidate.bodyId], valid);
@@ -212,13 +227,14 @@ export async function tryFarmRelay(pilot, ctx = {}, profile = relayFarmVigor(pil
       return false;
     }
     if (!result?.sent) return false;
-    profile.cycle.sent = true;
+    if (profile.surplus) profile.cycle.surplusCastAt = now();
+    else profile.cycle.sent = true;
     const reply = await c.waitFor?.({ since: seq, kinds: ['message'], timeoutMs: 1200,
       match: e => /give part of your vigor|additional vigor|not have enough vigor|unsuccessful in casting/i.test(e.text ?? '') })
       .catch(() => null);
     const said = reply?.events?.find(e => /give part of your vigor|additional vigor|not have enough vigor|unsuccessful in casting/i.test(e.text ?? ''))?.text;
     const ok = /give part of your vigor/i.test(said ?? '');
-    pilot.note?.('farm relay before resting', { target: candidate.name, target_vigor: candidate.vigor,
+    pilot.note?.(profile.surplus ? 'farm relay from surplus' : 'farm relay before resting', { target: candidate.name, target_vigor: candidate.vigor,
       donor_vigor: vigor, rest_cap: profile.cap, confirmed: ok, said: said ?? null });
     pilot.recordCast?.(RELAY, { ok, target: candidate.name, why: said ?? 'cast sent; transfer unconfirmed' });
     return true;

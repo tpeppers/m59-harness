@@ -11,6 +11,7 @@
 // 2 methods: provision, cookFirst
 import * as skills from '../m59-skills.mjs';
 import { cookFirstDecision, cookFoodSettings } from '../m59-cook-food.mjs';
+import { roomDropsRelayMushrooms } from '../m59-relay-farming.mjs';
 import { CREATE_FOOD_MANA, EAT_TO_AT_LEAST, overdriveDigest, overdriveReachable, overdriveSettings, shouldWaitForProvision } from '../m59-autopilot.mjs';
 
 export class ProvisionPart {
@@ -239,8 +240,14 @@ export class ProvisionPart {
     // one item per pass — a pass is eight seconds and the room reappears on a clock
     // measured in minutes. `eat` declines anything that would overshoot 200.
     if (ceiling && this.stomach.roomFor(smallest.filling)) {
+      const exclude = this.notOursToEat();
+      // Keep the exact Relay reagent through optional top-offs. A farmer short of its
+      // fight floor may still eat it in the climb above, and emergency meals are untouched.
+      if (this.mode === 'farm' && p.relayBeforeRest === true && vigor >= Math.max(150, floor) &&
+          (p.assignedRoom == null || p.assignedRoom === s.world?.room?.num) && roomDropsRelayMushrooms(s.world?.room?.num))
+        exclude.push('edible mushroom');
       const e = await skills.eat(s, { stomach: this.stomach, upToVigor: ceiling,
-                                     exclude: this.notOursToEat() })
+                                     exclude })
                             .catch(() => ({ ate: [] }));
       if (e.ate?.length) {
         this.tally.meals = (this.tally.meals || 0) + 1;

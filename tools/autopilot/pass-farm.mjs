@@ -20,6 +20,7 @@ import { opensFightFromWall } from '../m59-policydiff.mjs';
 import { notePreySide } from '../m59-preyside.mjs';
 import { beginPullProgress } from '../m59-pull-progress.mjs';
 import { stalePullReason } from '../m59-quarry-identity.mjs';
+import { relayFarmVigor, tryFarmRelay } from '../m59-relay-farming.mjs';
 import { PLAYER_REACH } from '../m59-safespots.mjs';
 import * as skills from '../m59-skills.mjs';
 import { huntLabel, huntMatcher, loadSpawns } from '../m59-spawns.mjs';
@@ -170,6 +171,8 @@ export class PassFarmPart {
       // the floor, so this cannot send anyone into combat empty.
       // The Relay recovery path above owns the pass while it can safely rest.
       // If it declined because no safe rest was available, feeding still works here.
+      const relaySurplus = relayFarmVigor(this, ctx, { surplus: true });
+      if (relaySurplus.active && await tryFarmRelay(this, ctx, relaySurplus).catch(() => false)) return HANDLED;
       const plan = STRATEGIES[this.policy.strategy] || STRATEGIES.baseline;
       if (await this.provision(plan, v) === 'ate') return HANDLED;
 
