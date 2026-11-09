@@ -10,8 +10,10 @@ import { join } from 'node:path';
 
 const dir = mkdtempSync(join(tmpdir(), 'm59-dibs-test-'));
 const FILE = join(dir, 'dibs-test.json');
+const FOOD_FILE = join(dir, 'farm-food-cache.json');
 process.env.M59_LEDGER_DIR = join(dir, 'ledger');
 process.env.M59_DIBS_FILE = FILE;
+process.env.M59_FARM_FOOD_CACHE_FILE = FOOD_FILE;
 
 let pass = 0, fail = 0;
 const ok = (label, cond, detail = '') => { if (cond) pass++; else fail++; console.log(`  ${cond ? 'ok  ' : 'FAIL'} ${label}${detail ? ' -- ' + detail : ''}`); };
@@ -67,8 +69,12 @@ function world({ agent, me, room }) {
   const s = new Session(agent);
   s.client = c; s.need = () => c; s.pacer = { submit: async (_k, fn) => fn() };
   s.world = { room: { num: room, name: `room ${room}` } };
-  const drop = (id, name) => { const nameRsc = ++rsc; names.set(nameRsc, name); objects.set(id, { id, nameRsc, col: 10, row: 10, flags: OF.GETTABLE, amount: 1 }); };
-  return { s, gets, drop };
+  const drop = (id, name, { col = 10, row = 10, amount = 1 } = {}) => {
+    const nameRsc = ++rsc;
+    names.set(nameRsc, name);
+    objects.set(id, { id, nameRsc, col, row, flags: OF.GETTABLE, amount });
+  };
+  return { s, c, gets, drop };
 }
 writeFileSync(FILE, JSON.stringify({ claims: [{ room: 2144, item: 'purple mushroom', for: ['Bunsen', 'Beaker', 'Robin'], why: 'hold practice' }] }));
 d.forgetDibs();
@@ -93,6 +99,57 @@ d.forgetDibs();
   w.drop(31, 'purple mushroom');
   await w.s.lootFloor({});
   ok('Rizzo still loots purple mushrooms off his own kills in the farm room (2143)', w.gets.includes('purple mushroom'), JSON.stringify(w.gets));
+}
+
+console.log('registered Ocean food through Session.lootFloor');
+const ward = { id: 92, name: 'Statler', row: 43, col: 57 };
+const food = { id: 93, name: 'loaf of bread', row: 44, col: 56 };
+const server = { host: 'offline.test', port: 5959 };
+const register = (overrides = {}) => {
+  const now = Date.now();
+  writeFileSync(FOOD_FILE, JSON.stringify({ schema: 'm59-farm-food-cache/1', room: 552, room_security: 7,
+    holder: ward, item: food, server, observed_at: now - 10, expires_at: now + 1000, ...overrides }));
+};
+function oceanFloor() {
+  const w = world({ agent: 't13', me: 'Rowlf', room: 552 });
+  w.s.credentials = server;
+  w.c.room.security = 7;
+  w.c.self = { row: 44, col: 50 };
+  w.drop(food.id, food.name, { ...food, amount: 20 });
+  return w;
+}
+{
+  register();
+  const w = oceanFloor();
+  w.drop(94, food.name, { row: 44, col: 55 });
+  const result = await w.s.lootFloor({});
+  ok('a distant ordinary sweep leaves the exact pile but takes other bread', w.gets.length === 1 &&
+    w.c.room.objects.has(food.id) && !w.c.room.objects.has(94));
+  ok('it reports the counted-withdrawal reservation', result.refused.some(row => row.id === food.id && /counted/.test(row.why)));
+  await w.s.lootFloor({ ids: [food.id] });
+  ok('an explicit caller-requested item id still bypasses the cache fence', !w.c.room.objects.has(food.id));
+}
+{
+  register();
+  const w = oceanFloor();
+  await w.s.lootFloor({ ids: [food.id], explicitIdsOverride: false });
+  ok('an internally enumerated id does not bypass the cache fence', w.gets.length === 0);
+}
+{
+  register({ expires_at: Date.now() - 1 });
+  const w = oceanFloor();
+  w.s.pacer.submit = async (kind, fn) => {
+    if (kind === 'get') register();
+    return fn();
+  };
+  await w.s.lootFloor({});
+  ok('a registration arriving after planning still blocks the paced get', w.gets.length === 0);
+}
+{
+  register({ expires_at: Date.now() - 1 });
+  const w = oceanFloor();
+  await w.s.lootFloor({});
+  ok('an expired registration does not reserve unrelated loot', w.gets.length === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

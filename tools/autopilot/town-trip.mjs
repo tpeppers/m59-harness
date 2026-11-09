@@ -495,6 +495,9 @@ export class TownTripPart {
         const result = trip.marketStops?.length ? await this.sellMarketCircuit(trip) : await this.sellInTown();
         if (result?.pending) return result;
         trip.sale = result;
+        // An empty circuit still served every counter. A later no-bank purchase can
+        // defer the trip before its completion stamp, leaving the same pack to retry.
+        if (trip.marketStops?.length) this.lastMarketServiceAt = Date.now();
       }],
       // A FARM TOWN'S CURSED WEAPON (m59-farm-town.mjs `uncurse`): AFTER the sale -- which held it and everything equipped
       // out of every offer -- and BEFORE any buying: potion, drink, drop, read back. Operator 2026-11-07.

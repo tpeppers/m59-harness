@@ -1674,8 +1674,9 @@ export const VIGOR_CAP = 200;
 export const SPELL_EXERTION_VIGOR = 13;
 // AND THE PACK HAS TO BE ABLE TO HOLD WHAT THE SPELL MAKES. `ReqNewHold` refuses on bulk
 // and creaweap.kod:116-129 then DELETES the weapon — AFTER the mana is spent. The spell
-// rolls between six weapons (creaweap.kod:71-105) and the largest is the scimitar at 70
-// bulk, so a pack with less headroom than this is paying 15 mana for a coin flip.
+// rolls between seven weapons (creaweap.kod:71-105). The 70-bulk preflight
+// permits smaller rolls. The recovery cleanup targets room for the largest
+// result, an axe, which needs 90 weight and 90 bulk.
 // Measured 2026-08-29: Beaker had 57 bulk free and Janice 12, both stuffed with mushrooms.
 export const CONJURED_WEAPON_BULK = 70;
 

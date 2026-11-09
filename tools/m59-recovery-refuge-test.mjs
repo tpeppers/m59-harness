@@ -2,6 +2,8 @@ import { readToolSource } from './autopilot/source.mjs';
 // Offline: real geometry, selectors and movement handoffs; no fleet or socket.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Autopilot, releaseSpot } from './m59-autopilot.mjs';
 import { RoomGeometry } from './m59-roo.mjs';
 import {roomGeometry} from './m59-ground.mjs';
@@ -84,10 +86,14 @@ await test('a peer-prepared wall is checked by the native selector and an occupi
 await test('peer preparation runs the real refuge search from the offline ghost rather than its helper', () => {
   const helper=keeper(39,{row:8,col:20}),c=helper.s.client;
   helper.s.name='cooperative-planning-helper';c.selfId=2;c.room.id=3900;c.rsc={get:r=>r};c.idsAsOf=()=>({last_save_at:7});
+  c.room.contentsAt=20;
+  const scope=join(tmpdir(),`m59-refuge-planning-${process.pid}`);
+  Object.assign(helper.s,{fleetStateFile:join(scope,'fleet.json'),cooperativeLogoffDirectory:scope,
+    credentials:{host:'fixture.invalid',port:15959}});
   const ghost={id:1,nameRsc:'Victim',flags:OF.PLAYER|MOVEON.NO,row:8,col:16,x:1056,y:544};
   c.room.objects.set(1,ghost);c.room.objects.set(2,{id:2,flags:OF.PLAYER|MOVEON.NO,row:8,col:20,x:1312,y:544});
   const r=prepareCooperativeRefuge(helper,{agent:'cooperative-planning-victim',body:1,character:'Victim',room:39,room_object:3900,
-    last_save_at:7,position:{row:8,col:16,x:1056,y:544},spot_rule:'wall'});
+    room_ids_at:20,position:{row:8,col:16,x:1056,y:544},spot_rule:'wall'});
   assert(r);assert.deepEqual(r.from,{row:8,col:16,x:1056,y:544});
   assert.deepEqual({row:r.spot.row,col:r.spot.col},{row:7,col:16});
   assert.equal(c.selfId,2,'projection never replaces the helper session');assert.equal(c.self.col,20);

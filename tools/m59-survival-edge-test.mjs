@@ -26,6 +26,8 @@ const { survivalEdgeVerdict, isSurvivalExit, pvpWindowMs, SURVIVAL_EDGE_REVISIT 
 const { recentPvpDeathRooms, PVP_RETURN_DELAY_MS_DEFAULT } = await import('./m59-pvp-return.mjs');
 const { World } = await import('./m59-world.mjs');
 const { Session } = await import('./m59-game.mjs');
+const { Autopilot } = await import('./m59-autopilot.mjs');
+const { chooseSurvivalDecision } = await import('./m59-survival-decision.mjs');
 const { attachStepMasks } = await import('./m59-routes.mjs');
 const { geometryFor } = await import('./m59-safespots.mjs');
 const { loadMap } = await import('./m59-map.mjs');
@@ -117,6 +119,78 @@ const travelOrError = async (s, to, opts) => {
 const crossedNorth = packets => packets.some(p => p.y < 64);
 // Under the north door at r2c13 (kod 880,160): the agent's control walks this to the crossing when unconfined.
 const DOOR = [880, 160];
+
+test('Lew’s ranged exposure selects the short caster exit only with live proof', { skip }, async () => {
+  for (const situation of ['recent', 'stale', 'predicted', 'wrong body', 'melee only']) {
+    const confineRooms = [552, 544, 534, 200, 201, 202, 205];
+    const { s, c } = walker(552, 4656, 557, confineRooms);
+    c.combatReady = true;
+    c.self.predicted = situation === 'predicted';
+    c.vitals = () => ({ health: { value: 59, max: 121 } });
+    const bodies = situation === 'melee only' ? [[13291, 7, 72]] : [[13178, 13, 71], [13102, 14, 70], [13317, 17, 69]];
+    const casters = bodies.map(([id, row, col]) => ({ id, row, col, x: col * 64 + 32, y: row * 64 + 32,
+      name: 'mollusk creature', nameRsc: 8, flags: 9 }));
+    c.rsc.set(8, 'mollusk creature');
+    for (const caster of casters) c.room.objects.set(caster.id, caster);
+    s.lastFleetDamage = { client: c, bodyId: situation === 'wrong body' ? 2 : 1, roomId: c.room.id,
+      at: Date.now() - (situation === 'stale' ? 6000 : 50) };
+    const moves = [];
+    const k = Object.assign(Object.create(Autopilot.prototype), { s, mode: 'farm',
+      policy: { assignedRoom: 552, molluskCoverRecovery: true, confineRooms },
+      operatorSurvivalStandDown: () => false, casterScene: () => ({ casters, complete: true }), note() {},
+      async travel(to, opts) { moves.push([to, opts]); return { arrived: true }; } });
+    assert.equal(await k.leaveForCasters(), true);
+    const [[to, opts]] = moves;
+    assert.equal(to, situation === 'recent' ? 562 : 544, situation);
+    assert.equal(opts.provedOceanCasterExit, situation === 'recent' ? true : undefined, situation);
+    assert.equal(opts.maxHops, situation === 'recent' ? 1 : 2, situation);
+  }
+});
+
+test('a proved Ocean caster exit bypasses departure wedge recovery but an ordinary one checks it', { skip }, async () => {
+  for (const proved of [false, true]) {
+    const confineRooms = [552, 544, 534];
+    const { s } = walker(552, 4656, 557, confineRooms);
+    let wedgeChecks = 0, reachedNormalGuard = false;
+    const k = Object.assign(Object.create(Autopilot.prototype), { s, mode: 'farm',
+      policy: { assignedRoom: 552, molluskCoverRecovery: true, confineRooms }, note() {},
+      async answerWedge() { wedgeChecks++; return { cancelled: true }; },
+      async restBeforeSettingOut() { reachedNormalGuard = true; s.movementGeneration++; } });
+    const out = await k.travel(562, { origin: { source: 'keeper', name: 'caster_exit' }, casterExit: true,
+      provedOceanCasterExit: proved, deskRide: false, maxHops: 1 });
+    assert.equal(out.cancelled, true);
+    assert.equal(wedgeChecks, proved ? 0 : 1);
+    assert.equal(reachedNormalGuard, proved);
+  }
+});
+
+test('Kermit’s spent-session recovery uses the proved shorter Ocean edge when permitted', { skip }, async () => {
+  for (const situation of ['clear', 'unverified', 'occupied', 'predicted', 'banned', 'recent PvP']) {
+    const confineRooms = [552, 544, 534, 200, 201, 202, 205];
+    const { s, c } = walker(552, 4704, 416, confineRooms);
+    const exits = s.world.exits().map(e => ({ ...e }));
+    const east = exits.find(e => e.to === 562);
+    const south = exits.find(e => e.to === 544);
+    assert.ok(east?.verified && south?.verified && east.steps_away * 2 < south.steps_away);
+    s.world.exits = () => exits;
+    if (situation === 'unverified') east.verified = false;
+    if (situation === 'occupied') c.room.objects.set(2, { id: 2, ...east.stand_on, flags: 9 });
+    if (situation === 'predicted') c.self.predicted = true;
+    if (situation === 'recent PvP') {
+      mkdirSync(process.env.M59_PVP_HOLD_DIR, { recursive: true });
+      writeFileSync(join(process.env.M59_PVP_HOLD_DIR, 'ocean.json'), JSON.stringify({ room_num: 562, died_at: Date.now() }));
+      recentPvpDeathRooms({ ttlMs: 0 });
+    }
+    const policy = { assignedRoom: 552, molluskCoverRecovery: true, confineRooms,
+      bannedDestinations: situation === 'banned' ? [562] : [] };
+    const travels = [];
+    const k = Object.assign(Object.create(Autopilot.prototype), { s, policy, mode: 'farm', note() {}, progress() {},
+      async travel(to, { origin, maxHops }) { travels.push({ to, name: origin.name, maxHops }); return { arrived: true }; } });
+    const d = chooseSurvivalDecision(s, { strategy: 'leave_room', status: 'pending', reason: 'spent logout budget' });
+    assert.equal(await k.leaveRoomForRecovery(d), true);
+    assert.deepEqual(travels, [{ to: situation === 'clear' ? 562 : 544, name: 'survival_exit', maxHops: 1 }], situation);
+  }
+});
 
 test('2501 -> 2508, confined to 2501, WITH the survival pass: walks out over the north edge', { skip }, async () => {
   const { s, packets, refused } = walker(2501, ...DOOR, [2501]);

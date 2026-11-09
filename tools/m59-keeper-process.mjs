@@ -3190,15 +3190,24 @@ const server = createServer(async (req, res) => {
             } catch (e) { json({ error: e.message }, 500); }
             return;
           }
-          // SELL ONE THING. `sell_all` already runs here for exactly this reason; the single
-          // sale was left behind on the proxy and threw the same way.
           case 'sell_one': {
             const item = args.item && typeof args.item === 'object'
               ? { id: Number(args.item.id), amount: args.item.amount }
               : { id: Number(args.item) };
             if (!Number.isFinite(item.id)) { json({ error: 'sell_one needs an item id' }, 400); return; }
+            const merchant = session.client?.room?.objects?.get(Number(args.merchant));
+            if (!(merchant?.flags & OF.BUYABLE) || (merchant.flags & OF.PLAYER)) {
+              json({ error: 'sell_one needs a merchant in this room' }, 400);
+              return;
+            }
             try {
-              const r = await session.sellOne(args.merchant, item, args.confirm === true);
+              const job = session.startJob('commerce:sell', `sell to ${merchant.id}`, async () => {
+                const loop = session._tickLoop, wasFrozen = loop?._frozen;
+                if (loop) loop._frozen = true;
+                try { return await session.sellOne(merchant.id, item, args.confirm === true); }
+                finally { if (loop) loop._frozen = wasFrozen; }
+              });
+              const r = await job.promise;
               json(r ?? { sold: false });
             } catch (e) { json({ error: e.message }, 500); }
             return;
@@ -3245,6 +3254,10 @@ const server = createServer(async (req, res) => {
             json(holdKeeper(String(args.why ?? 'an errand owns this character'),
                             Math.max(5000, Math.min(Number(args.max_ms ?? 180000), 900000)),
                             args.token ?? null));
+            return;
+          }
+          case 'retire_pack_blocked_journey': {
+            json(autopilot?.retirePackBlockedJourney(Number(args.to), callerOrigin(args), args.since) ?? { retired: false });
             return;
           }
           case 'release': {

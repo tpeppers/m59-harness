@@ -109,6 +109,28 @@ await test('the spent-session exit owns its crossing until its decision changes'
  chooseSurvivalDecision(f.s,{strategy:'nearest_refuge',reason:'an independent emergency'});
  assert.equal(f.s.shelterPolicy.need(),true);
 });
+await test('the keeper retains Clifford’s active spent-session exit without yielding real claims',async()=>{
+ for(const owner of ['own exit','expired order','external travel','external order','external combat','external combat claim','external recovery','external survival']) {
+  const {s,k,d}=fixture({room:552,row:49,col:44,predicted:false,prepareStop:false,leaveRoom:true});
+  s.client.vitals=()=>({health:{value:5,max:123},vigor:{value:101}});
+  if(owner==='external travel')k.inert.origin={source:'operator',name:'travel'};
+  if(owner==='external combat')s.combat={active:{id:'operator-combat'}};
+  if(owner==='external combat claim')k.claims.set('combat',{owner:'operator',until:Date.now()+10000});
+  for(const faculty of ['recovery','survival'])if(owner==='external '+faculty)
+   k.claims.set(faculty,{owner:'operator',until:Date.now()+10000});
+  const origin=owner==='external order'?{source:'operator',name:'travel'}:k.inert.origin;
+  await withMoveOrder(s,{kind:'travel',to:544,origin},async()=>{
+   if(owner==='expired order')s.movementGeneration++;
+   assert.equal(await k.continueSurvivalDecisionStep(),false,owner);
+   assert.equal(currentSurvivalDecision(s)?.strategy,owner==='own exit'?'leave_room':'yield_to_controller',owner);
+   if(owner==='own exit') {
+    assert.equal(currentSurvivalDecision(s),d);
+    assert.equal(s.shelterPolicy.need(),false,'the same crossing still owns the travel guard');
+   }
+  });
+ }
+});
+
 await test('a fallback endpoint cannot become the onward exit without a live offered hop',async()=>{
  const f=fixture({room:552,row:28,col:65,prepareStop:false});
  const {s,k}=f;

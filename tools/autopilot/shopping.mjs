@@ -22,7 +22,7 @@ import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
 import { farmTownKeep, farmTownMenu, farmTownSaleLoadout } from '../m59-farm-town.mjs';
-import { floorsFor, readReserve, reagentKey, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
+import { floorsFor, keptCastsFor, readReserve, reagentKey, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
 import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
 import { countsOf, overlayRequests } from '../m59-reagent-autobalance.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -201,9 +201,18 @@ export class ShoppingPart {
     const c = this.s?.client;
     const who = this.s?.reserveWho;
     const known = (c?.spells ?? []).map(sp => c.rsc?.get?.(sp.nameRsc) ?? sp.name).filter(Boolean);
-    const reserve = town.sellReserve && who ? resolveReserve(readReserve(reserveFile(who.fleet)), who) : null;
+    const book = town.sellReserve && who ? readReserve(reserveFile(who.fleet)) : null;
+    const reserve = resolveReserve(book, who ?? {});
     const floors = floorsFor(reserve, known);
     const spellFloors = new Map(Object.keys(town.sellReserve ?? {}).map(item => [item, floors.get(reagentKey(item)) ?? 0]));
+    if (book && town.sellOverflow?.length) {
+      const casts = keptCastsFor(book, who);
+      const retained = floorsFor({ spells: casts, items: reserve?.items ?? {} }, known.length ? known : Object.keys(casts));
+      for (const item of spellFloors.keys()) {
+        const key = reagentKey(item);
+        if (town.sellOverflow.some(name => reagentKey(name) === key)) spellFloors.set(item, retained.get(key) ?? 0);
+      }
+    }
     return {
       keep: MARKET_KEEP,
       protect: farmTownKeep(town, this.saleProtectedNames()),

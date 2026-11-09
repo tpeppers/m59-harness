@@ -8,18 +8,18 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 7 methods: passErrand, restVigorCeiling, releaseRestedHold, resumeDeclined,
-//   casterRecoveryFulfilled, resumeSuspendedJourney, cancelJourney
+// Methods: passErrand, restVigorCeiling, releaseRestedHold, resumeDeclined,
+//   casterRecoveryFulfilled, resumeSuspendedJourney, retirePackBlockedJourney, cancelJourney
 import { poisonedNow } from '../m59-poison.mjs';
 import { traceDecision } from '../m59-keeper-trace.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
-import { keeperOrigin, liveMoveOrder, moveOrigin } from '../m59-move-origin.mjs';
+import { keeperOrigin, liveMoveOrder, moveOrigin, originLabel } from '../m59-move-origin.mjs';
 import { opensFightFromWall } from '../m59-policydiff.mjs';
 import * as skills from '../m59-skills.mjs';
 import { currentSurvivalDecision, isActiveRecoveryDecision } from '../m59-survival-decision.mjs';
 import { scriptedDeviationResumeCandidate, scriptedTrafficResumeReady } from '../m59-traffic-resume.mjs';
 import { roadHuntResume } from '../m59-travel-hunt.mjs';
-import { CONTINUE, HANDLED, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, RESUME_FLAT_SAMPLES, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorPct } from '../m59-autopilot.mjs';
+import { CONJURED_WEAPON_BULK, CONTINUE, HANDLED, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, RESUME_FLAT_SAMPLES, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorPct } from '../m59-autopilot.mjs';
 
 export class PassErrandPart {
   // @part 1
@@ -229,6 +229,7 @@ export class PassErrandPart {
       // OUT OF THE PASSAGE BEFORE ANYTHING THAT SITS STILL. See makeWay.
       if (await this.makeWay().catch(() => false)) return HANDLED;
       if (await this.eatToFloor(ctx) === 'ate') return HANDLED;
+      if (await this.restOceanMedic().catch(() => false)) return HANDLED;
       if (await this.hibernate('idle: no job to do').catch(() => false)) return HANDLED;
       return HANDLED;
     }
@@ -385,7 +386,17 @@ export class PassErrandPart {
            'can make it. Staying is how a journey times out without ever being in danger.',
     });
     try {
-      const left = await this.leaveHold('rested to the ceiling — back on the road', { force: true });
+      const { s, hold } = this;
+      const me = s.client?.self, room = s.world?.room?.num;
+      // Keep the recovery logout in reserve on the last approach and on the
+      // Deep Woods leg when the suspended journey is bound for the Ocean.
+      const oceanApproach = room === 544 || (room === 534 && journey?.to === 552);
+      const preserveRecoveryLogoff = this.mode === 'farm' && this.policy.farmStrategy === 'great-ocean-marion' &&
+        this.policy.assignedRoom === 552 && oceanApproach && hp === 1 &&
+        hold.room === room && hold.proven === true && !!me && !me.predicted && me.row === hold.row && me.col === hold.col &&
+        !s.combat?.active && !this.playerThreatPresent() &&
+        Date.now() - Math.max(s.damagedAt ?? 0, s.lastCombatLine?.at ?? 0) >= 6000;
+      const left = await this.leaveHold('rested to the ceiling — back on the road', { force: true, preserveRecoveryLogoff });
       return left.left === true;
     } catch (e) {
       this.note('could not leave the rested hold', { why: e.message });
@@ -693,6 +704,37 @@ export class PassErrandPart {
       }
     }
     return HANDLED;
+  }
+
+  // Pack space does not recover by resting. Retire only the script's suspended route
+  // so its economy claim can unwind. A new move or real recovery keeps its authority.
+  retirePackBlockedJourney(to, origin, since) {
+    const s = this.s, j = this.suspendedJourney, d = this.lastDecision;
+    if (origin?.source !== 'fleetscript' || !origin.run_id || !j?.origin?.run_id ||
+        originLabel(j.origin) !== originLabel(origin) || Number(j.to) !== Number(to) ||
+        !Number.isFinite(since) || j.at < since ||
+        this.facultyOwner('movement') !== `fleetscript:${origin.name}` ||
+        this.facultyOwner('economy') !== `fleetscript:${origin.name}`)
+      return { retired: false };
+    if (liveMoveOrder(s) || (s.job && !s.job.done) || s.client?.trade || s.keeperRecoveryTravel || this.inert ||
+        isActiveRecoveryDecision(currentSurvivalDecision(s)) || this.frozenUntil > Date.now())
+      return { retired: false };
+    const health = s.client?.vitals?.()?.health;
+    if (!(health?.max > 0 && health.value === health.max) || !s.client?.room?.objects)
+      return { retired: false };
+    const threat = this.threat();
+    const age = Date.now() - d?.at;
+    const bulkFree = skills.carryCapacity(s.client)?.room_for?.bulk;
+    if (threat.near.length || threat.landing || this.armed() ||
+        d?.stage !== 'passArm' || d.what !== 'unarmed and cannot hold what the spell would make' ||
+        d.needs !== CONJURED_WEAPON_BULK ||
+        !Number.isFinite(bulkFree) || bulkFree !== d.bulk_free || bulkFree >= CONJURED_WEAPON_BULK ||
+        !(d.at >= j.at && age >= 0 && age <= 5_000))
+      return { retired: false };
+    this.suspendedJourney = null;
+    this.note('retired a pack-blocked FleetScript journey', { to: j.to, ordered_by: originLabel(origin),
+      bulk_free: d.bulk_free, needs: d.needs });
+    return { retired: true, bulk_free: bulkFree, needs: CONJURED_WEAPON_BULK };
   }
 
   // `origin` is the CALLER's provenance (m59-move-origin.mjs). Everything that reaches this is

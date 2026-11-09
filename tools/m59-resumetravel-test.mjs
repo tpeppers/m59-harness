@@ -435,6 +435,37 @@ console.log('A WALL THAT HAS FINISHED ITS WORK IS RELEASED IN THE STAGE THAT OWN
     ok('and says what it needed, so the number is arguable from the record',
        said(whole, /needed/) || said(whole, /full health/));
   }
+  // A quiet full-health departure in 544 spent Kermit's recovery logout. Fozzie
+  // spent his the same way in 534 before resuming his suspended trip to 552.
+  for (const [room, to, situation, breakoutsExpected] of [
+    [544, null, 'quiet', 0],
+    [534, 552, 'quiet', 0],
+    [534, 552, 'hit', 1],
+    [534, 552, 'missed swing', 1],
+    [534, 552, 'unproven', 1],
+    [534, 552, 'predicted pose', 1],
+    [534, 552, 'PvP', 1],
+    [534, null, 'no journey', 1],
+    [534, 202, 'other destination', 1],
+    [535, 552, 'other map', 1],
+  ]) {
+    const k = keeper({ room, health: 120, max: 120, vigor: 200,
+      hold: { room, row: 2, col: 24, proven: situation !== 'unproven' },
+      policy: { farmStrategy: 'great-ocean-marion', assignedRoom: 552, pullToSafeWall: false } });
+    k.mode = 'farm';
+    if (to !== null) k.suspendedJourney = { to };
+    k.s.client.self = { id: 1, row: 2, col: 24, predicted: situation === 'predicted pose' };
+    k.s.damagedAt = situation === 'hit' ? Date.now() - 1000 : 0;
+    k.s.lastCombatLine = situation === 'missed swing' ? { at: Date.now() - 1000 } : null;
+    k.playerThreatPresent = () => situation === 'PvP';
+    k.leaveHold = Autopilot.prototype.leaveHold;
+    let breakouts = 0, steps = 0;
+    k.breakOut = async () => { breakouts++; return { did: true }; };
+    k.stepOutOfThePocket = async () => { steps++; return true; };
+    k.releaseHold = () => { k.hold = null; };
+    ok(`rested Ocean return in ${room} (${situation}) steps away with the appropriate logout behavior`,
+      await k.releaseRestedHold() && !k.hold && steps === 1 && breakouts === breakoutsExpected);
+  }
 }
 
 console.log('');

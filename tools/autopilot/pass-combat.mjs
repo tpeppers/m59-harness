@@ -25,6 +25,7 @@ import { CONJURED_WEAPON_BULK, CONTINUE, FIGHT_BACK_GAP_MS, FIGHT_BACK_STALE_MS,
 // The unarmed make-space hook: at most once per ten minutes, and room for the weapon plus a margin.
 export const UNARMED_MAKE_SPACE_EVERY_MS = 10 * 60_000;
 export const UNARMED_MAKE_SPACE_MARGIN = 10;
+const CONJURED_AXE_SIZE = 90;
 
 export class PassCombatPart {
   // @part 1
@@ -615,7 +616,10 @@ export class PassCombatPart {
     if (!c || this.facultyHeld?.('economy')) return false;
     if (now - (this._unarmedMakeSpaceAt ?? 0) < UNARMED_MAKE_SPACE_EVERY_MS) return false;
     this._unarmedMakeSpaceAt = now;
-    const made = await this.makeSpaceNow({ bulk: CONJURED_WEAPON_BULK + UNARMED_MAKE_SPACE_MARGIN,
+    // Create Weapon can roll an axe, which needs 90 in both dimensions. Once
+    // recovery is clearing the pack, leave room for that result too.
+    const clearance = CONJURED_AXE_SIZE + UNARMED_MAKE_SPACE_MARGIN;
+    const made = await this.makeSpaceNow({ bulk: clearance, weight: clearance,
       why: 'unarmed: room for a conjured weapon' }).catch(e => ({ ok: false, why: e?.message }));
     if (!made?.dropped?.length && !made?.ok) return false;
     // RETRY THE CONJURE NOW, through the same armSelf the top of passArm uses.
@@ -987,12 +991,15 @@ export class PassCombatPart {
     }
     const holding = !!this.hold;
     this.doing = 'fighting';
+    const fightBack = { cornered, ordinary: !roadHunt && due.reason !== 'blocked' };
+    this.activeFightBack = fightBack;
     const f = await this.fightNow({
       target: pick.name, preferId: pick.o.id, exactTargetId: pick.o.id,
       rounds: cornered ? 1 : (this.policy.fightRounds ?? 10), disengageAt: cornered ? 0 : fleeAt, loot: true,
       holdPosition: holding || cornered, reach: REACH, weaponPriority: this.weaponPriorityNow(),
       bannedWeapons: this.bannedWeaponsNow(),
-    }).catch(e => ({ fought: false, killed: false, died: false, note: e.message }));
+    }).catch(e => ({ fought: false, killed: false, died: false, note: e.message }))
+      .finally(() => { if (this.activeFightBack === fightBack) this.activeFightBack = null; });
     // The clock restarts either way: ten more seconds of being hit re-arms it.
     if (w) w.attack = null;
 

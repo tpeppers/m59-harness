@@ -10,6 +10,7 @@
 //
 // 5 methods: restBroken, packWantsMarket, checkIfShouldSell, itemValue, farmCleanupBeforeSale
 import { closeIfHealed, mayLogoff, noteLogoff, staysPut } from '../m59-healing-session.mjs';
+import { oceanRockThreats } from '../m59-cooperative-logoff.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
 import { orderSkills } from '../m59-standing-orders.mjs';
@@ -35,15 +36,27 @@ export class MarketPart {
   //   to move before we can heal regardless, we may as well move somewhere that holds.
   //
   // Only after both is resting allowed again, and by then it is a different square.
-  async restBroken(room, near) {
+  async restBroken(room, near, { interruptedByAttack = false } = {}) {
     this.tally.rests_broken = (this.tally.rests_broken || 0) + 1;
     // ONE LOGOFF PER HEALING SESSION, AND ONE SPOT (m59-healing-session.mjs). Operator, 2026-10-27: "Only one logoff:
     // After, It just sits still and safe after rotating so it can heal." Once this session's logoff is spent, a broken
-    // rest neither logs off again, gives up the spot, nor walks to another wall: the body stays where it is and heals.
+    // rest keeps the wall unless the Ocean's live evidence shows that the body is being hit there.
     const me = String(this.s?.name ?? '');
     { const h = this.s.client?.vitals?.()?.health; closeIfHealed(me, { hp: h?.value, max: h?.max }); }
     const spent = !mayLogoff(me);
-    if (spent && staysPut(me, { holding: !!this.hold })) {
+    const { client, lastFleetDamage } = this.s;
+    const at = client?.self, hold = this.hold, damageAge = Date.now() - lastFleetDamage?.at;
+    const oceanWallHit = spent && interruptedByAttack && hold && this.oceanRangedRecoveryEnabled() &&
+      this.s.live && client?.combatReady === true && client.room?.objects instanceof Map &&
+      at && !at.predicted && at.id === client.selfId &&
+      hold.room === room?.num && hold.row === at.row && hold.col === at.col &&
+      lastFleetDamage?.client === client && lastFleetDamage.bodyId === client.selfId &&
+      lastFleetDamage.roomId === client.room?.id && damageAge >= 0 && damageAge < 5000;
+    const liveAttackers = oceanWallHit
+      ? this.inReachOfUs().length + oceanRockThreats(this, [...client.room.objects.values()], { outsideMelee: true }).length
+      : 0;
+    const attackers = liveAttackers || near.length;
+    if (spent && !liveAttackers && staysPut(me, { holding: !!hold })) {
       this.note('hit while resting, staying put: this healing session already logged off once', {
         rule: 'one logoff per healing session, one spot, sit still until full' });
       return;
@@ -71,7 +84,7 @@ export class MarketPart {
     //
     // The rest is still broken, and everything below still runs. All this refuses to do
     // is blame the square when nothing was there to blame it for.
-    if (this.hold && !near.length) {
+    if (this.hold && !attackers) {
       this.note('rest broken with nothing in reach — not counted against this square', {
         where: { col: this.hold.col, row: this.hold.row }, room: room?.num,
         why: 'a rest can be interrupted by things that are not an attack, and a window ' +
@@ -79,13 +92,13 @@ export class MarketPart {
              'refused the same window' });
     }
     // Evidence first, while we still know which square failed.
-    if (this.hold && near.length) {
+    if (this.hold && attackers) {
       this.noteFailedRestSpot(this.hold.room, this.hold.col, this.hold.row);
       // (a `book.failed(...)` write stood here; the ledger is retired — see the note at the
       // matching site in the rest-interruption path)
       this.note('THIS IS NOT A SAFE SPOT', {
         where: { col: this.hold.col, row: this.hold.row }, room: room?.num,
-        attackers: near.length, proven_against: this.hold.mostAttackers ?? 0,
+        attackers, proven_against: this.hold.mostAttackers ?? 0,
         why: 'we were hit while resting, which is standing still and not swinging — the ' +
              'one thing that cannot happen in a working spot',
         caveat: 'this keeper temporarily skips the square on its next shelter search; ' +

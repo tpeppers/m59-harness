@@ -188,15 +188,19 @@ console.log('\nequipBest(): a refusal must name the candidate');
 }
 
 // ---------------------------------------------------------------- freeRoomFor()
-function packClient({ inventory, using = [], broken = [], look }) {
+function packClient({ inventory, using = [], broken = [], look, acceptsDrop = false }) {
   let seq = 0;
   const ring = [], drops = [], looks = [];
   const c = {
     inventory, using: new Set(using), get evSeq() { return seq; },
     _brokenWeapons: new Set(broken),
-    rsc: { get: id => ({ 10: 'mace', 11: 'long sword', 12: 'broken mace' })[id] ?? '' },
-    drop(specs) { for (const sp of specs) drops.push(typeof sp === 'object' ? sp.id : sp); },
-    requestInventory: () => {},
+    rsc: { get: id => ({ 10: 'mace', 11: 'long sword', 12: 'broken mace', 13: 'axe', 14: 'blue mushroom',
+                        15: 'create weapon' })[id] ?? '' },
+    drop(specs) {
+      for (const sp of specs) drops.push(typeof sp === 'object' ? sp.id : sp);
+      if (acceptsDrop) this.inventory = this.inventory.filter(o => !drops.includes(o.id));
+    },
+    requestInventory: () => ring.push({ seq: ++seq, kind: 'inventory' }),
     look(id) { looks.push(id); const r = look(id, looks.length); if (r) ring.push({ seq: ++seq, kind: 'look', ...r }); },
     waitFor: async ({ since = 0, kinds = null, match = null } = {}) => {
       const want = kinds && new Set([].concat(kinds));
@@ -274,6 +278,65 @@ console.log('\nfreeRoomFor(): a precious item leaves only on a fresh look at its
   const u = packClient({ inventory: [{ id: 7, nameRsc: 10 }], look: id => ({ id, description: 'A mace.' }) });
   ok('confirmBroken on a description without a condition phrase reads unknown and changes nothing',
      await confirmBroken(u.s, 7) === 'unknown' && !brokenSet(u.c).has(7));
+}
+
+console.log('\na full pack can shed a confirmed shattered weapon before the conjure capacity guard');
+{
+  const { Autopilot } = await import('./m59-autopilot.mjs');
+  const { clearShatteredWeaponSpace, makeWeapon, knowsCreateWeapon } = Autopilot.prototype;
+  const axe = { id: 11588, nameRsc: 13, rarity: 0 };
+  const blue = { id: 11589, nameRsc: 14, rarity: 0, amount: 420 };
+  const brokenAxe = 'This axe has been shattered by a powerful blow.';
+  const setup = ({ look = id => ({ id, description: brokenAxe }), acceptsDrop = true } = {}) => {
+    const t = packClient({ inventory: [axe, blue], broken: [axe.id], look, acceptsDrop });
+    const casts = [], declines = [];
+    t.c.stat = () => 25;
+    t.c.idsAsOf = () => ({ inventory_at: 1, last_save_at: null, saves_seen: 0 });
+    t.c.equipment = () => ({ known: true, equipped: [] });
+    t.c.spells = [{ id: 7, nameRsc: 15 }];
+    t.c.vitals = () => ({ mana: { value: 25 }, vigor: { value: 184 } });
+    t.c.requestSpells = () => {};
+    t.c.cast = (id) => casts.push(id);
+    t.s.world = { room: { num: 48 } };
+    const ap = { s: t.s, policy: { dropJunk: true }, loadout: () => null, sanctuary: () => true,
+      dropSpec: o => o.id, heldBackIds: () => new Set(), facultyHeld: () => false, note: () => {},
+      knowsCreateWeapon, clearShatteredWeaponSpace, makeWeapon,
+      bareHandedByTraining: () => false, bannedWeaponsNow: () => [], tally: {}, recordCast: () => {},
+      declinedCast: (_spell, why) => { declines.push(why); return false; } };
+    return { ...t, ap, casts, declines };
+  };
+  const live = setup();
+  await live.ap.makeWeapon();
+  ok('the Rizzo case drops only the freshly confirmed axe, then attempts the cast',
+     live.looks.join(',') === String(axe.id) && live.drops.join(',') === String(axe.id) && live.casts.join(',') === '7' &&
+     live.c.inventory.some(o => o.id === blue.id && o.amount === 420));
+  const refused = setup({ acceptsDrop: false });
+  await refused.ap.makeWeapon();
+  ok('a refused drop leaves the bulk refusal in place and spends no mana',
+     refused.drops.length === 1 && refused.casts.length === 0 && refused.declines[0] === 'no room for the weapon');
+  const stale = setup({ look: () => ({ id: 10641, description: brokenAxe }) });
+  ok('a different id cannot authorize a drop', !await stale.ap.clearShatteredWeaponSpace(10) && !stale.drops.length);
+  const leased = setup({ look: id => { leased.ap.facultyHeld = () => true; return { id, description: brokenAxe }; } });
+  ok('a new economy lease before the packet cancels the drop',
+     !await leased.ap.clearShatteredWeaponSpace(10) && !leased.drops.length);
+  const saved = setup({ look: id => {
+    saved.c.idsAsOf = () => ({ inventory_at: 3, last_save_at: 2, saves_seen: 1 });
+    return { id, description: brokenAxe };
+  } });
+  ok('a server save retires the LOOK even when the item id still appears to match',
+     !await saved.ap.clearShatteredWeaponSpace(10) && !saved.drops.length);
+  for (const [label, protect] of [
+    ['held custody', t => { t.ap.heldBackIds = () => new Set([axe.id]); }],
+    ['equipped item', t => { t.c.using.add(axe.id); }],
+    ['unknown equipment', t => { t.c.equipment = () => ({ known: false }); }],
+    ['loadout gear', t => { t.ap.loadout = () => ({ keep: [], gear: { weapon: ['axe'], slots: {} }, carry: [] }); }],
+    ['policy keep', t => { t.ap.policy.protectedItems = ['axe']; }],
+    ['loot disposition', t => { t.s.lootDisposition = () => ({ action: 'vault' }); }],
+    ['disabled dropping', t => { t.ap.policy.dropJunk = false; }],
+  ]) {
+    const t = setup(); protect(t);
+    ok(`${label} prevents discarding a shattered weapon`, !await t.ap.clearShatteredWeaponSpace(10) && !t.drops.length);
+  }
 }
 
 // ---------------------------------------------------------------- the keeper's call site

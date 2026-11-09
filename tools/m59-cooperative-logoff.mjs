@@ -11,6 +11,7 @@ import {lineOfSight} from './m59-safespots.mjs';
 import * as party from './m59-party.mjs';
 import {stationaryTradeActive} from './m59-stationary-trade.mjs';
 import {recordEvent} from './m59-ledger.mjs';
+import {SHORT_FIGHT_APPROACH_SQUARES} from './m59-skills.mjs';
 const base = fileURLToPath(new URL('../substrate/cooperative-logoff/', import.meta.url));
 const fold = x => String(x ?? '').trim().toLowerCase();
 const hash = x => createHash('sha256').update(x).digest('hex');
@@ -21,14 +22,22 @@ const cannotDistract = pilot => pilot.policy?.neverAttack === true || pilot.s.wo
 const pending = r => r && ['preparing','offline','returning'].includes(r.state);
 const position = p => p && !p.predicted && [p.x,p.y,p.row,p.col].every(Number.isFinite)
   ? {x:p.x,y:p.y,row:p.row,col:p.col} : null;
+const afterSave = (at,cut) => Number.isFinite(at) && at>cut;
+const localSaveCut = (c,cut) => Math.max(cut,c?.idsAsOf?.()?.last_save_at??0);
+
+function roomIdsAt(c,cut) {
+  const ids=c?.idsAsOf?.(),at=c?.room?.contentsAt;
+  return ids && !ids.saving && afterSave(at,cut) ? at : null;
+}
 
 // The helper lends observations, never its body or command authority. Planning
 // runs while the subject is offline; the subject claims and checks cover on return.
 export function prepareCooperativeRefuge(pilot,request,{now=Date.now()}={}) {
   const s=pilot.s,c=s.client,geo=s.world?.geometry;
+  const cut=localSaveCut(c,cooperativeStore(s)?.saveBoundary());
   if(!geo||typeof pilot.searchSafeSpot!=='function'||
     s.world.room.num!==request.room||c.room.id!==request.room_object||
-    c.idsAsOf?.()?.last_save_at!==request.last_save_at)return null;
+    !afterSave(request.room_ids_at,cut)||roomIdsAt(c,cut)==null)return null;
   const ghost=c.room.objects.get(request.body);
   if(ghost && fold(c.rsc.get(ghost.nameRsc))!==fold(request.character))return null;
   const from=position(ghost)??request.position;
@@ -41,15 +50,17 @@ export function prepareCooperativeRefuge(pilot,request,{now=Date.now()}={}) {
   const spot=pilot.searchSafeSpot.call(projected,geo,from,s.world.room,{within:Math.max(geo.rows,geo.cols)||64,
     los:request.los??0,quarry:null,stats:{},shareCap:1,exclusiveClaim:true,recovery:true});
   if(!spot)return null;
-  return {at:now,by:s.name,room:request.room,room_object:request.room_object,last_save_at:request.last_save_at,
+  return {at:now,by:s.name,room:request.room,room_object:request.room_object,room_ids_at:request.room_ids_at,
     roo:s.world.room.roo??null,from:{...from},subject_body:request.body,
     spot:{row:spot.row,col:spot.col,...(spot.fine?{fine:{...spot.fine}}:{}),steps_away:spot.steps_away??null}};
 }
 export function cooperativeReturnRefuge(session,{now=Date.now()}={}) {
   const r=session.cooperativeLogoffReturn,p=r?.refuge,c=session.client,me=position(c?.self);
-  if(!p||!me||!session.live||c.combatReady!==true||now-p.at<0||now-p.at>30000||
+  if(!p)return null;
+  const cut=localSaveCut(c,cooperativeStore(session)?.saveBoundary());
+  if(!me||!session.live||c.combatReady!==true||now-p.at<0||now-p.at>30000||
     session.world?.room?.num!==p.room||c.room?.id!==p.room_object||
-    c.idsAsOf?.()?.last_save_at!==p.last_save_at||(session.world.room.roo??null)!==p.roo||
+    !afterSave(p.room_ids_at,cut)||roomIdsAt(c,cut)==null||(session.world.room.roo??null)!==p.roo||
     c.selfId!==p.subject_body||me.row!==p.from.row||me.col!==p.from.col||
     Math.hypot(me.x-p.from.x,me.y-p.from.y)>2)return null;
   return p.spot;
@@ -75,6 +86,11 @@ export function cooperativeStore(session, credentials=session.credentials, {dire
   if (!session.fleetStateFile || !credentials?.host || !credentials?.port || !session.name) return null;
   const scope=JSON.stringify([fold(resolve(session.fleetStateFile)),fold(credentials.host),Number(credentials.port)]);
   const dir=join(directory,hash(scope));
+  const saves=join(dir,'save-boundaries');
+  const saveNames=()=>{
+    try{return readdirSync(saves).filter(name=>/^\d{1,15}$/.test(name));}
+    catch(e){if(e.code==='ENOENT')return [];throw e;}
+  };
   const file=(kind,agent)=>join(dir,kind+'-'+hash(agent)+'.json');
   const write=(kind,agent,value)=>{mkdirSync(dir,{recursive:true});const path=file(kind,agent),tmp=path+'.'+process.pid+'.'+randomUUID()+'.tmp';writeFileSync(tmp,JSON.stringify(value));replaceFileSync(tmp,path,{rename:session.cooperativeRename??renameSync});return value;};
   const list=kind=>{try{return readdirSync(dir).filter(n=>n.startsWith(kind+'-')&&n.endsWith('.json')).map(n=>read(join(dir,n))).filter(Boolean);}catch(e){if(e.code==='ENOENT')return[];throw e;}};
@@ -83,10 +99,22 @@ export function cooperativeStore(session, credentials=session.credentials, {dire
   // still never broken; the login gate no longer needs one to end a stuck record (gateStep).
   const open=path=>{try{return openSync(path,'wx');}catch(e){if(e.code==='EEXIST'||BUSY.has(e.code))return null;throw e;}};
   return {scope,dir,read:(kind,agent)=>read(file(kind,agent)),write,list,
+    saveBoundary:()=>Math.max(0,...saveNames().map(Number)),
+    recordSave(at){
+      mkdirSync(saves,{recursive:true});
+      // Independent timestamp markers cannot overwrite a newer observation. The
+      // filename is the record, so readers never see a partially written epoch.
+      closeSync(openSync(join(saves,String(at)),'a'));
+      for(const name of saveNames())if(Number(name)<at-60000){try{unlinkSync(join(saves,name));}catch{}}
+    },
     lock(room,run){mkdirSync(dir,{recursive:true});const path=join(dir,'room-'+room+'.lock');const fd=open(path);if(fd==null)return null;
       const token=randomUUID();
       try{writeFileSync(fd,JSON.stringify({pid:process.pid,process_started_at:Math.round(Date.now()-process.uptime()*1000),at:Date.now(),token}));return run();}
       finally{closeSync(fd);try{if(read(path)?.token===token)unlinkSync(path);}catch{}}}};
+}
+export function recordCooperativeSaveBoundary(session,{phase,at}) {
+  if(['begin','end'].includes(phase)&&Number.isSafeInteger(at)&&at>0)
+    cooperativeStore(session)?.recordSave(at);
 }
 export function normalizeCooperativeLogoff(answer) {
   if(answer?.enabled!==true)return null;
@@ -104,7 +132,7 @@ export function publishCooperativePresence(pilot,{now=Date.now()}={}) {
   if(now-(s._cooperativePublishedAt??0)<500&&s._cooperativePublishedEnabled===enabled)return false;
   const p={at:now,agent:s.name,pid:process.pid,character:c?.me?.name??s.credentials?.character,
     live:!!s.live&&c?.combatReady===true,body:c?.selfId,room:s.world?.room?.num,room_object:c?.room?.id,
-    health:c?.vitals?.()?.health??null,enabled};
+    room_ids_at:roomIdsAt(c,localSaveCut(c,store.saveBoundary())),health:c?.vitals?.()?.health??null,enabled};
   store.write('presence',s.name,p);s._cooperativePublishedAt=now;s._cooperativePublishedEnabled=enabled;
   // Presence is published by the watchdog every 500ms whatever the keeper is doing, including
   // fighting, so the gone observation rides on it: a helper busy in combat still reports.
@@ -129,14 +157,31 @@ export function publishCooperativePresence(pilot,{now=Date.now()}={}) {
 // seen again deletes the receipt. The gate accepts it only while it is fresh and its writer's
 // presence is fresh and in the room -- the same rules a hit receipt meets.
 export const GONE_MS=15000, GONE_GAP_MS=3000, GONE_REFRESH_MS=5000;
+const RECEIPT_MS=30000;
+// A recent receipt stops replacement work only while the login gate could use its witness.
+function cooperativeReceiptSatisfied(store,r,t,now,cut,maxAge=RECEIPT_MS) {
+  const receipt=r.receipts?.[t.id],at=receipt?.kind==='gone'?receipt.at:receipt?.hit_at;
+  if(!(afterSave(r.room_ids_at,cut)&&afterSave(receipt?.room_ids_at,cut)&&
+    receipt.request_id===r.id&&receipt.target_id===t.id&&receipt.name===t.name&&
+    at>=r.offline_at&&at<=now&&now-at<maxAge))return false;
+  const p=store.read('presence',receipt.helper);
+  if(!(fresh(p,now)&&afterSave(p.room_ids_at,cut)&&p.body===receipt.helper_body&&p.room===r.room&&p.room_object===r.room_object&&
+    !pending(store.read('request',receipt.helper))))return false;
+  return receipt.kind==='gone'?at-receipt.seen_absent_since>=GONE_MS:true;
+}
+
+function suppressGoneReceipt(store,r,t,now,cut) {
+  return cooperativeReceiptSatisfied(store,r,t,now,cut,r.receipts?.[t.id]?.kind==='gone'?GONE_REFRESH_MS:RECEIPT_MS);
+}
+
 export function observeCooperativeTargets(pilot,{now=Date.now(),store=cooperativeStore(pilot.s)}={}) {
   const s=pilot.s,c=s?.client;if(!store||!s?.name)return 0;
-  const seen=s._cooperativeGoneSeen??=new Map(),ids=c?.idsAsOf?.()??null;
+  const seen=s._cooperativeGoneSeen??=new Map(),cut=localSaveCut(c,store.saveBoundary()),observed=roomIdsAt(c,cut);
   const room=s.world?.room?.num,roomObject=c?.room?.id,objects=c?.room?.objects;
   const readable=!!s.live&&c.combatReady===true&&objects instanceof Map&&c.selfId!=null&&objects.has(c.selfId)&&
-    ids?.saving!==true&&room!=null&&roomObject!=null&&!pending(store.read('request',s.name));
+    observed!=null&&room!=null&&roomObject!=null&&!pending(store.read('request',s.name));
   const requests=readable?store.list('request').filter(r=>r.agent!==s.name&&['offline','returning'].includes(r.state)&&
-    r.room===room&&r.room_object===roomObject&&(ids?.last_save_at??null)===(r.last_save_at??null)):[];
+    r.room===room&&r.room_object===roomObject&&afterSave(r.room_ids_at,cut)):[];
   const live=new Set();let wrote=0;
   for(const r of requests)for(const t of r.targets??[]){
     const key=r.id+':'+t.id;live.add(key);
@@ -151,14 +196,14 @@ export function observeCooperativeTargets(pilot,{now=Date.now(),store=cooperativ
     const continued=!!prior&&now>=prior.last&&now-prior.last<=GONE_GAP_MS;
     const since=continued?prior.since:now,n=continued?prior.n+1:1;
     seen.set(key,{since,last:now,n});
-    const had=r.receipts?.[t.id];
-    if(n<2||now-since<GONE_MS||had&&now-(had.kind==='gone'?had.at:had.hit_at)<(had.kind==='gone'?GONE_REFRESH_MS:30000))continue;
+    if(n<2||now-since<GONE_MS||suppressGoneReceipt(store,r,t,now,cut))continue;
     wrote+=store.lock(room,()=>{const cur=store.read('request',r.agent);
       // Only an 'offline' record: 'returning' is requester-owned (see cooperativeAfterLogin).
       if(cur?.id!==r.id||cur.state!=='offline'||cur.room!==room||cur.room_object!==roomObject)return 0;
-      const old=cur.receipts?.[t.id];if(old&&old.kind!=='gone'&&now-old.hit_at<30000)return 0;
+      const latest=localSaveCut(c,store.saveBoundary());
+      if(!afterSave(cur.room_ids_at,latest)||!afterSave(observed,latest)||suppressGoneReceipt(store,cur,t,now,latest))return 0;
       cur.receipts={...(cur.receipts??{}),[t.id]:{kind:'gone',request_id:cur.id,target_id:t.id,name:t.name,
-        helper:s.name,helper_body:c.selfId,seen_absent_since:since,observations:n,at:now}};
+        helper:s.name,helper_body:c.selfId,room_ids_at:observed,seen_absent_since:since,observations:n,at:now}};
       store.write('request',cur.agent,cur);return 1;})?1:0;
   }
   // An unreadable observation is never absence: it forgets every clock it could not continue.
@@ -168,6 +213,7 @@ export function observeCooperativeTargets(pilot,{now=Date.now(),store=cooperativ
 export async function configureCooperativeLogoff(pilot,phase,{ includeOceanRanged = false } = {}) {
   const s=pilot.s;if(typeof s._askStrategies!=='function')return null;
   const c=s.client,objects=[...(c?.room?.objects?.values?.()??[])];
+  const roomObject=c?.room?.id,observed=roomIdsAt(c,localSaveCut(c,0));
   const fleetmates=objects.filter(o=>o.id!==c?.selfId&&(o.flags&OF.PLAYER)&&party.isFleetmate(c.rsc?.get(o.nameRsc)));
   let monsters=(pilot.inReachOfUs?.()??[]).filter(o=>(o.flags&OF.ATTACKABLE)&&!(o.flags&OF.PLAYER));
   if (phase === 'request' && includeOceanRanged) {
@@ -180,7 +226,7 @@ export async function configureCooperativeLogoff(pilot,phase,{ includeOceanRange
   const config=normalizeCooperativeLogoff(got?.answer);
   if(phase==='helper')pilot._cooperativeLogoffConfig=config;
   if(config){pilot._cooperativeLogoffConfig=config;publishCooperativePresence(pilot);}
-  return config?{config,ctx,monsters,fleetmates,strategy:got.strategy}:null;
+  return config?{config,ctx,monsters,fleetmates,strategy:got.strategy,client:c,roomObject,observed}:null;
 }
 
 export function oceanRockThreats(pilot, objects, { outsideMelee = false } = {}) {
@@ -209,16 +255,20 @@ export function oceanRockThreats(pilot, objects, { outsideMelee = false } = {}) 
 export function requestCooperativeLogoff(pilot,offered,{now=Date.now()}={}) {
   const s=pilot.s,c=s.client,store=cooperativeStore(s);if(!store||!s.live||!offered?.monsters.length)return null;
   return store.lock(s.world.room.num,()=>{
+    const cut=localSaveCut(c,store.saveBoundary());
+    if(offered.client!==c||offered.roomObject!==c.room.id||offered.ctx.room!==s.world.room.num||
+      !afterSave(offered.observed,cut)||roomIdsAt(c,cut)==null||
+      offered.monsters.some(o=>c.room.objects.get(o.id)?.nameRsc!==o.nameRsc))return null;
     const previous=store.read('request',s.name);
     if(pending(previous)||previous&&now-previous.created_at<offered.config.cooldown_ms)return null;
-    const helpers=store.list('presence').filter(p=>p.agent!==s.name&&p.enabled&&fresh(p,now)&&p.room===s.world.room.num&&p.room_object===c.room.id&&
+    const helpers=store.list('presence').filter(p=>p.agent!==s.name&&p.enabled&&fresh(p,now)&&afterSave(p.room_ids_at,cut)&&p.room===s.world.room.num&&p.room_object===c.room.id&&
       !pending(store.read('request',p.agent))&&offered.fleetmates.some(o=>o.id===p.body&&fold(c.rsc.get(o.nameRsc))===fold(p.character)));
     if(!helpers.length)return null;
     const targets=offered.monsters.slice(0,16).map(o=>({id:o.id,name:c.rsc.get(o.nameRsc),name_rsc:o.nameRsc}));
     if(targets.length!==offered.monsters.length)return null;
     return store.write('request',s.name,{id:randomUUID(),agent:s.name,character:c.me?.name??s.credentials.character,state:'preparing',
       created_at:now,room:s.world.room.num,room_object:c.room.id,body:c.selfId,position:position(c.self),
-      last_save_at:c.idsAsOf?.()?.last_save_at,spot_rule:pilot.policy?.spotRule??'wall',los:pilot.policy?.los??0,
+      last_save_at:c.idsAsOf?.()?.last_save_at,room_ids_at:offered.observed,spot_rule:pilot.policy?.spotRule??'wall',los:pilot.policy?.los??0,
       targets,helpers:helpers.map(p=>p.agent),receipts:{},strategy:offered.strategy,
       // Carried on the request because the gate also runs on keeper restart and broker rejoin,
       // where the strategy that granted it is not asked again.
@@ -384,19 +434,18 @@ function gateStep(session,store,now) {
     return false;
   }
   const receipts=Object.values(r.receipts??{});
-  const satisfied=t=>{
-    const hit=r.receipts?.[t.id],p=hit&&store.read('presence',hit.helper),at=hit?.kind==='gone'?hit.at:hit?.hit_at;
-    if(!(hit?.request_id===r.id&&hit.target_id===t.id&&hit.name===t.name&&at>=r.offline_at&&at<=now()&&now()-at<30000&&
-      fresh(p,now())&&p.body===hit.helper_body&&p.room===r.room&&p.room_object===r.room_object&&!pending(store.read('request',hit.helper))))return false;
-    return hit.kind==='gone'?at-hit.seen_absent_since>=GONE_MS:true;
-  };
+  const cut=store.saveBoundary();
+  const satisfied=t=>cooperativeReceiptSatisfied(store,r,t,now(),cut);
   const targets=r.targets??[];
   const valid=targets.every(satisfied);
   if(valid&&receipts.length){
     const permit=store.lock(r.room,()=>{const current=store.read('request',session.name);
       if(current?.id!==r.id||!['offline','returning'].includes(current.state))return false;
-      current.state='returning';store.write('request',session.name,current);return true;});
-    if(permit){session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts,refuge:r.refuge??null,released_at:now()};return true;}
+      const latest=store.saveBoundary(),at=now(),targets=current.targets??[];
+      if(!targets.length||!targets.every(t=>cooperativeReceiptSatisfied(store,current,t,at,latest)))return false;
+      current.state='returning';return store.write('request',session.name,current);});
+    if(permit){session.cooperativeLogoffReturn={request_id:r.id,room:r.room,
+      receipts:permit.targets.map(t=>permit.receipts[t.id]),refuge:permit.refuge??null,released_at:now()};return true;}
   }else if(Number.isFinite(r.max_offline_ms)&&Number.isFinite(r.offline_at)&&now()-r.offline_at>=r.max_offline_ms){
     // The opt-in deadline: the strategy asked for a bounded wait, so the body comes back
     // undistracted and the record says so. 'aborted' is not pending, so nothing re-gates it.
@@ -409,7 +458,8 @@ function gateStep(session,store,now) {
     if(released){
       noteCooperativeRecovery(session,{action:'released_at_deadline',...summary(r),reason_code:'deadline',
         why:`no distraction confirmed within max_offline_ms ${Math.round(r.max_offline_ms/1000)}s; logging in undistracted`});
-      session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts,refuge:r.refuge??null,released_at:now(),released:'deadline'};return true;
+      session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts:targets.filter(satisfied).map(t=>r.receipts[t.id]),
+        refuge:afterSave(r.room_ids_at,cut)?r.refuge??null:null,released_at:now(),released:'deadline'};return true;
     }
     // The release could not be written. Past the margin the login goes anyway: a record nobody can
     // write must not keep the body out. Short of it, the next poll tries the write again.
@@ -498,14 +548,31 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
   const offered=await configureCooperativeLogoff(pilot,'helper');if(!offered)return false;
   const {config}=offered,s=pilot.s,store=cooperativeStore(s);if(!store||!cooperativeHelperReady(pilot,config,{now:now()}))return false;
   const c=s.client,room=s.world.room.num;
-  const requests=store.list('request').filter(r=>r.state==='offline'&&now()-r.offline_at>=800&&now()-(r.last_attempt_at??0)>=2000&&r.room===room&&r.room_object===c.room.id&&r.helpers.includes(s.name)).sort((a,b)=>a.created_at-b.created_at);
+  const cut=localSaveCut(c,store.saveBoundary());
+  if(roomIdsAt(c,cut)==null)return false;
+  const geometry = s.world.geometry;
+  const oceanRoad = room === 544 && Number(pilot.policy?.assignedRoom) === 552;
+  const origin = (room === 552 || oceanRoad) && pilot.policy?.molluskCoverRecovery === true &&
+    geometry?.collisionReady && Number.isInteger(geometry.security) && c.room.security === geometry.security
+    ? position(c.self) : null;
+  const requests=store.list('request').filter(r=>r.state==='offline'&&afterSave(r.room_ids_at,cut)&&now()-r.offline_at>=800&&now()-(r.last_attempt_at??0)>=2000&&r.room===room&&r.room_object===c.room.id&&r.helpers.includes(s.name)).sort((a,b)=>a.created_at-b.created_at);
   for(const request of requests){
-    // A gone receipt carries `at`, not `hit_at`; reading hit_at off one would be NaN and never retry.
-    const target=request.targets.find(t=>{const x=request.receipts?.[t.id];return !x||!(now()-(x.kind==='gone'?x.at:x.hit_at)<30000);});
+    // Work on live targets while the absence observer collects proof for missing ones.
+    const target = request.targets.find(candidate => {
+      if (cooperativeReceiptSatisfied(store,request,candidate,now(),cut)) return false;
+      const object = c.room.objects.get(candidate.id);
+      if (!object || object.nameRsc !== candidate.name_rsc || c.rsc.get(object.nameRsc) !== candidate.name ||
+          !(object.flags & OF.ATTACKABLE) || (object.flags & OF.PLAYER)) return false;
+      const aim = origin && position(object);
+      // The one-swing fight declines a positive coarse approach beyond its short range.
+      // Leave the request unclaimed so a nearer helper can act, and preserve its fine-grid fallback.
+      return !(aim && Math.hypot(aim.row - origin.row, aim.col - origin.col) > SHORT_FIGHT_APPROACH_SQUARES &&
+        s.world.approachSquare?.(aim.col, aim.row)?.steps > 0);
+    });
     if(!target)continue;
-    const object=c.room.objects.get(target.id);
-    if(!object||object.nameRsc!==target.name_rsc||c.rsc.get(object.nameRsc)!==target.name||!(object.flags&OF.ATTACKABLE)||(object.flags&OF.PLAYER))continue;
-    const lock=store.lock(room,()=>{const r=store.read('request',request.agent);if(r?.id!==request.id||r.state!=='offline'||r.claim&&r.claim.until>now())return null;
+    const lock=store.lock(room,()=>{const r=store.read('request',request.agent),latest=localSaveCut(c,store.saveBoundary());
+      if(r?.id!==request.id||r.state!=='offline'||!afterSave(r.room_ids_at,latest)||roomIdsAt(c,latest)==null||
+      r.claim&&r.claim.until>now()||cooperativeReceiptSatisfied(store,r,target,now(),latest))return null;
       r.claim={helper:s.name,token:randomUUID(),until:now()+config.attempt_ms+4000};store.write('request',r.agent,r);return r.claim;});
     if(!lock)continue;
     const generation=s.movementGeneration,save=c.idsAsOf?.()?.last_save_at;
@@ -517,14 +584,20 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
         if(r?.id===request.id&&r.state==='offline'&&r.claim?.token===lock.token){r.refuge=refuge;store.write('request',r.agent,r);}});
     }catch(e){pilot.note?.('cooperative refuge preparation unavailable',{request_id:request.id,why:e.message});}
     let active=true,result=null;const previousDoing=pilot.doing;
+    const currentRoomIds=()=>{
+      const latest=localSaveCut(c,store.saveBoundary());
+      return afterSave(request.room_ids_at,latest)?roomIdsAt(c,latest):null;
+    };
     const acknowledge=hit=>{
       if(hit?.target_id!==target.id||!(hit.landed_hits>0)||s.client!==c||!s.live||s.movementWasCancelled?.(generation)||s.world.room.num!==room||c.room.id!==request.room_object||c.idsAsOf?.()?.last_save_at!==save||!(c.vitals()?.health?.value>0))return;
+      if(currentRoomIds()==null)return;
       s._cooperativePublishedAt=0;publishCooperativePresence(pilot,{now:now()});
-      store.lock(room,()=>{const r=store.read('request',request.agent);if(r?.id!==request.id||r.state!=='offline'||r.claim?.token!==lock.token)return;
-        r.receipts[target.id]={request_id:r.id,target_id:target.id,name:target.name,helper:s.name,helper_body:c.selfId,hit_at:now(),landed_hits:hit.landed_hits};store.write('request',r.agent,r);});
+      store.lock(room,()=>{const r=store.read('request',request.agent),observed=currentRoomIds();
+        if(r?.id!==request.id||r.state!=='offline'||r.claim?.token!==lock.token||observed==null)return;
+        r.receipts[target.id]={request_id:r.id,target_id:target.id,name:target.name,helper:s.name,helper_body:c.selfId,room_ids_at:observed,hit_at:now(),landed_hits:hit.landed_hits};store.write('request',r.agent,r);});
     };
     const guard=kind=>{if(!active||s.client!==c||s.world.room.num!==room||c.room.id!==request.room_object||s.movementWasCancelled?.(generation)||
-      c.idsAsOf?.()?.last_save_at!==save||kind!=='read'&&!cooperativeHelperReady(pilot,config,{now:now(),during:true,requestId:request.id}))throw Error('cooperative distraction preempted');
+      c.idsAsOf?.()?.last_save_at!==save||currentRoomIds()==null||kind!=='read'&&!cooperativeHelperReady(pilot,config,{now:now(),during:true,requestId:request.id}))throw Error('cooperative distraction preempted');
       const current=store.read('request',request.agent);if(current?.id!==request.id||!['offline','returning','resumed'].includes(current.state)||kind!=='read'&&current.state!=='offline'||current.claim?.token!==lock.token||current.claim.until<=now())throw Error('cooperative distraction claim expired');
       if(kind!=='read'){const o=c.room.objects.get(target.id);if(!o||o.nameRsc!==target.name_rsc||(o.flags&OF.PLAYER))throw Error('cooperative quarry changed');}};
     try{
@@ -538,7 +611,8 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
     }catch(e){pilot.note?.('cooperative distraction deferred',{request_id:request.id,why:e.message});}
     finally{active=false;if(pilot.doing==='fighting'&&!s.combat?.active)pilot.doing=previousDoing;
       store.lock(room,()=>{const r=store.read('request',request.agent);if(r?.id===request.id&&r.state==='offline'&&r.claim?.token===lock.token){delete r.claim;r.last_attempt_at=now();store.write('request',r.agent,r);}});}
-    pilot.note?.('cooperative distraction result',{request_id:request.id,target_id:target.id,landed_hits:result?.landed_hits??0});
+    pilot.note?.('cooperative distraction result',{request_id:request.id,target_id:target.id,landed_hits:result?.landed_hits??0,
+      reason:result?.reason??null,out_of_reach:result?.out_of_reach===true,approach_blocked:result?.approach_blocked===true});
     return true;
   }
   return false;

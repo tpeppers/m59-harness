@@ -765,12 +765,13 @@ export class FacultiesPart {
   // roster. Everything else is the carve-out and is freely claimable.
   static PROTECTED_FACULTIES = ['identity', 'mortality', 'survival', 'recovery'];
 
-  facultyOwner(faculty) {
+  facultyOwner(faculty, { ignoreTravelHold = null } = {}) {
     if (this.s?.combat?.active && !Autopilot.PROTECTED_FACULTIES.includes(faculty))
       return `combat:${this.s.combat.active.id}`;
     // `inert` is the legacy whole-character claim and still answers first, so a caller
     // that never learned about faculties sees exactly what it always saw.
-    if (this.inert && !Autopilot.PROTECTED_FACULTIES.includes(faculty))
+    if (this.inert && !(this.inert.travelling && this.inert === ignoreTravelHold) &&
+        !Autopilot.PROTECTED_FACULTIES.includes(faculty))
       return this.inert.why ? `inert:${this.inert.why}` : 'inert';
     const c = this.claims?.get(faculty);
     if (!c) return 'keeper';
@@ -780,7 +781,7 @@ export class FacultiesPart {
 
   // Does something other than the keeper own this right now? The keeper asks this before
   // acting on a directional branch; it never asks it about a protected one.
-  facultyHeld(faculty) { return this.facultyOwner(faculty) !== 'keeper'; }
+  facultyHeld(faculty, opts) { return this.facultyOwner(faculty, opts) !== 'keeper'; }
 
   claimFaculties({ faculties = [], by = null, leaseMs = 120_000, why = null,
                    mayYield = [] } = {}) {

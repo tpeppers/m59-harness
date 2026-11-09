@@ -494,7 +494,7 @@ export class ErrandsPart {
   // somehow never happens the wait is capped and it goes anyway, saying so — the same
   // shape as the sanctuary hold, and for the same reason: a condition that cannot be met
   // is a character retired by accident.
-  async leaveHold(why, { force = false } = {}) {
+  async leaveHold(why, { force = false, preserveRecoveryLogoff = false } = {}) {
     // NO WALL IS NOT THE SAME AS NOTHING TO DECIDE. #movement
     //
     // This line used to read `if (!this.hold) return { left: false };` — a character holding
@@ -569,7 +569,10 @@ export class ErrandsPart {
       this.holdKeptSince = null;
       this.holdKeptNoted = false;
     }
-    const out = await this.breakOut(why).catch(e => ({ did: false, why: e.message }));
+    const out = preserveRecoveryLogoff
+      ? { did: false }
+      : await this.breakOut(why).catch(e => ({ did: false, why: e.message }));
+    if (preserveRecoveryLogoff) this.note('leaving quiet Ocean recovery cover with logout in reserve', { why });
     const stepped = await this.stepOutOfThePocket(why);
     this.releaseHold(why);
     return { left: true, reconnected: !!out.did, crowd: out.crowd ?? 0,

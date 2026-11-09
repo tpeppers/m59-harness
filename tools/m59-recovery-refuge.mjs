@@ -4,6 +4,12 @@ import {fineRefugeReach} from './m59-fine-refuge-reach.mjs';
 import {planBodyDetour} from './m59-body-detour.mjs';
 
 export const REFUGE_PROGRESS_MS = 8000;
+export const REFUGE_NO_PROGRESS_REASON = 'shelter approach made no confirmed route progress';
+
+export function isStalledRefugeRetry(decision) {
+  return decision?.status === 'pending' && ['route_refuge', 'nearest_refuge', 'logoff_open'].includes(decision.strategy) &&
+    decision.reason_code === 'approach_interrupted' && decision.reason === REFUGE_NO_PROGRESS_REASON;
+}
 
 // A forward preference is appropriate until actual damage or a failed approach
 // makes its exposure costly. Unknown pursuit is not evidence that the road is safe.

@@ -31,12 +31,20 @@ import { publishAccepts, noteRefusal } from '../m59-floor-cache.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
 import { affordableHeal, castRecoveryHeal, healAllowed, healReadiness } from '../m59-recovery-heal.mjs';
-import { minorHealBlockedByKarma } from '../m59-spells.mjs';
+import { lineOfSight } from '../m59-safespots.mjs';
+import { shalilleHealBlockedByKarma } from '../m59-spells.mjs';
 import { normalizeShare, planGift } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { huntLabel } from '../m59-spawns.mjs';
 import * as wandDuty from '../m59-wand-duty.mjs';
+import { behindYou } from '../m59-wand-shot.mjs';
 import { Autopilot, healAllowOf, pct } from '../m59-autopilot.mjs';
+
+export function dedicatedOceanMedic(keeper) {
+  const allow = healAllowOf(keeper);
+  return keeper.mode === 'idle' && keeper.policy?.neverAttack === true && keeper.policy.assignedRoom === 552 &&
+    keeper.s.world?.room?.num === 552 && allow?.length === 1 && healAllowed('minor heal', allow);
+}
 
 export class SocialPart {
   // @part 1
@@ -67,8 +75,12 @@ export class SocialPart {
         this.note('accepted a gift', { from: t.withName,
                                        items: t.theirs.map(i => i.name + (i.amount > 1 ? ` x${i.amount}` : '')) });
         this.progress('someone gave us something');
-        // Put it to use immediately — a donated sword is no help in the pack.
-        await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => {});
+        // Gifts are still accepted while a caster or another controller owns the loadout.
+        const gearHeld = () => this.policy?.neverAttack === true || this.facultyHeld('work') || this.facultyHeld('economy');
+        if (!gearHeld()) {
+          await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow(),
+            shouldCancel: gearHeld }).catch(() => {});
+        }
       } catch (e) { this.note('could not accept a gift', { why: e.message }); }
     }
 
@@ -203,23 +215,84 @@ export class SocialPart {
   // Health reports come from the ally's own socket, scoped to endpoint and body.
   // Stale or unobserved allies never acquire an invented HP value.
   async healObservedFleetmate() {
-    const s=this.s,c=s.client,now=Date.now(),credentials=s.credentials;
-    if(!['farm','idle'].includes(this.mode)||this.facultyHeld('work')||s.combat?.active||!c?.combatReady||!credentials||this.checkFreeze()||s._rite
-       ||!(pct(c.vitals()?.health)>=0.9)||!affordableHeal(c,{allow:healAllowOf(this)})||now-(this._observedAllyHealAt??0)<3000)return false;
-    const candidates=[...c.room.objects.values()].filter(o=>o.id!==c.selfId&&(o.flags&OF.PLAYER)&&
-      allyVerdict({name:c.rsc.get(o.nameRsc)??'',flags:o.flags},{friends:this.policy?.buffAllies?.friends??[]}).ally)
-      .map(o=>({o,report:readFleetHealth({...credentials,character:c.rsc.get(o.nameRsc)},{room:s.world?.room?.num,bodyId:o.id,now})}))
-      .filter(({report:r})=>r&&r.health.value/r.health.max<0.9&&r.health.max-r.health.value>=3)
-      .sort((a,b)=>a.report.health.value/a.report.health.max-b.report.health.value/b.report.health.max);
-    const target=candidates[0];if(!target)return false;
-    const generation=s.movementGeneration,bodyId=c.selfId,room=c.room.id;
-    const cancelled=()=>s.client!==c||c.selfId!==bodyId||c.room.id!==room||s.movementWasCancelled?.(generation)||!['farm','idle'].includes(this.mode)||this.facultyHeld('work')||s.combat?.active||this.checkFreeze()||!(pct(c.vitals()?.health)>=0.9)||
-      !(() => {const r=readFleetHealth({...credentials,character:target.report.character},{room:s.world?.room?.num,bodyId:target.o.id});return r&&r.health.value/r.health.max<0.9&&r.health.max-r.health.value>=3;})()||
-      String(c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'').trim().toLowerCase()!==target.report.character.trim().toLowerCase()||
-      !allyVerdict({name:c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'',flags:c.room.objects.get(target.o.id)?.flags??0},{friends:this.policy?.buffAllies?.friends??[]}).ally;
-    this._observedAllyHealAt=now;
-    const result=await castRecoveryHeal(s,{targetId:target.o.id,targetHealth:target.report.health,shouldCancel:cancelled,allow:healAllowOf(this)});
-    const afterReport=readFleetHealth({...credentials,character:target.report.character},{room:s.world?.room?.num,bodyId:target.o.id});
+    const s = this.s, c = s.client, now = Date.now(), credentials = s.credentials;
+    const allow = healAllowOf(this), roomNum = s.world?.room?.num;
+    if (!['farm', 'idle'].includes(this.mode) || this.facultyHeld('work') || s.combat?.active || !c?.combatReady ||
+        !credentials || this.checkFreeze() || s._rite || !(pct(c.vitals()?.health) >= 0.9) ||
+        !affordableHeal(c, { allow }) || now - (this._observedAllyHealAt ?? 0) < 3000) return false;
+    const dedicated = dedicatedOceanMedic(this);
+    const retries = dedicated ? (this._oceanHealRetryAt ??= new Map()) : null;
+    const geo = s.world?.geometry;
+    const canCheckSight = dedicated && geo?.collisionReady && typeof geo.canMove === 'function' &&
+      geo.security === c.room.security && c.self && !c.self.predicted;
+    // spell.kod SuccessChance penalizes blocked sight, but doesn't forbid the cast.
+    // Prefer a clear shot before spending mana through an obstruction.
+    const sight = target => {
+      if (!canCheckSight || target.predicted ||
+          ![c.self.row, c.self.col, target.row, target.col].every(Number.isSafeInteger)) return 0.5;
+      const coarse = lineOfSight(geo, c.self.row, c.self.col, target.row, target.col);
+      const fine = lineOfSight(geo, c.self.row, c.self.col, target.row, target.col, { fine: true });
+      return (Number(coarse) + Number(fine)) / 2;
+    };
+    const recentDamage = (r, at) => r.damaged_at <= at && at - r.damaged_at <= 15_000 ? r.damaged_at : 0;
+    const eligible = r => {
+      if (!r || pct(r.health) >= 0.9 || r.health.max - r.health.value < 3) return false;
+      if (!dedicated) return true;
+      const vigor = c.vitals()?.vigor?.value;
+      if (vigor <= 65) this._oceanMedicConserving = true;
+      if (vigor >= 72) this._oceanMedicConserving = false;
+      return (Number.isFinite(vigor) && !this._oceanMedicConserving) ||
+        (pct(r.health) <= 0.45 && recentDamage(r, Date.now()) > 0);
+    };
+    const isAlly = o => !!(o?.flags & OF.PLAYER) &&
+      allyVerdict({ name: c.rsc.get(o.nameRsc) ?? '', flags: o.flags }, { friends: this.policy?.buffAllies?.friends ?? [] }).ally;
+    const candidates = [];
+    for (const o of c.room.objects.values()) {
+      if (o.id === c.selfId || !isAlly(o)) continue;
+      const report = readFleetHealth({ ...credentials, character: c.rsc.get(o.nameRsc) }, { room: roomNum, bodyId: o.id, now });
+      if (!eligible(report)) continue;
+      const key = `${c.room.id}:${o.id}:${report.character}`;
+      if (retries?.get(key) > now) continue;
+      const damage = dedicated ? recentDamage(report, now) : 0;
+      candidates.push({ o, report, key, damage, sight: dedicated ? sight(o) : 0,
+        urgent: damage > 0 && pct(report.health) <= 0.45 });
+    }
+    candidates.sort((a, b) => Number(b.urgent) - Number(a.urgent) || b.sight - a.sight || b.damage - a.damage ||
+      pct(a.report.health) - pct(b.report.health));
+    const target = candidates[0];
+    if (!target) return false;
+    const generation = s.movementGeneration, bodyId = c.selfId, room = c.room.id;
+    const liveTarget = () => c.room.objects.get(target.o.id);
+    const currentReport = () => readFleetHealth({ ...credentials, character: target.report.character }, { room: roomNum, bodyId: target.o.id });
+    const cancelled = () => {
+      if (s.client !== c || c.selfId !== bodyId || c.room.id !== room || s.movementWasCancelled?.(generation) ||
+          !['farm', 'idle'].includes(this.mode) || this.facultyHeld('work') || s.combat?.active || this.checkFreeze() ||
+          !(pct(c.vitals()?.health) >= 0.9) || s.world?.room?.num !== roomNum ||
+          (dedicated && !dedicatedOceanMedic(this)) || !eligible(currentReport())) return true;
+      const live = liveTarget();
+      return !isAlly(live) ||
+        String(c.rsc.get(live.nameRsc) ?? '').trim().toLowerCase() !== target.report.character.trim().toLowerCase();
+    };
+    const behind = () => {
+      const me = c.self;
+      const angle = Number.isFinite(me?.degrees) ? Math.round(me.degrees * 4096 / 360) : me?.angle;
+      return behindYou(me, liveTarget(), angle) === true;
+    };
+    this._observedAllyHealAt = now;
+    // player.kod TargetWithinSightAndRange refuses single-target spells behind the caster.
+    // Turn in place and fence the send again if a moving patient crosses behind us.
+    if (dedicated && behind() && !cancelled() && typeof s.faceToward === 'function') {
+      await s.faceToward(liveTarget(), { beforePacket: () => {
+        if (cancelled()) throw new Error('ally heal target changed before turn');
+      } }).catch(() => null);
+    }
+    const result = await castRecoveryHeal(s, { targetId: target.o.id, targetHealth: target.report.health,
+      shouldCancel: () => cancelled() || (dedicated && behind()), allow });
+    const afterReport = currentReport();
+    if (retries && !result.paid && result.server_outcome !== 'succeeded' && eligible(afterReport)) {
+      for (const [key, until] of retries) if (until <= now) retries.delete(key);
+      retries.set(target.key, Date.now() + 8000);
+    }
     result.target_report_before_at=target.report.at;
     if(afterReport&&afterReport.at>=target.report.at){result.target_health_after=afterReport.health;result.target_report_after_at=afterReport.at;}
     c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_RESULT',reason:JSON.stringify({trigger:'observed_fleetmate',...result})});
@@ -229,6 +302,7 @@ export class SocialPart {
   }
 
   async medic() {
+    if (dedicatedOceanMedic(this)) return;
     const s = this.s, c = s.need();
     const MEDIC_GAP_MS = 45_000;
     if (this.lastHealAt && Date.now() - this.lastHealAt < MEDIC_GAP_MS) return;
@@ -245,8 +319,8 @@ export class SocialPart {
       const found = (c.spells || [])
         .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === h.name);
       if (!found) continue;
-      if (minorHealBlockedByKarma(c.stat?.('karma'), h.name)) {
-        tried.push(`${h.name} (blocked by negative karma)`);
+      if (shalilleHealBlockedByKarma(c.stat?.('karma'), h.name)) {
+        tried.push(`${h.name} (blocked by karma)`);
         continue;
       }
       if (mana && mana.value < h.mana + 1) { tried.push(`${h.name} (needs ${h.mana + 1} mana)`); continue; }
@@ -312,6 +386,7 @@ export class SocialPart {
     this.lastHealAt = Date.now();
     const manaBefore = c.vitals()?.mana?.value ?? null;
     const sent = await withCastRite(s, { spell, targets: [other.id], why: 'medic' }, () => s.pacer.submit('cast', () => {
+      if (shalilleHealBlockedByKarma(c.stat?.('karma'), rung.name)) return false;
       const r=s.credentials ? readFleetHealth({...s.credentials,character:c.rsc.get(other.nameRsc)},{room:s.world?.room?.num,bodyId:other.id}) : null;
       if(other.healthReport && (!r || r.health.value>=r.health.max)) return;
       return c.cast(spell.id,[other.id]);

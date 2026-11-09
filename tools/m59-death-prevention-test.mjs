@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { healUp, restUntil, isHealingFlaskDescription } from './m59-skills.mjs';
 const { Autopilot } = await import(process.env.M59_TEST_AUTOPILOT ?? './m59-autopilot.mjs');
 import { Session } from './m59-game.mjs';
+import { bodyAuthority } from './m59-body-command.mjs';
 import { geometryFor } from './m59-safespots.mjs';
 import { observeRefugeProgress, REFUGE_PROGRESS_MS } from './m59-recovery-refuge.mjs';
 import { attachSurvivalDecisions, chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision } from './m59-survival-decision.mjs';
@@ -151,7 +152,8 @@ test('confirmed fine progress within a square renews only the best route',()=>{
 test('predicted recovery arrival is confirmed before the watchdog can cancel',async t=>{
  t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
  const {s,c,k,target}=approachFixture();c.self={...c.self,id:1,x:1312,y:480,predicted:true};c.room.id=777;s.damagedAt=Date.now();
- let reads=0;s.confirmFinePosition=async()=>{reads++;return {id:1,row:target.row,col:target.col,x:1504,y:480,room_object_id:777};};
+ let reads=0;s.confirmFinePosition=async()=>{reads++;assert.equal(bodyAuthority(s).priority,1);
+  return {id:1,row:target.row,col:target.col,x:1504,y:480,room_object_id:777};};
  const stop=k.watchRecoveryApproach(target);t.mock.timers.tick(2000);await Promise.resolve();await Promise.resolve();
  assert.equal(reads,1);assert.equal(s.movementGeneration,0);t.mock.timers.tick(8000);assert.equal(s.movementGeneration,0);stop();
 });
@@ -183,6 +185,34 @@ test('incoming damage shortens a motionless refuge approach to two seconds; prog
   t.mock.timers.tick(1500);assert.equal(s.movementGeneration,0);
   t.mock.timers.tick(500);assert.equal(s.movementGeneration,1);
   assert.ok(k.unreachableIn(38).has('23,7'));stop();
+});
+for (const [replans, replacement] of [[0, 'route_refuge'], [1, 'logoff_open']])
+test(`an exact Ocean ${replacement} retry asks for help before the old movement unwinds`,t=>{
+  t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
+  const {k,s,c}=approachFixture(),target={row:6,col:74};
+  s.world.room.num=552;
+  c.room.id=1416;
+  c.self={id:1,row:49,col:44,x:2833,y:3183};
+  s.damagedAt=Date.now();
+  k.policy.molluskCoverRecovery=true;
+  k.mode='farm';
+  k.inert={travelling:true,to:544};
+  const previous=chooseSurvivalDecision(s,{strategy:'route_refuge',status:'approaching',
+    chosen_refuge:{room:552,...target},replan_count:replans});
+  const probes=[];
+  k.tryOceanCooperativeEscape=async retry=>{probes.push({retry,generation:s.movementGeneration});return false;};
+  const stop=k.watchRecoveryApproach(target);
+  t.mock.timers.tick(1500);
+  assert.equal(probes.length,0);
+  t.mock.timers.tick(500);
+  const retry=currentSurvivalDecision(s);
+  assert.equal(retry.strategy,replacement);
+  assert.equal(retry.status,'pending');
+  assert.equal(retry.previous_decision_id,previous.id);
+  assert.deepEqual(probes,[{retry,generation:1}]);
+  t.mock.timers.tick(1500);
+  assert.equal(probes.length,1);
+  stop();
 });
 test('a new recovery episode and a completed arrival do not inherit an expired approach clock',t=>{
   t.mock.timers.enable({apis:['Date','setInterval'],now:100000});

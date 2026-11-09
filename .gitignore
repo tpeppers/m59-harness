@@ -1090,3 +1090,4 @@ substrate/rescue-travel/
 # Dibs: floor items in a room reserved for named characters (tools/m59-dibs.mjs). An instruction to the fleet, so this
 # machine's; the shape is substrate/dibs.example.json, BESIDE the files the tool reads.
 /substrate/dibs-*.json
+/substrate/farm-food-cache-*.json

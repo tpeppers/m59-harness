@@ -34,6 +34,7 @@ export const SESSION_MAX_MS = 2 * 3_600_000;
 export const SESSION_MIN_MS = Number(process.env.M59_HEALING_MIN_MS || 5 * 60_000);
 const fileOf = (agent, dir) => join(dir, `${String(agent ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
 const recoveredAfterLogoff = (s, now) => s?.logoffs === 1 && s.recovered_at > s.last_logoff_at && s.recovered_at <= now;
+const settlesAt = s => Number(s.last_logoff_at ?? s.started_at) + SESSION_MIN_MS;
 
 // A keeper always has a name; a nameless one is a test fake or a body not yet logged in, and gets no session -- one
 // shared 'unknown' file would hand every such fake the same spent logoff.
@@ -59,19 +60,68 @@ function writeSession(agent, s, dir) {
 export function closeIfHealed(agent, { hp = null, max = null, dir = healingDir(), now = Date.now() } = {}) {
   const s = readSession(agent, { dir, now });
   if (!s) return null;
-  const settled = now - Number(s.last_logoff_at ?? s.started_at) >= SESSION_MIN_MS;
+  const settled = now >= settlesAt(s);
   if (settled && Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp >= max) { writeSession(agent, null, dir); return null; }
   return s;
 }
+
+const readyHealthSource = (session, client) => session.client === client && session.live &&
+  client?.combatReady === true && client.sock?.destroyed !== true;
+
+/** Close on a full native health edge even while the keeper is awaiting another rung. */
+export function observeHealingHealth(session, client, { value, max, at = Date.now() }) {
+  const agent = session.name;
+  if (!readyHealthSource(session, client) || !Number.isSafeInteger(client.selfId) || client.selfId <= 0 || !named(agent)) return;
+  const full = Number.isFinite(max) && max > 0 && value === max;
+  const prior = session._healingFullHealth;
+  const body = client.selfId, life = session.lifeBoundary;
+  if (full && prior?.client === client && prior.agent === agent && prior.body === body && prior.life === life && prior.max === max) return;
+  if (prior) {
+    clearTimeout(prior.timer);
+    session._healingFullHealth = null;
+  }
+  if (!full) return;
+
+  const proof = session._healingFullHealth = { agent, client, body, life, max };
+  const check = now => {
+    const open = closeIfHealed(agent, { hp: max, max, now });
+    const due = open && settlesAt(open);
+    if (!(due > now)) return;
+    proof.timer = setTimeout(() => {
+      if (session._healingFullHealth !== proof) return;
+      const health = client.vitals?.()?.health;
+      if (session.name === agent && readyHealthSource(session, client) &&
+          client.selfId === body && session.lifeBoundary === life && health?.value === max && health.max === max)
+        check(Date.now());
+      else session._healingFullHealth = null;
+    }, Math.max(1, due - Date.now()));
+    proof.timer.unref?.();
+  };
+  check(at);
+}
+
 /** Record a real recovery after the logoff, so a later emergency can request fleet assistance. */
-export function noteHealingRecovery(agent, { decision, health, dir = healingDir(), now = Date.now() } = {}) {
+export function noteHealingRecovery(agent, { decision, health, safeLogoff = null, dir = healingDir(), now = Date.now() } = {}) {
   const max = health?.max, low = decision?.min_hp;
   if (!Number.isFinite(max) || health.value !== max || decision?.hp?.max !== max ||
-      !Number.isFinite(low) || low <= 0 || low >= max || decision.strategy !== 'rest_safe' ||
+      !Number.isFinite(low) || low <= 0 || low >= max ||
       decision.status !== 'recovering' || !Number.isFinite(decision.chosen_at) || decision.chosen_at > now) return false;
   const s = readSession(agent, { dir, now });
-  if (s?.logoffs !== 1 || s.recovered_at != null || !Number.isFinite(s.last_logoff_at) ||
-      decision.chosen_at <= s.last_logoff_at) return false;
+  if (s?.logoffs !== 1 || s.recovered_at != null || !Number.isFinite(s.last_logoff_at)) return false;
+  if (decision.strategy === 'rest_safe') {
+    if (decision.chosen_at <= s.last_logoff_at) return false;
+  } else {
+    // A safe-wall logoff is chosen before its own logout. Require the caller's
+    // current-body reconnect receipt and an actual below-full reading after it.
+    const returned = safeLogoff?.returnedHealth;
+    if (decision.strategy !== 'logoff_safe' || decision.phase !== 'reconnected_turn_and_heal' ||
+        decision.room !== 552 || s.room !== decision.room || decision.damage_taken !== 0 ||
+        !(decision.hp.value > 0 && decision.hp.value < max) ||
+        typeof decision.epoch !== 'string' || safeLogoff?.epoch !== decision.epoch ||
+        safeLogoff.decisionId !== decision.id || safeLogoff.logoffAt !== s.last_logoff_at ||
+        decision.chosen_at > s.last_logoff_at || !(safeLogoff.returnedAt > s.last_logoff_at && safeLogoff.returnedAt <= now) ||
+        returned?.max !== max || !(returned.value >= low && returned.value < max)) return false;
+  }
   s.recovered_at = now;
   writeSession(agent, s, dir);
   return true;

@@ -7,12 +7,12 @@ import {Session} from './m59-game.mjs';
 import {Autopilot,PASS_STAGES} from './m59-autopilot.mjs';
 import {OF} from './m59-parse.mjs';
 import {withPacketScope,bindPacketScope} from './m59-packet-scope.mjs';
-import {currentSurvivalDecision} from './m59-survival-decision.mjs';
+import {chooseSurvivalDecision,currentSurvivalDecision} from './m59-survival-decision.mjs';
 import {noteLogoff} from './m59-healing-session.mjs';
 import * as party from './m59-party.mjs';
 import {load,firstAnswer} from './m59-strategies.mjs';
 import {cooperativeStore,configureCooperativeLogoff,publishCooperativePresence,requestCooperativeLogoff,markCooperativeOffline,
-  cooperativeBeforeLogin,cooperativeAfterLogin,cooperativeAssist,cooperativeHelperReady,
+  cooperativeBeforeLogin,cooperativeAfterLogin,cooperativeAssist,cooperativeHelperReady,recordCooperativeSaveBoundary,
   prepareCooperativeRefuge,cooperativeReturnRefuge} from './m59-cooperative-logoff.mjs';
 import {cooperativeReconnectRefusal,cooperativeWaitActive,replaceFileSync,stuckCooperativeLogoff,abortPreparingCooperativeLogoff,
   PREPARING_MAX_MS,OFFLINE_OVERRUN_MS} from './m59-cooperative-logoff.mjs';
@@ -30,7 +30,7 @@ function fixture(label='case'){
  const bodies=[{id:1,nameRsc:'Victim',flags:OF.PLAYER},{id:2,nameRsc:'Helper',flags:OF.PLAYER},monster];
  const actor=(name,id,character)=>{
   const s=Object.create(Session.prototype),c={state:'game',combatReady:true,me:{name:character},selfId:id,self:{id,row:10,col:10},
-   room:{id:8270,objects:new Map(bodies.map(o=>[o.id,{...o}]))},rsc:{get:x=>x},idsAsOf:()=>({last_save_at:7}),vitals:()=>({health:{value:100,max:100},vigor:{value:180}}),sock:{destroy(){c.state='offline';}}};
+   room:{id:8270,contentsAt:20,objects:new Map(bodies.map(o=>[o.id,{...o}]))},rsc:{get:x=>x},idsAsOf:()=>({last_save_at:7}),vitals:()=>({health:{value:100,max:100},vigor:{value:180}}),sock:{destroy(){c.state='offline';}}};
   Object.assign(s,{name,client:c,credentials:cred(character),fleetStateFile:join(directory,'fleet.json'),cooperativeLogoffDirectory:directory,world:{room:{num:827}},movementGeneration:1,
    cancelMovement:()=>({cancelled:true}),movementWasCancelled:g=>g!==s.movementGeneration});
   s._askStrategies=async()=>({strategy:'fixture-private',answer:policy});s.cooperativeRecordEvent=capture;
@@ -205,6 +205,112 @@ try{
    assert.equal(currentSurvivalDecision(f.a.s),null,label);
   }
   console.log('PASS Ocean mixed/ranged escape runs before the caster exit only with live proof, budget and admitted fleet help');
+
+  // Waldorf's final confirmed pose after the first refuge's no-progress cancellation.
+  const stalled = async (label, helper = true, {
+   strategy='route_refuge',
+   at={row:47,col:47,x:3040,y:3040},
+   health={value:17,max:121},
+   bodies=[[13099,46,47,3043,2963],[13085,47,48,3114,3051],[13094,44,55,3546,2836]],
+  } = {}) => {
+   const f = await setup(label), {s,c,pilot} = f.a;
+   Object.assign(c.self,at);
+   c.vitals=()=>({health,vigor:{value:188}});
+   for (const actor of [f.a,f.b]) {
+    actor.c.room.objects.delete(f.rock.id);
+    actor.c.room.objects.delete(f.melee.id);
+    for (const [id,row,col,x,y] of bodies)
+     actor.c.room.objects.set(id,{...f.rock,id,row,col,x,y});
+   }
+   let paths=0;
+   Object.assign(pilot,{
+    rememberSurvivalJam:()=>{},blinkPastSurvivalJam:async()=>false,lureSparedBlocker:async()=>false,armedForSure:()=>true,
+    takeRecoverySpot:async(why,opts)=>{paths++;assert.equal(opts.decisionId,retry.id);},
+   });
+   const retry=chooseSurvivalDecision(s,{strategy,reason:'shelter approach made no confirmed route progress',
+    reason_code:'approach_interrupted',source:strategy==='route_refuge'?'travel':'recovery',replan_count:1});
+   if(helper)await configureCooperativeLogoff(f.b.pilot,'helper');
+   return {...f,retry,paths:()=>paths,step:()=>Autopilot.prototype.continueSurvivalDecisionStep.call(pilot)};
+  };
+  const rescued = await stalled('waldorf-pending-retry');
+  assert.equal(await rescued.step(),true);
+  assert.equal(rescued.paths(),0,'no second 44-step refuge before an admitted rescue');
+  assert.equal(rescued.counts().rejoins,1);
+  assert.deepEqual(rescued.store().read('request',rescued.a.s.name).targets.map(t=>t.id),[13099,13085,13094]);
+
+  // Rizzo's local recovery used nearest_refuge for the same no-progress cancellation.
+  const rizzo={
+   strategy:'nearest_refuge',at:{row:39,col:54,x:3471,y:2511},health:{value:36,max:122},
+   bodies:[[16833,38,54,3497,2449],[17176,39,50,3230,2535],[17160,46,53,3432,2965]],
+  };
+  const local=await stalled('rizzo-pending-retry',true,rizzo);
+  assert.equal(await local.step(),true);
+  assert.equal(local.paths(),0,'no second 33-step refuge before an admitted rescue');
+  assert.equal(local.counts().rejoins,1);
+  assert.deepEqual(local.store().read('request',local.a.s.name).targets.map(t=>t.id),[16833,17176,17160]);
+
+  // Rizzo's second canceled approach produced logoff_open while the old walker still unwound.
+  const rizzoOpen={
+   strategy:'logoff_open',at:{row:49,col:44,x:2833,y:3183},health:{value:47,max:122},
+   bodies:[[19919,52,41,2667,3366],[19931,42,51,3281,2725],[19585,43,51,3282,2797],[19910,44,52,3367,2835]],
+  };
+  const open=await stalled('rizzo-open-retry',true,rizzoOpen);
+  const requestStrategy=open.a.s._askStrategies;
+  let release,probes=0;
+  open.a.s._askStrategies=async(...args)=>{
+   probes++;
+   await new Promise(resolve=>{release=resolve;});
+   return requestStrategy(...args);
+  };
+  const early=open.a.pilot.tryOceanCooperativeEscape(open.retry);
+  const following=open.step();
+  assert.equal(probes,1,'the dispatcher joins the watchdog rescue for the same decision');
+  release();
+  assert.deepEqual(await Promise.all([early,following]),[true,true]);
+  assert.equal(open.paths(),0);
+  assert.equal(open.counts().rejoins,1);
+  assert.deepEqual(open.store().read('request',open.a.s.name).targets.map(t=>t.id),[19919,19931,19585,19910]);
+
+  const spentOpen=await stalled('rizzo-open-spent',true,rizzoOpen);
+  noteLogoff(spentOpen.a.s.name);
+  assert.equal(await spentOpen.a.pilot.tryOceanCooperativeEscape(spentOpen.retry),false);
+  assert.equal(spentOpen.counts().rejoins,0);
+  assert.equal(spentOpen.store().read('request',spentOpen.a.s.name),null);
+  assert.equal(currentSurvivalDecision(spentOpen.a.s),spentOpen.retry);
+
+  const localRefused=await stalled('rizzo-no-helper',false,rizzo);
+  assert.equal(await localRefused.step(),true);
+  assert.equal(localRefused.paths(),1);
+  assert.equal(localRefused.counts().rejoins,0);
+  assert.equal(currentSurvivalDecision(localRefused.a.s),localRefused.retry);
+  assert.equal(localRefused.retry.replan_count,1);
+
+  for(const [label,helper,configure,expectedPaths] of [
+   ['no-helper',false,()=>{},1],
+   ['already-spent',true,f=>noteLogoff(f.a.s.name),1],
+   ['safe-wall',true,f=>{f.a.pilot.currentRecoveryWall=()=>true;f.a.pilot.playDead=async()=>true;},0],
+   ['no-attack',true,f=>{f.a.pilot.policy.neverAttack=true;},1],
+   ['new-generation',true,f=>{f.a.s._askStrategies=async()=>{f.a.s.movementGeneration++;return {strategy:'fixture-private',answer:policy};};},0],
+   ['survival-handoff',true,f=>{f.a.s._askStrategies=async()=>{f.a.pilot.facultyHeld=key=>key==='survival';return {strategy:'fixture-private',answer:policy};};},0],
+   ['advancing-refuge',true,f=>{
+    const {s,c}=f.a,now=Date.now(),generation=s.movementGeneration;
+    s.moveOrder={generation,origin:{source:'keeper',name:'shelter'}};
+    s.provenRefugeLeg={client:c,self_id:c.selfId,room_object_id:c.room.id,generation,owner:'keeper:shelter',
+     started_at:now-250,from:{x:2976,y:3040},waypoints:[{x:3168,y:3040}],next_index:0};
+    s.refugePosition={client:c,id:c.selfId,room_object_id:c.room.id,generation,at:now,changed_at:now,
+     x:3040,y:3040,previous:{x:2976,y:3040,at:now-200}};
+   },1],
+  ]) {
+   const f=await stalled('waldorf-'+label,helper);
+   configure(f);
+   assert.equal(await f.step(),true,label);
+   assert.equal(f.counts().rejoins,0,label);
+   assert.equal(f.paths(),expectedPaths,label);
+   assert.equal(currentSurvivalDecision(f.a.s),f.retry,label);
+   assert.equal(f.retry.replan_count,1,label);
+   assert.equal(f.store().read('request',f.a.s.name),null,label);
+  }
+  console.log('PASS the stalled Ocean recovery replay admits a mixed rescue before another refuge and preserves a refused retry');
  }
  {
   const f=fixture('ocean-passive-support');
@@ -248,6 +354,86 @@ try{
   assert.equal(polls,2);assert(seen?.request_id,'the waiter publishes its wait while it runs');
   assert.equal(f.a.s.cooperativeLogoffWaiting,null,'a waiter that exited by throwing no longer claims to be waiting');
   console.log('PASS helpers defer during combat/danger/unfinished work; a submitted attack or miss never releases reconnect');
+ }
+ {
+  const f=fixture('distant-ocean-helper'), geometry={collisionReady:true,security:1416};
+  const close={id:41,nameRsc:'narthyl worm',flags:OF.ATTACKABLE,row:10,col:11,x:736,y:672};
+  for(const actor of [f.a,f.b]){
+   Object.assign(actor.s.world,{room:{num:552},geometry,approachSquare:()=>({steps:24})});
+   Object.assign(actor.c.room,{id:1416,security:geometry.security});
+   Object.assign(actor.c.self,{x:672,y:672});
+   Object.assign(actor.c.room.objects.get(40),{row:10,col:34,x:2208,y:672});
+   actor.c.room.objects.set(close.id,close);
+  }
+  f.b.pilot.policy={molluskCoverRecovery:true};
+  await f.setup();f.offline();
+  f.b.c.room.objects.delete(close.id);
+  const notes=[], hits=[];
+  f.b.pilot.note=(what,detail)=>notes.push({what,...detail});
+  f.b.pilot.fightNow=async opts=>{
+   hits.push(opts.exactTargetId);
+   return {target_id:opts.exactTargetId,out_of_reach:true,reason:'test refusal',landed_hits:0};
+  };
+  assert.equal(await cooperativeAssist(f.b.pilot),false,'a proved far approach does not claim this request');
+  assert.equal(f.store().read('request','victim').last_attempt_at,undefined,'another helper can still act now');
+  f.b.c.room.objects.set(close.id,close);
+  assert.equal(await cooperativeAssist(f.b.pilot),true);
+  assert.deepEqual(hits,[close.id],'the reachable second target is considered on the same pass');
+  const result=notes.findLast(n=>n.what==='cooperative distraction result');
+  assert.equal(result?.reason,'test refusal');
+  assert.equal(result?.out_of_reach,true);
+
+  const request=f.store().read('request','victim');
+  delete request.last_attempt_at;
+  f.store().write('request','victim',request);
+  f.b.c.room.objects.delete(close.id);
+  f.b.s.world.approachSquare=()=>null;
+  assert.equal(await cooperativeAssist(f.b.pilot),true,'without a coarse approach, preserve the existing fine-grid fallback');
+  assert.deepEqual(hits,[close.id,40]);
+  console.log('PASS a proved distant Ocean helper skips the shared claim, considers another target, and records refusals');
+ }
+ {
+  const f=fixture('ocean-road-helper');
+  const {loadMap,CHECKED_MAP_FILE}=await import('./m59-map.mjs');
+  const {World}=await import('./m59-world.mjs');
+  const {SHORT_FIGHT_APPROACH_SQUARES}=await import('./m59-skills.mjs');
+  const map=loadMap(CHECKED_MAP_FILE),room=map.rooms[544];
+  // Fozzie's 14:05:55.368Z and 14:05:56.347Z room frames bracket his Camilla rescue claim.
+  const farther={id:16895,nameRsc:'fungus beast',flags:OF.ATTACKABLE,row:6,col:15,x:992,y:416};
+  const nearby={...farther,id:16850,row:3,col:23,x:1504,y:224};
+  for(const actor of [f.a,f.b]){
+   Object.assign(actor.c,{roomNameRsc:room.nameRsc,roomRsc:room.roomRsc});
+   Object.assign(actor.c.room,{id:1383});
+   actor.s.world=new World(actor.c,map);
+   actor.c.room.security=actor.s.world.geometry.security;
+   actor.c.room.objects.delete(40);
+   actor.c.room.objects.set(farther.id,farther);
+   actor.c.room.objects.set(nearby.id,nearby);
+  }
+  Object.assign(f.b.c.self,{row:3,col:23,x:1504,y:224});
+  assert(Math.hypot(farther.row-f.b.c.self.row,farther.col-f.b.c.self.col)>SHORT_FIGHT_APPROACH_SQUARES);
+  assert.equal(f.b.s.world.approachSquare(farther.col,farther.row).steps,7,'real room 544 geometry proves positive coarse approach');
+  assert.equal(Math.hypot(nearby.row-f.b.c.self.row,nearby.col-f.b.c.self.col),0,'second fungus is already in melee on the live grid');
+  f.b.pilot.policy={assignedRoom:552,molluskCoverRecovery:true};
+  const r=await f.setup();f.offline();
+  assert.deepEqual(r.targets.map(t=>t.id),[farther.id,nearby.id]);
+  const hits=[];
+  f.b.pilot.fightNow=async o=>(hits.push(o.exactTargetId),{target_id:o.exactTargetId,landed_hits:0});
+  assert(await cooperativeAssist(f.b.pilot));
+  assert.deepEqual(hits,[nearby.id]);
+  const again=()=>{
+   const row=f.store().read('request','victim');delete row.last_attempt_at;f.store().write('request','victim',row);
+   return cooperativeAssist(f.b.pilot);
+  };
+  f.b.pilot.policy.assignedRoom=544;
+  assert(await again());
+  f.b.pilot.policy.assignedRoom=552;f.b.pilot.policy.molluskCoverRecovery=false;
+  assert(await again());
+  f.b.pilot.policy.molluskCoverRecovery=true;f.b.c.room.security++;
+  assert(await again());
+  assert.deepEqual(hits,[nearby.id,farther.id,farther.id,farther.id],
+    'unrelated assignment, non-opted-in policy and unverified geometry keep ordinary helper selection');
+  console.log('PASS the actual 544 Ocean return fixture skips the distant fungus and retains unrelated helper behavior');
  }
  {
   const f=fixture('confirmed');let options;
@@ -325,7 +511,8 @@ try{
  {
   const f=fixture('native-play-dead');await configureCooperativeLogoff(f.b.pilot,'helper');
   const p=f.a.pilot;
-  Object.assign(p,{operatorSurvivalStandDown:()=>false,suspendJourney(){},adoptRecoveryWall:()=>false,playerThreatPresent:()=>false,
+  Object.assign(p,{operatorSurvivalStandDown:()=>false,oceanRangedRecoveryEnabled:()=>false,
+   suspendJourney(){},adoptRecoveryWall:()=>false,playerThreatPresent:()=>false,
    fleetLogoff:Autopilot.prototype.fleetLogoff,reconnect:Autopilot.prototype.reconnect,
    resumeCooperativeReturn:Autopilot.prototype.resumeCooperativeReturn});
   let recoveryCalls=0;
@@ -356,9 +543,10 @@ try{
   assert.equal(cooperativeReturnRefuge(f.a.s).row,9);
   f.a.c.self.x+=4;assert.equal(cooperativeReturnRefuge(f.a.s),null,'actual shifted landing invalidates the peer hint');f.a.c.self.x-=4;
   f.a.c.self.predicted=true;assert.equal(cooperativeReturnRefuge(f.a.s),null);delete f.a.c.self.predicted;
-  f.a.c.idsAsOf=()=>({last_save_at:8});assert.equal(cooperativeReturnRefuge(f.a.s),null);f.a.c.idsAsOf=()=>({last_save_at:7});
   assert.equal(cooperativeReturnRefuge(f.a.s,{now:Date.now()+31000}),null,'old hints cannot become movement authority');
   f.b.c.room.objects.get(1).nameRsc='Recycled body';assert.equal(prepareCooperativeRefuge(f.b.pilot,r),null);
+  recordCooperativeSaveBoundary(f.b.s,{phase:'begin',at:21});
+  assert.equal(cooperativeReturnRefuge(f.a.s),null,'a peer saw the boundary even when the return socket did not');
   console.log('PASS offline peer preparation uses the victim ghost, never the helper body; changed landing/save/identity and stale hints refuse');
  }
  {
@@ -416,6 +604,92 @@ try{
  // repeated observation from a helper in the request's room -- never by a single read.
  const watch=(f,from,to,step=1000)=>{f.b.s._cooperativePublishedAt=0;for(let t=from;t<=to;t+=step)publishCooperativePresence(f.b.pilot,{now:t});};
  const gate=(f,at,why='still waiting')=>cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{now:()=>at,wait:async()=>{throw Error(why);}});
+ const seedHit=(f,r,at,room)=>{
+  const store=f.store();
+  const prior={request_id:r.id,target_id:40,name:'daemon skeleton',helper:'second',helper_body:3,room_ids_at:20,hit_at:at,landed_hits:1};
+  store.write('request','victim',{...r,receipts:{40:prior}});
+  store.write('presence','second',{at,live:true,body:3,room,room_object:8270,room_ids_at:20,health:{value:100,max:100}});
+  return prior;
+ };
+ {
+  const f=fixture('save-fences-null-epochs');
+  for(const actor of [f.a,f.b])actor.c.idsAsOf=()=>({last_save_at:null});
+  assert(await f.setup());
+  const r=f.offline(),store=f.store(),T=r.created_at+1000;
+  r.max_offline_ms=120000;store.write('request','victim',r);
+  assert(await cooperativeAssist(f.b.pilot,{now:()=>T}));
+  const preSaveHit=store.read('request','victim').receipts[40];
+  assert.equal(preSaveHit.helper,'helper');
+
+  recordCooperativeSaveBoundary(f.b.s,{phase:'begin',at:T+100});
+  recordCooperativeSaveBoundary(f.b.s,{phase:'end',at:T+149});
+  recordCooperativeSaveBoundary(f.b.s,{phase:'begin',at:T+100});
+  assert.equal(store.saveBoundary(),T+149,'a delayed observation cannot roll the shared cutoff back');
+  // Same room and body values may be reused. This socket never saw WAIT or UNWAIT.
+  const recycled=f.b.c.room.objects.get(40);
+  f.b.c=f.b.s.client={...f.b.c,room:{...f.b.c.room,contentsAt:T+200}};
+  f.b.c.room.objects.delete(40);
+  watch(f,T+300,T+16300);
+  assert.deepEqual(store.read('request','victim').receipts[40],preSaveHit,'post-save absence cannot prove the old ID gone');
+  await assert.rejects(gate(f,T+16400),/still waiting/,'an otherwise fresh pre-save hit also loses its authority');
+  f.b.c.room.objects.set(40,recycled);
+  f.b.pilot.fightNow=()=>assert.fail('a recycled object with the same name cannot attract a distraction packet');
+  assert.equal(await cooperativeAssist(f.b.pilot,{now:()=>T+16500}),false);
+  await gate(f,r.offline_at+120000);
+  assert.equal(f.a.s.cooperativeLogoffReturn.released,'deadline');
+  assert.deepEqual(f.a.s.cooperativeLogoffReturn.receipts,[]);
+  console.log('PASS shared wire save evidence fences null-local requests, existing hits and recycled targets without extending the deadline');
+ }
+ {
+  const f=fixture('save-fences-preexisting-gone');assert(await f.setup());
+  const r=f.offline(),T=r.created_at+1000;
+  f.b.c.room.objects.delete(40);watch(f,T,T+15000);
+  assert.equal(f.store().read('request','victim').receipts[40].kind,'gone');
+  recordCooperativeSaveBoundary(f.b.s,{phase:'begin',at:T+15100});
+  await assert.rejects(gate(f,T+15200),/still waiting/,'a fresh pre-save gone receipt cannot release during a save');
+ }
+ {
+  const f=fixture('same-save-unequal-local-stamps'),T=Date.now()-2000;
+  recordCooperativeSaveBoundary(f.a.s,{phase:'begin',at:T});
+  recordCooperativeSaveBoundary(f.a.s,{phase:'end',at:T+49});
+  recordCooperativeSaveBoundary(f.b.s,{phase:'end',at:T+98});
+  f.a.c.idsAsOf=()=>({last_save_at:T+49});
+  f.b.c.idsAsOf=()=>({last_save_at:T+98});
+  f.a.c.room.contentsAt=T+150;f.b.c.room.contentsAt=T+200;
+  const created=await f.setup();assert(created);
+  const r=f.offline(),U=r.created_at+1000;
+  // A new helper socket with a proven post-save full room read is equally valid.
+  f.b.c.idsAsOf=()=>({last_save_at:null});
+  f.b.c.room.objects.delete(40);watch(f,U,U+15000);
+  await gate(f,U+15100);
+  assert.equal(f.a.s.cooperativeLogoffReturn.receipts[0].kind,'gone');
+  assert.equal(f.a.s.cooperativeLogoffReturn.released,undefined);
+  console.log('PASS distinct local save timestamps and a reconnect can prove absence after one shared save');
+ }
+ {
+  const f=fixture('replace-invalid-hit');await f.setup();const r=f.offline(),T=r.offline_at+2000;
+  const prior=seedHit(f,r,T-100,827);
+  assert.equal(await cooperativeAssist(f.b.pilot,{now:()=>T}),false,'a still-valid witness suppresses another hit');
+  assert.deepEqual(f.store().read('request','victim').receipts[40],prior);
+  const p=f.store().read('presence','second');f.store().write('presence','second',{...p,room:828});
+  await assert.rejects(gate(f,T),/still waiting/,'the gate does not admit a victim on this invalid witness');
+  assert(await cooperativeAssist(f.b.pilot,{now:()=>T}),'a hit is not blocked for 30s after the witness leaves');
+  assert.equal(f.store().read('request','victim').receipts[40].helper,'helper');
+  await gate(f,T+100);
+  console.log('PASS an invalid recent witness can be replaced by a confirmed helper hit before expiry');
+ }
+ {
+  const f=fixture('replace-invalid-hit-with-gone');await f.setup();const r=f.offline(),T=r.offline_at+1000;
+  const prior=seedHit(f,r,T,828);
+  f.b.c.room.objects.delete(40);
+  watch(f,T,T+14000);
+  assert.deepEqual(f.store().read('request','victim').receipts[40],prior,'the invalid hit cannot shorten the absence requirement');
+  watch(f,T+15000,T+15000);
+  const receipt=f.store().read('request','victim').receipts[40];
+  assert.equal(receipt.kind,'gone');assert.equal(receipt.helper,'helper');assert.equal(receipt.seen_absent_since,T);
+  await gate(f,T+15100);
+  console.log('PASS an invalid recent hit cannot block a complete independent absence proof');
+ }
  {
   const f=fixture('gone-satisfies');await f.setup();const r=f.offline(),T=r.offline_at+1000;
   f.b.c.room.objects.delete(40);f.b.s.combat={active:{}};
@@ -438,7 +712,7 @@ try{
   const lost=fixture('gone-unreadable');await lost.setup();const lr=lost.offline(),L=lr.offline_at+1000;
   lost.b.c.room.objects.delete(40);lost.b.c.room.objects.delete(2);watch(lost,L,L+16000);
   lost.b.c.room.objects.set(2,{id:2,nameRsc:'Helper',flags:OF.PLAYER});lost.b.c.idsAsOf=()=>({last_save_at:7,saving:true});watch(lost,L+17000,L+33000);
-  lost.b.c.idsAsOf=()=>({last_save_at:8});watch(lost,L+34000,L+50000);
+  lost.b.c.idsAsOf=()=>({last_save_at:21});watch(lost,L+34000,L+50000);
   assert.equal(lost.store().read('request','victim').receipts[40],undefined,'an unreadable room (no own body, a save, another epoch) is never absence');
   await assert.rejects(gate(f,T+34100),/still waiting/);
   console.log('PASS one read, a gapped series, or a room the helper could not read never counts as gone');
@@ -476,13 +750,16 @@ try{
   const f=fixture('gone-mixed');
   for(const actor of [f.a,f.b])actor.c.room.objects.set(41,{id:41,nameRsc:'narthyl worm',flags:OF.ATTACKABLE,row:10,col:11});
   await f.setup();const r=f.offline(),T=r.offline_at+1000;
-  f.b.c.room.objects.delete(41);watch(f,T,T+15000);
-  await assert.rejects(gate(f,T+15100),/still waiting/,'one gone target does not release a victim with another live attacker');
+  assert.deepEqual(r.targets.map(t=>t.id),[40,41]);
+  f.b.c.room.objects.delete(40);
   let hit;f.b.pilot.fightNow=async o=>(hit=o.exactTargetId,{target_id:o.exactTargetId,landed_hits:1});
-  assert(await cooperativeAssist(f.b.pilot,{now:()=>T+15000}));assert.equal(hit,40,'the helper does not chase the gone target');
-  const receipts=f.store().read('request','victim').receipts;assert.equal(receipts[41].kind,'gone');assert.equal(receipts[40].landed_hits,1);
+  assert(await cooperativeAssist(f.b.pilot,{now:()=>T}));assert.equal(hit,41,'a missing first target does not block a live second target');
+  const receipts=f.store().read('request','victim').receipts;assert.equal(receipts[40],undefined);assert.equal(receipts[41].landed_hits,1);
+  await assert.rejects(gate(f,T+100),/still waiting/,'the missing first target still requires its own proof');
+  watch(f,T,T+15000);
+  assert.equal(f.store().read('request','victim').receipts[40].kind,'gone');
   await gate(f,T+15100);assert.equal(f.store().read('request','victim').state,'returning');
-  console.log('PASS one hit target plus one gone target together satisfy the gate');
+  console.log('PASS a missing first target does not block distraction of a live target, and both still need proof');
  }
  {
   const norm=(await import('./m59-cooperative-logoff.mjs')).normalizeCooperativeLogoff;

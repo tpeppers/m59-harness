@@ -18,6 +18,8 @@ import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF, buyLines } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import { purchaseKey } from '../m59-purchase-plan.mjs';
+import { isStalledRefugeRetry } from '../m59-recovery-refuge.mjs';
+import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
 import * as skills from '../m59-skills.mjs';
 import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision, updateSurvivalDecision } from '../m59-survival-decision.mjs';
 import { CONTINUE, DEBUG_STATES, HANDLED, LOGOFF_REFRESH_MS, LOGOFF_UNDER_ATTACK_MS, REST_VIGOR_CAP, bearingIn, pct, purchaseEnabled, vigorOf } from '../m59-autopilot.mjs';
@@ -117,34 +119,42 @@ export class CooperativePart {
     this.farmStrategyHook('onKill',{creature:f.target,room:request.room,looted:[]});
   }
 
-  async tryOceanCooperativeEscape() {
+  async tryOceanCooperativeEscape(retry = null) {
+    if (retry && this._oceanCooperativeRetry?.decision === retry) return this._oceanCooperativeRetry.promise;
     const s = this.s, c = s.client;
     const liveThreat = () => {
       const damage = s.lastFleetDamage, age = Date.now() - (damage?.at ?? 0);
       const hp = pct(c?.vitals?.()?.health);
       return this.mode === 'farm' && this.policy?.neverAttack !== true && this.oceanRangedRecoveryEnabled() &&
         s.live && s.client === c && c.combatReady === true && !s.combat?.active?.pvp &&
+        (!retry || (currentSurvivalDecision(s) === retry && retry.room === s.world?.room?.num &&
+          isStalledRefugeRetry(retry) && !continuingProvenRefugeLeg(s) && !this.stopping &&
+          !(this.inert && !this.inert.travelling) &&
+          !this.facultyHeld('survival') && !this.facultyHeld('recovery') && !this.facultyHeld('combat'))) &&
         hp > 0 && hp < this.safety().fleeAt && c.ailments?.()?.length === 0 &&
         damage?.client === c && damage.bodyId === c.selfId && damage.roomId === c.room.id &&
         age >= 0 && age <= 5000 && !this.currentRecoveryWall() &&
         oceanRockThreats(this, [...c.room.objects.values()], { outsideMelee: true }).length > 0;
     };
-    if (!liveThreat() || currentSurvivalDecision(s)) return false;
+    if (!liveThreat() || currentSurvivalDecision(s) !== retry) return false;
     const agent = String(s.name ?? '');
     const afterRecovery = !mayLogoff(agent);
     if (afterRecovery && !mayLogoff(agent, { afterRecovery: true })) return false;
     const why = 'recent damage below the flee line with a ranged mollusk in sight';
-    const decision = chooseSurvivalDecision(s, { strategy: 'logoff_open', reason: why,
+    const decision = retry ?? chooseSurvivalDecision(s, { strategy: 'logoff_open', reason: why,
       reason_code: 'ocean_ranged_escape', status: 'pending' });
+    const attempt = this.fleetLogoff(why, { afterRecovery, guard: liveThreat, includeOceanRanged: true, retry });
+    if (retry) this._oceanCooperativeRetry = { decision: retry, promise: attempt };
     try {
-      return await this.fleetLogoff(why, { afterRecovery, guard: liveThreat, includeOceanRanged: true });
+      return await attempt;
     } finally {
-      if (currentSurvivalDecision(s)?.id === decision.id)
+      if (retry && this._oceanCooperativeRetry?.promise === attempt) this._oceanCooperativeRetry = null;
+      if (!retry && currentSurvivalDecision(s)?.id === decision.id)
         finishSurvivalDecision(s, decision.id, 'refused', 'no cooperative rescue admitted before caster exit');
     }
   }
 
-  async fleetLogoff(why, { afterRecovery = false, guard = null, includeOceanRanged = false } = {}) {
+  async fleetLogoff(why, { afterRecovery = false, guard = null, includeOceanRanged = false, retry = null } = {}) {
     // A NEEDLE KEEPER DOES NOT LOG OFF FOR A DISTRACTION (live 2026-11-06: Camilla went NOT IN GAME at 23:30:44Z and
     // 23:42:08Z, "rejoin: cooperative logoff: wait for distraction", from a threat-0 archer station). Its square is one no
     // monster in reach can see; it stays in the game and the rest of the ladder decides.
@@ -160,7 +170,8 @@ export class CooperativePart {
       return s.live && s.client===client && s.movementGeneration===generation && s.world?.room?.num===room &&
         client?.combatReady===true &&
         !this.operatorSurvivalStandDown() && !s.combat?.active?.pvp &&
-        active?.id===decisionId && active?.strategy==='logoff_open' && active.status==='pending' &&
+        active?.id===decisionId && active?.status==='pending' &&
+        (active.strategy==='logoff_open' || (guard !== null && active === retry && isStalledRefugeRetry(active))) &&
         health>0 && health<this.safety().fleeAt && client.ailments?.()?.length===0 && !this.currentRecoveryWall() &&
         mayLogoff(String(s.name??''),{afterRecovery}) && (!guard || guard());
     };
@@ -221,6 +232,10 @@ export class CooperativePart {
     if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
     if(this.operatorSurvivalStandDown())return false;
     const s = this.s, c = s.client, health = c?.vitals?.()?.health;
+    const room = s.world?.room?.num, life = s.lifeBoundary ?? 0;
+    const sameLife = () => s.client === c && (s.lifeBoundary ?? 0) === life && s.world?.room?.num === room &&
+      room !== 1 && c?.vitals?.()?.health?.value !== 0;
+    if (!sameLife()) return false;
     if (this.mode === 'farm' && this.oceanRangedRecoveryEnabled() && health?.max > 0 && health.value === health.max) {
       const decision = currentSurvivalDecision(s);
       const failedApproach = decision?.status === 'pending' && decision.reason === why &&
@@ -247,6 +262,7 @@ export class CooperativePart {
         if(mayLogoff(me,{afterRecovery:true})){
           try { if(await this.fleetLogoff(why,{afterRecovery:true}))return true; }
           catch(e) { this.note('cooperative logoff unavailable',{why:e.message}); }
+          if (!sameLife()) return false;
         }
         if(!this._oneLogoffSaid){this._oneLogoffSaid=true;
           this.note('not logging off again this healing session',{why,
@@ -311,6 +327,7 @@ export class CooperativePart {
     if(!atWall){
       try { if(typeof this.fleetLogoff==='function'&&await this.fleetLogoff(why))return true; }
       catch(e) { this.note('cooperative logoff unavailable',{why:e.message}); }
+      if (!sameLife()) return false;
     }
     if (!atWall && !this.playerThreatPresent()) {
 
@@ -377,6 +394,7 @@ export class CooperativePart {
     let did=false;
     try { did=await this.playDeadObserved(why,d.id); }
     catch(e) { this.note('play dead failed',{why:e.message}); }
+    if (!did && !sameLife()) return false;
     if(currentSurvivalDecision(s)?.id===d.id) {
       if(did) updateSurvivalDecision(s,d.id,{status:'recovering',
         phase:this.frozenUntil>Date.now()?'frozen_without_action'
@@ -474,6 +492,7 @@ export class CooperativePart {
 
   async playDeadObserved(why, decisionId) {
     const s = this.s;
+    const client = s.client, room = s.world?.room?.num, life = s.lifeBoundary ?? 0;
 
     // THE LOGOFF IS THE ANSWER, AND IT NO LONGER ASKS PERMISSION. Operator, 2026-09-10:
     //
@@ -591,6 +610,10 @@ export class CooperativePart {
                 note: 'sent BEFORE the logoff — during the freeze a tell would wake the room' },
     };
     await this.tellPilot(this.debug).catch(() => {});
+    // The paced tell can outlive a death or a newer recovery. Lew was already
+    // in the Underworld when an old Ocean recovery spent his next logout.
+    if (s.client !== client || s.world?.room?.num !== room || room === 1 || (s.lifeBoundary ?? 0) !== life ||
+        client?.vitals?.()?.health?.value === 0 || currentSurvivalDecision(s)?.id !== decisionId) return false;
     // Keep our own copy: rejoin() renumbers everything, and observe() will not have
     // run again by the time we need to know where we were standing.
     const spot = this.hold ? { ...this.hold } : null;
@@ -609,7 +632,15 @@ export class CooperativePart {
     this.survivalInterruptedPass = this.passes;
     s.cancelMovement?.(null, 'playing dead to avoid dying', {preserveId:decisionId,origin:keeperOrigin('play_dead')});
 
-    noteLogoff(String(this.s?.name ?? ''), { why, room: this.s.world?.room?.num ?? null });   // the one this session
+    const d = currentSurvivalDecision(s), before = client.vitals?.()?.health;
+    const bodyId = client.selfId, roomId = client.room?.id;
+    const canProveRecovery = room === 552 && this.mode === 'farm' && this.oceanRangedRecoveryEnabled() &&
+      d?.id === decisionId && d.strategy === 'logoff_safe' && typeof d.epoch === 'string' &&
+      spot?.proven === true && spot.room === room && client.self?.id === bodyId &&
+      Number.isSafeInteger(bodyId) && Number.isSafeInteger(roomId) &&
+      before?.value > 0 && before.value < before.max && client.ailments?.()?.length === 0;
+    this._safeLogoffRecovery = null;
+    const session = noteLogoff(String(s.name ?? ''), { why, room }); // the one this session
     const came = await this.reconnect('logging off rather than dying');
     if (!came.ok) {
       this.note('reconnect after logoff failed', { why: came.why });
@@ -621,7 +652,9 @@ export class CooperativePart {
       const back = me && me.col === spot.col && me.row === spot.row
         && s.world?.room?.num === spot.room && this.currentRecoveryWall();
       if (back) {
-        this.hold = { ...spot, takenAt: Date.now(), quietMs: 0, reclaimed: true };
+        const returned = s.client, returnedAt = this.rejoinedAt, generation = s.movementGeneration;
+        const returnedHealth = returned.vitals?.()?.health;
+        const reclaimedHold = this.hold = { ...spot, takenAt: Date.now(), quietMs: 0, reclaimed: true };
         this.tally.mulligans = (this.tally.mulligans || 0) + 1;
 
         // TURN. NOW. THIS IS THE WHOLE REASON A SAFE SPOT IS WORTH ANYTHING.
@@ -654,6 +687,20 @@ export class CooperativePart {
         const armed = await skills.turnInPlace(this.s, { verify: false })
                                   .catch(e => ({ turned: false, why: e.message }));
         if (armed.turned) this.turnedAt = Date.now();
+        // Only this successful, stationary reconnect can supply the post-logoff low reading.
+        // The proof is process-local and cannot survive a later reconnect or keeper handoff.
+        if (armed.turned && canProveRecovery && session?.logoffs === 1 && returned !== client &&
+            s.live && s.client === returned && s.client.combatReady === true && s.client.ailments?.()?.length === 0 &&
+            returned.selfId === bodyId && returned.self?.id === bodyId && returned.room?.id === roomId &&
+            s.world?.room?.num === room && (s.lifeBoundary ?? 0) === life && s.movementGeneration === generation &&
+            this.hold === reclaimedHold && currentSurvivalDecision(s) === d &&
+            returnedHealth?.max === before.max && returnedHealth.value >= before.value &&
+            returnedHealth.value < returnedHealth.max && returnedAt > session.last_logoff_at) {
+          this._safeLogoffRecovery = {
+            decision: d, decisionId, epoch: d.epoch, client: returned, bodyId, roomId, life, generation,
+            hold: reclaimedHold, logoffAt: session.last_logoff_at, returnedAt, returnedHealth: { ...returnedHealth },
+          };
+        }
 
         this.note('back on the safe spot', {
           where: { col: spot.col, row: spot.row }, proven: spot.proven,

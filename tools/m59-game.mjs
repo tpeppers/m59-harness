@@ -1,4 +1,4 @@
-import {cooperativeBeforeLogin,cooperativeAfterLogin,markCooperativeOffline} from './m59-cooperative-logoff.mjs';
+import {cooperativeBeforeLogin,cooperativeAfterLogin,markCooperativeOffline,recordCooperativeSaveBoundary} from './m59-cooperative-logoff.mjs';
 import {observeStationaryMutation} from './m59-stationary-trade.mjs';
 import {guardRegionPacket} from './m59-movement-region.mjs';
 import {guardNeverAttackPacket} from './m59-never-attack.mjs';
@@ -29,6 +29,7 @@ import { classifyCombatLine } from './m59-combatlog.mjs';
 import { groundEffectOnSegment, groundEffectSquares } from './m59-ground-effects.mjs';
 import { hazardFacts } from './m59-joint-facts.mjs';
 import { traceSurvival } from './m59-survival-trace.mjs';
+import { observeHealingHealth } from './m59-healing-session.mjs';
 import { cancelSurvivalDecision, observeSurvivalDecision, currentSurvivalDecision,
   finishSurvivalDecision } from './m59-survival-decision.mjs';
 import {saleBlocked} from './m59-inventory-intent.mjs';
@@ -104,6 +105,7 @@ import { autopilotIfAny } from './m59-autopilot.mjs';
 import { lapsedWeapon, dedicatedWeapon, alreadyDedicated } from './m59-weapon-magic.mjs';
 import { planLootOnly, newLootOnlyMemory, isBodyArmor } from './m59-loot-filter.mjs';
 import { readDibs, dibsFile, dibsFilter } from './m59-dibs.mjs';
+import { boundFarmFoodPile, FARM_FOOD_CACHE_ROOM, isFarmFoodCacheItem, readFarmFoodCache } from './m59-farm-food-cache-record.mjs';
 import { killDropItems } from './m59-killdrop.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
@@ -1782,6 +1784,7 @@ class Session {
     observeSurvivalDecision(this, value);
     if (value <= 0) this.lifeBoundary = (this.lifeBoundary ?? 0) + 1;
     if (value <= 0) finishSurvivalDecision(this, currentSurvivalDecision(this)?.id, 'died', 'health reached zero');
+    observeHealingHealth(this, client, ev);
     if (before == null || value >= before) return;      // a heal, or the first reading
     // TOOK A HIT. STAMP IT, BECAUSE THE WALKER NEEDS TO KNOW *NOW* AND NOT AT THE END OF
     // THE LEG IT IS IN THE MIDDLE OF.
@@ -2700,6 +2703,10 @@ class Session {
     c.castVeto = makeCastVeto(this, c, { who: () => this.reserveWho ?? null, inPvp: () => !!this.combat?.active?.pvp,
       log: line => console.log(line) });
     c.onEvent = ev => {
+      if (ev.kind === 'server-save') {
+        try { recordCooperativeSaveBoundary(this,ev); }
+        catch (error) { console.error(`[cooperative] ${this.name} could not publish a save boundary: ${error.message}`); }
+      }
       c.observeSessionEvidence?.(ev);
       this.observeAttackMessage(ev,c);
       if(ev.kind==='message')recordDeathNotice({host,port},ev,{observer:c.me?.name??character,sessionId:evidence?.active?.id,isFleetmate});
@@ -5043,6 +5050,11 @@ class Session {
           cancelled = { at_swing: i };
           return;
         }
+        // Turning and queuing can outlive the previous health check.
+        if (abortBelow != null) {
+          const hp = healthPct();
+          if (hp != null && hp < abortBelow) { aborted = { at_health: hp, swing: i }; return; }
+        }
         if (!c.room.objects.has(targetId)) return;
         sent = true;
         if(observer){observer.after=c.evSeq;observer.armed=true;}
@@ -5077,8 +5089,10 @@ class Session {
     }
     // Health after the exchange, since deciding whether to keep fighting depends on
     // it and the stat only arrives when it changes.
-    await this.pacer.submit('read', () => c.stats(1));
-    await c.waitFor({ kinds: ['stat'], timeoutMs: 1500 });
+    if (!aborted) {
+      await this.pacer.submit('read', () => c.stats(1));
+      await c.waitFor({ kinds: ['stat'], timeoutMs: 1500 });
+    }
     // The trailing sweep. `said` is still excluded by `keep` — another player quoting hit
     // prose must never become evidence — and ordering by seq puts the resistance band back
     // immediately after the blow it describes, which is how a reader tells them apart.
@@ -5229,6 +5243,16 @@ class Session {
       ? cands.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || null, amount: o.amount || 1,
                           icon_rsc: o.iconRsc, unrevealed: skills.isUnrevealed(o) }))
       : null;
+    const sweep = !ids?.length || !explicitIdsOverride;
+    const cacheProtected = (id, name) => sweep && this.world?.room?.num === FARM_FOOD_CACHE_ROOM &&
+      isFarmFoodCacheItem(name) && boundFarmFoodPile(this, c, readFarmFoodCache())?.id === id;
+    const cacheSkipped = [];
+    cands = cands.filter(o => {
+      const name = c.rsc.get(o.nameRsc);
+      if (!cacheProtected(o.id, name)) return true;
+      cacheSkipped.push({ id: o.id, item: name, why: 'reserved for counted farm food withdrawals' });
+      return false;
+    });
 
     // NEVER PICK THESE UP.
     //
@@ -5415,8 +5439,8 @@ class Session {
     const ignoredSkipped = [];
     const stationPickupIds = this._stationLootPickup ? new Set() : null;
     const lootRoom = c.room;
-    const stationPickupAllowed = (id, name) => !stationPickupIds?.has(id) ||
-      (this.client === c && c.room === lootRoom && this._stationLootPickup?.()?.some(item => lootName(item) === lootName(name)));
+    const pickupAllowed = (id, name) => !cacheProtected(id, name) && (!stationPickupIds?.has(id) ||
+      (this.client === c && c.room === lootRoom && this._stationLootPickup?.()?.some(item => lootName(item) === lootName(name))));
     if (!ids?.length && this._lootIgnore?.length) {
       const pickup = this._stationLootPickup?.();
       const stationNames = pickup?.length ? new Set(pickup.map(lootName)) : null;
@@ -5500,7 +5524,7 @@ class Session {
     }).map(o => c.rsc.get(o.nameRsc) || '').filter(Boolean)];
     let wasCancelled = false;
     for (const l of lootOnlyLeft) refused.push({ id: l.id, item: l.name, why: l.why });
-    for (const d of dibsSkipped) refused.push(d);
+    refused.push(...dibsSkipped, ...cacheSkipped);
     for (const n of ignoredSkipped)
       refused.push({ item: n, why: 'IGNORED — on the fleet loot-ignore list (substrate/loot-ignore.json): not worth its weight. Left on the floor.' });
     for (const n of gateSkipped)
@@ -5545,7 +5569,7 @@ class Session {
         // The swaps first: the pack has to have the room before the get is sent, or the
         // server refuses the pickup and we have thrown something away for nothing.
         for (const swap of overfarmPlan.swaps) {
-          if (!stationPickupAllowed(swap.take.id, swap.take.name)) continue;
+          if (!pickupAllowed(swap.take.id, swap.take.name)) continue;
           for (const giving of swap.drop) {
             // An explicit planned ID never falls back to a different same-name object.
             const inv = c.inventory || [];
@@ -5555,7 +5579,7 @@ class Session {
             if (!held) continue;
             let stationWithdrew = false;
             await this.pacer.submit('drop', () => {
-              if (!stationPickupAllowed(swap.take.id, swap.take.name)) { stationWithdrew = true; return; }
+              if (!pickupAllowed(swap.take.id, swap.take.name)) { stationWithdrew = true; return; }
               if ((c.equipment?.()?.equipped ?? []).some(e => e.id === held.id)) return;
               if ([...(this._overfarmKeepIds?.() ?? [])].some(id => Number(id) === Number(held.id))) return;
               if (typeof beforeMutation === 'function') beforeMutation('drop', { target_id: held.id });
@@ -5601,7 +5625,7 @@ class Session {
     for (const o of cands) {
       if (cancelled()) { wasCancelled = true; break; }
       const name = c.rsc.get(o.nameRsc);
-      if (!stationPickupAllowed(o.id, name)) continue;
+      if (!pickupAllowed(o.id, name)) continue;
       setIntentTarget(this,{kind:'pickup',object_id:o.id});
       const me = c.self;
       // UserGet measures MANHATTAN distance and refuses past 7, so only walk when
@@ -5627,7 +5651,7 @@ class Session {
       const before = c.evSeq;
       let sent = false;
       await this.pacer.submit('get', () => {
-        if (!stationPickupAllowed(o.id, name)) return;
+        if (!pickupAllowed(o.id, name)) return;
         if (typeof beforeMutation === 'function') beforeMutation('get', { target_id: o.id });
         sent = true;
         return c.get(o.id);
@@ -5901,6 +5925,7 @@ class Session {
     // loop below reports one stable terminal result instead of walking the same boundary
     // again. Nothing here is persisted beyond this journey.
     const exhaustedHops = new Map();
+    let retriedDirectBodyBlock = false;
     // ONE DOOR PER JOURNEY. A room that needs its door opened needs it once; a second attempt
     // after the first failed is a five-second cycle spent on the same refusal, which is the
     // loop this whole change exists to end rather than to relocate.
@@ -6603,7 +6628,9 @@ class Session {
       // out to be in the gap between them, the fix is in the planner, not the legs.
       const walkBegan = Date.now();
       const leavingRoom = Number(this.world?.room?.num ?? NaN);
-      const leavingRoomId = this.client?.room?.id ?? null;
+      const leavingClient = this.client;
+      const leavingBody = leavingClient?.selfId;
+      const leavingRoomId = leavingClient?.room?.id ?? null;
       // A published room can blink for one observation. Stop source-room movement on the
       // first identity change, but count a hop only after an authoritative BP_PLAYER refresh
       // (or the stable-read fallback used by the lifted offline fixture) confirms it.
@@ -6999,6 +7026,36 @@ class Session {
         // Prose such as "no floor" can describe one transient walk and must keep the ordinary
         // stumble/retry behaviour below.
         const candidatesExhausted = r.outcome === 'exit_candidates_exhausted';
+        if (!retriedDirectBodyBlock && candidatesExhausted && r.blocked_by_bodies === true &&
+            r.tried?.length && exit.kind === 'edge' && leavingRoom === 544 && nextHop.to === 552 && toRoomNum === 552 &&
+            origin?.source === 'keeper' && ['hunt_relocation', 'station_return', 'station_approach'].includes(origin.name)) {
+          // A crowd at a nearby direct return edge can clear before a long detour would leave
+          // the room. Retry once with a fresh room view, using the ordinary crossing checks.
+          const canRetry = () => {
+            const me = this.client?.self;
+            const health = this.client?.vitals?.()?.health;
+            return leavingRoomId != null && leavingBody != null && this.client === leavingClient &&
+              leavingClient.selfId === leavingBody && leavingClient.room?.id === leavingRoomId &&
+              this.world?.room?.num === leavingRoom && me && !me.predicted && health?.value > 0 &&
+              health.value === health.max && this.damagedAt < walkBegan - 2500 &&
+              r.tried.every(t => t.stage === 'edge' && t.why === 'object_blocked' &&
+                t.crossing_packet_sent === false && t.stand_on &&
+                Math.max(Math.abs(me.row - t.stand_on.row), Math.abs(me.col - t.stand_on.col)) <= 2);
+          };
+          if (stumbles < maxStumbles && typeof this.confirmPosition === 'function' && canRetry()) {
+            retriedDirectBodyBlock = true;
+            const confirmed = await this.confirmPosition({ timeoutMs: 1200 }).catch(() => null);
+            if (this.movementWasCancelled(movementGeneration, controlToken)) return this.cancelledMovement({ log });
+            if (this.client !== leavingClient || leavingClient.selfId !== leavingBody)
+              return { arrived: false, log, reason: 'body changed while checking the occupied return edge' };
+            if (this.world?.room?.num !== leavingRoom || leavingClient.room?.id !== leavingRoomId) continue;
+            if (confirmed && !confirmed.predicted && canRetry()) {
+              totalStumbles++;
+              log.push({ outcome: 'retry_occupied_return_edge', room: leavingRoom, to: nextHop.to });
+              continue;
+            }
+          }
+        }
         if (candidatesExhausted && nextHop.to != null && !exhaustedHops.has(nextHopKey)) {
           exhaustedHops.set(nextHopKey, {
             from: here.num, to: Number(nextHop.to), to_name: nextHop.to_name,

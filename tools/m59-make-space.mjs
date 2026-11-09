@@ -62,6 +62,7 @@ export function annotateRow(row, { heldBack = new Set() } = {}) {
   else if (heldBack.has(Number(row.id))) block = 'held back by the keeper (enchanted or just delivered)';
   else if (row.recommended !== true) block = 'not recommended for sale';
   else if (row.blocked) block = `sale blocked: ${row.blocked}`;
+  else if (row.merchant_only) block = 'fleet-wanted overflow is for merchant sale';
   else if (!row.queued) block = row.reason || 'not queued for sale';
   else if (!(saleAmount > 0)) block = 'working stock reserved by the loadout';
   else if (!w) block = 'not in the weight table, so dropping it frees an unknown amount';

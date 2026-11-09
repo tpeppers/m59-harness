@@ -19,7 +19,7 @@
 
 import { writeDeclaration, forgetDeclaration, readDeclarations } from './m59-interest-store.mjs';
 import { withCastRite } from './m59-castrite.mjs';
-import { minorHealBlockedByKarma } from './m59-spells.mjs';
+import { shalilleHealBlockedByKarma } from './m59-spells.mjs';
 import { isSpared, sparePatternsOf, provokeExempt } from './m59-spare.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { isEnemyHit } from './m59-combatlog.mjs';
@@ -39,7 +39,7 @@ import { FLEET_KEEP, weighPack, isWeaponName, isKnownNonWeapon, itemNameKey, foo
 // A character's own buy/sell/keep list, when it has one. Imported for the two pure
 // predicates only — this file does not go looking for the file, because the caller knows
 // which character it is and this one does not.
-import { keepTest as keepTestFor, sellTest as sellTestFor, saleAllowance } from './m59-loadout.mjs';
+import { entryMatches, keepTest as keepTestFor, sellTest as sellTestFor, saleAllowance } from './m59-loadout.mjs';
 import * as buyers from './m59-buyers.mjs';
 import {readIntent,sessionIdentity,planInventory,saleBlocked} from './m59-inventory-intent.mjs';
 import { readFileSync } from 'node:fs';
@@ -1719,14 +1719,18 @@ export async function healUp(s, { target = 0.9, maxItems = 8, allow = null } = {
   // `allow` (policy.healSpells): only these heals, or every heal when null.
   const spell = (c.spells || []).find(sp => {
     const name = c.rsc.get(sp.nameRsc) || '';
-    return HEAL_SPELL.test(name) && !minorHealBlockedByKarma(c.stat?.('karma'), name)
+    return HEAL_SPELL.test(name) && !shalilleHealBlockedByKarma(c.stat?.('karma'), name)
       && (!Array.isArray(allow) || allow.some(a => String(a).toLowerCase() === name.toLowerCase()));
   });
   if (spell && (frac() ?? 1) < target) {
+    const name = c.rsc.get(spell.nameRsc) || '';
     for (let i = 0; i < 3 && (frac() ?? 1) < target; i++) {
       const before2 = frac();
       const sent = await withCastRite(s, { spell, targets: [c.selfId], why: 'heal' },
-        () => s.pacer.submit('cast', () => c.cast(spell.id, [c.selfId]), 1050));
+        () => s.pacer.submit('cast', () => {
+          if (shalilleHealBlockedByKarma(c.stat?.('karma'), name)) return false;
+          return c.cast(spell.id, [c.selfId]);
+        }, 1050));
       if (sent === false) break;
       await c.waitFor({ kinds: ['stat', 'message'], timeoutMs: 3000 });
       used.push(c.rsc.get(spell.nameRsc));
@@ -1956,10 +1960,11 @@ export const interest = {
 
   // `service`: this character serves others from a post (a desk, a room caster), so a gift to it
   // is worth a short walk. See m59-sharing.mjs.
-  declare(agent, { wants = [], needs = new Map(), spare = new Map(), room = null,
+  declare(agent, { wants = [], needs = new Map(), spare = new Map(), wantMatches = new Map(), room = null,
                    character = null, farming = false, service = false, pack = null } = {}) {
     const rec = {
       wants: new Set(wants.map(w => String(w).toLowerCase())),
+      wantMatches: wantMatches instanceof Map ? wantMatches : new Map(Object.entries(wantMatches ?? {})),
       needs: needs instanceof Map ? needs : new Map(Object.entries(needs)),
       spare: spare instanceof Map ? spare : new Map(Object.entries(spare)),
       room: room == null ? null : Number(room),
@@ -1975,7 +1980,7 @@ export const interest = {
     // m59-interest-store.mjs for what reading only it used to cost.
     // Written when it CHANGES, or every 20s as a heartbeat: this runs every keeper pass, and readers
     // drop anything older than a couple of minutes, so a once-a-second rewrite buys nothing.
-    const out = { ...rec, wants: [...rec.wants], needs: Object.fromEntries(rec.needs),
+    const out = { ...rec, wants: [...rec.wants], wantMatches: Object.fromEntries(rec.wantMatches), needs: Object.fromEntries(rec.needs),
                   spare: Object.fromEntries(rec.spare) };
     const body = JSON.stringify({ ...out, at: 0 });
     const last = (this._written ??= new Map()).get(agent);
@@ -1993,6 +1998,7 @@ export const interest = {
     for (const r of readDeclarations()) {
       out.set(String(r.agent), {
         wants: new Set([].concat(r.wants ?? []).map(w => String(w).toLowerCase())),
+        wantMatches: new Map(Object.entries(r.wantMatches ?? {})),
         needs: new Map(Object.entries(r.needs ?? {})),
         spare: new Map(Object.entries(r.spare ?? {})),
         room: r.room == null ? null : Number(r.room),
@@ -2005,15 +2011,21 @@ export const interest = {
     return out;
   },
 
-  // Who wants a thing by this name — matched loosely, because the server hands us
-  // display names ("herb", "elderberry") and callers think in kinds.
+  // A named ingredient wants that item. Keep the loose search for older declarations
+  // and callers asking for a category without an item matching rule.
   wantedBy(name, { except = null } = {}) {
     const n = String(name || '').toLowerCase();
     if (!n) return [];
     const out = [];
     for (const [agent, rec] of this.records()) {
       if (agent === except) continue;
-      for (const w of rec.wants) if (n.includes(w) || w.includes(n)) { out.push(agent); break; }
+      for (const w of rec.wants) {
+        const match = rec.wantMatches?.get(w);
+        if (match ? entryMatches({ item: w, match }, n) : n.includes(w) || w.includes(n)) {
+          out.push(agent);
+          break;
+        }
+      }
     }
     return out;
   },
@@ -2750,6 +2762,7 @@ export function findCreature(s, needle, { attackableOnly = true, includePlayers 
 // a threshold, and stop rather than dying — but report everything, so the caller can
 // override next time.
 import {withIntent,setIntentTarget} from './m59-intent-observations.mjs';
+export const SHORT_FIGHT_APPROACH_SQUARES = 8;
 export function fight(s,options){return withIntent(s,null,()=>fightWithIntent(s,options));}
 async function fightWithIntent(s, {
   target,
@@ -2962,13 +2975,13 @@ async function fightWithIntent(s, {
     note:'walked one piece of the route toward the quarry; the next pass looks at the room again'});
   // Past 8 squares as well, detour or not: without a wall to hold (no chasePlan when holding) the old answer,
   // out_of_reach, always ended in closeOnQuarry walking the same plan one pass later.
-  if(chasePlan?.found&&localDistance>reach&&(chasePlan.detour||localDistance>8)){
+  if(chasePlan?.found&&localDistance>reach&&(chasePlan.detour||localDistance>SHORT_FIGHT_APPROACH_SQUARES)){
     const piece=await runChase(chasePlan);
     if(approachStopped(piece.walk))return approachFailure(piece.walk);
     if(!piece.in_reach)return chaseClosing(piece);
     chased=piece;
   }
-  const fineApproach=!chased&&!holdPosition&&localDistance<=8&&typeof s.walkToMeleeRange==='function';
+  const fineApproach=!chased&&!holdPosition&&localDistance<=SHORT_FIGHT_APPROACH_SQUARES&&typeof s.walkToMeleeRange==='function';
   const spot = (holdPosition || foeNearby || fineApproach || chased) ? null : s.world?.approachSquare?.(foe.col, foe.row);
   if(fineApproach){
     const walk=await s.walkToMeleeRange(foe.id,{reach,movementGeneration,controlToken});
@@ -3001,7 +3014,7 @@ async function fightWithIntent(s, {
     // grid uses diagonal movement and can report fewer steps than the
     // actual distance.
     const rawDist = meBefore && foe.col != null ? Math.hypot(foe.col - meBefore.col, foe.row - meBefore.row) : spot.steps;
-    if (spot.steps > 6 || rawDist > 8) {
+    if (spot.steps > 6 || rawDist > SHORT_FIGHT_APPROACH_SQUARES) {
       return { fought: false, out_of_reach: true, target: foeName,
                foe_id: foe.id, reason: `target ${rawDist.toFixed(0)} cells away — too far to approach this pass`,
                nearest: { distance: +rawDist.toFixed(1) }, log, note: 'the GOAP will travel closer on the next pass' };
@@ -3335,8 +3348,11 @@ async function fightWithIntent(s, {
     }
   }
 
-  await s.pacer.submit('read', () => c.stats(1));
-  await c.waitFor({ kinds: ['stat'], timeoutMs: 2000 });
+  // A mid-round abort already has the health push that demands recovery.
+  if (!disengaged?.mid_round) {
+    await s.pacer.submit('read', () => c.stats(1));
+    await c.waitFor({ kinds: ['stat'], timeoutMs: 2000 });
+  }
   const after = c.vitals();
   const landed = landedHitSummary(combatLines, foeName);
 
@@ -4139,13 +4155,19 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
   const held=[];
   const excluded = new Set([...(exclude ?? [])].map(Number));
   const remaining = pack.map(x => ({ ...x }));
+  const merchantOverflow = new Set((loadout?.carry ?? []).filter(entry=>entry.merchantOnly).map(entry=>itemNameKey(entry.item)));
+  const dropLoadout = merchantOverflow.size ? { ...loadout, carry: loadout.carry.filter(entry=>!entry.merchantOnly) } : loadout;
   const candidates=pack.filter(x=>x.name).map(x=>{
     const normal=sellable({name:x.name,worn:x.equipped,keepRe,loadout,armoured,pack});
-    const allowance=saleAllowance(loadout,x.name,remaining);
+    // The live pack represents uncounted objects as zero, but a zero in this
+    // simulated pack means a prior planned sale consumed the entire row.
+    const remainingPack=remaining.filter(item=>item.amount>0);
+    const allowance=saleAllowance(loadout,x.name,remainingPack);
     const saleAmount=Math.min(x.amount,allowance.amount);
     const disposition=s.lootDisposition?.(x.o);
     const recommended=disposition ? disposition.action==='sell' : equipment.sell.has(x.id)||(!equipment.keep.has(x.id)&&normal.sell);
     let blocked=error||(!equipped?'equipment is not known':null);
+    let merchantOnly=false;
     if(excluded.has(Number(x.id)))blocked='held out of the offer by the caller';
     else if(itemIsProtected(x.name,protect))blocked='protected item';
     else if(equipment.keep.has(x.id))blocked=equipment.keep.get(x.id);
@@ -4154,9 +4176,13 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
     // low price. `c._madeItemIds` is the keeper's READING of "shimmers insubstantially"
     // (m59-weapon-magic.mjs); an item nobody has looked at is offered as before.
     else if(c._madeItemIds instanceof Set&&c._madeItemIds.has(x.id))blocked='conjured (IA_MADE): no merchant takes a made item';
-    else if(!allowance.overflow&&!equipment.sell.has(x.id)&&interest.anyoneWants(x.name,{except:s.name})) {
-      blocked='wanted by the fleet';
-      if(recommended)held.push({name:x.name,wanted_by:interest.wantedBy(x.name,{except:s.name})});
+    else if(!equipment.sell.has(x.id)&&(!allowance.overflow||merchantOverflow.has(itemNameKey(x.name)))&&
+            interest.anyoneWants(x.name,{except:s.name})) {
+      if(allowance.overflow) merchantOnly=!saleAllowance(dropLoadout,x.name,remainingPack).overflow;
+      else {
+        blocked='wanted by the fleet';
+        if(recommended)held.push({name:x.name,wanted_by:interest.wantedBy(x.name,{except:s.name})});
+      }
     }
     // Explicit clicks may nominate ordinary carried loot, but do not override
     // configured keep floors or reserve lists, equipped gear, or fleet needs.
@@ -4170,7 +4196,8 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
     const role=weaponScore(x.name)>0?'weapon':slot==='armour'?'armor':
       slot==='shield'?'shield':slot==='helm'?'helmet':foods.has(x.id)?'food':'other';
     // Intent metadata carries appearance, never grants an action capability.
-    return {...x,sale_amount:saleAmount,role,actions:[],recommended,blocked,disposition,reason:disposition?.reason||equipment.sell.get(x.id)||normal.why};
+    return {...x,sale_amount:saleAmount,role,actions:[],recommended,blocked,disposition,
+      ...(merchantOnly ? { merchant_only: true } : {}),reason:disposition?.reason||equipment.sell.get(x.id)||normal.why};
   });
   return {identity,revision:doc?.revision??0,items:planInventory(candidates,doc),held,error};
 }

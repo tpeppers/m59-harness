@@ -13,6 +13,9 @@
 //   * the outfit errand's cut: axe and leather armour from Colhorr, no shield, no mace spares;
 //   * the Marion strategy itself validates (and `bread` is refused for `loaf of bread`).
 import './m59-test-ledger.mjs';        // FIRST — the ledger goes to a scratch file
+import { mkdtempSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Autopilot, townTable, townDestinations, purchaseEnabled, ISLAND_TOWN, VILLAGE_TOWN, MARKET_STOPS, BANKS, FOOD_SHOPS } from './m59-autopilot.mjs';
 import { readToolSource } from './autopilot/source.mjs';
 import { normalizeFarmTown, farmTownTable, farmTownMenu, farmTownSeller, farmTownMayBuy, farmTownKeep, farmTownOutfit,
@@ -21,6 +24,8 @@ import { validateStrategy } from './m59-strategy-schema.mjs';
 import { resolveItemName } from './m59-items.mjs';
 import { saleAllowance } from './m59-loadout.mjs';
 import { wantsFor } from './m59-outfit.mjs';
+import { configureInterestStore } from './m59-interest-store.mjs';
+import { interest } from './m59-skills.mjs';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -160,6 +165,85 @@ console.log('\nbounded sale stock');
      rows.find(r => r.id === 33).state !== 'sell' && rows.find(r => r.id === 34).state !== 'sell');
 }
 
+console.log('\nOcean sale overflow');
+{
+  const overflow = normalizeFarmTown({ ...MARION, keep: [...MARION.keep, 'edible mushroom', 'inky-cap mushroom'],
+    sellReserve: { mushroom: 48, 'red mushroom': 24, 'blue mushroom': 10 },
+    sellOverflow: ['mushroom', 'red mushroom', 'blue mushroom'] }, { resolveItem });
+  ok('only named reserves can be opted into fleet-want overflow',
+     throws(() => normalizeFarmTown({ ...MARION, sellReserve: { mushroom: 48 }, sellOverflow: ['blue mushroom'] })));
+  const directory = mkdtempSync(join(tmpdir(), 'm59-ocean-overflow-'));
+  const reserveFile = join(directory, 'reserve.json'), oldReserveFile = process.env.M59_REAGENT_RESERVE_FILE;
+  process.env.M59_REAGENT_RESERVE_FILE = reserveFile;
+  writeFileSync(reserveFile, JSON.stringify({
+    default: { spells: { zap: 7, 'super strength': 5 }, items: { 'red mushroom': 3 } },
+    training: { Fixture: { zap: 11, 'super strength': 35 } },
+  }));
+  configureInterestStore({ enabled: false });
+  const buyerWant = 'fixture-other-caster';
+  const nameRsc = ['blue mushroom', 'mushroom', 'red mushroom', 'edible mushroom', 'inky-cap mushroom'];
+  interest.declare(buyerWant, { wants: nameRsc, wantMatches: new Map(nameRsc.map(n => [n, 'exact'])) });
+  try {
+    const c = { inventory: [60, 100, 70, 15, 8].map((amount, i) => ({ id: i + 1, nameRsc: i, amount })),
+      rsc: new Map(nameRsc.map((name, i) => [i, name])), using: new Set(),
+      spells: [{ name: 'zap' }, { name: 'super strength' }] };
+    const k = Object.assign(Object.create(Autopilot.prototype), {
+      s: { name: 'fixture', client: c, need: () => c, world: { room: { num: 552 } },
+        reserveWho: { fleet: 'fixture', agent: 'fixture', character: 'Fixture' } },
+      policy: { farmTown: overflow },
+      loadout: () => null, saleProtectedNames: () => [], weaponPriorityNow: () => [],
+      heldBackIds: () => new Set(), saleExcludeIds: () => new Set(),
+    });
+    const rows = () => new Map(k.ownSalePlan().items.map(row => [row.name, row]));
+    const released = rows();
+    ok('Ocean sells only exact excess over summed PvP and training casts even when the fleet wants it',
+      released.get('blue mushroom').state === 'sell' && released.get('blue mushroom').sale_amount === 42 &&
+      released.get('mushroom').state === 'sell' && released.get('mushroom').sale_amount === 20 &&
+      released.get('red mushroom').state === 'sell' && released.get('red mushroom').sale_amount === 46);
+    const merchantOnly = k.salePlanView().rows.find(row => row.name === 'blue mushroom');
+    ok('the same plan shows fleet-wanted overflow for sale and excludes it from emergency drops',
+      merchantOnly.state === 'sell' && merchantOnly.sale_amount === 42 && !merchantOnly.droppable &&
+      merchantOnly.drop_block === 'fleet-wanted overflow is for merchant sale');
+    ok('the edible and inky-cap lanes retain their existing protections',
+      released.get('edible mushroom').state !== 'sell' && released.get('inky-cap mushroom').state !== 'sell');
+    c.inventory.unshift({ id: 21, nameRsc: 0, amount: 2 });
+    const soldBlue = k.ownSalePlan().items.filter(row => row.name === 'blue mushroom' && row.state === 'sell');
+    ok('a wholly sold stack does not count as one remaining unit toward another stack',
+      soldBlue.reduce((sum, row) => sum + row.sale_amount, 0) === 44);
+    c.inventory.shift();
+    c.spells = [];
+    ok('an unobserved spell list conservatively retains all configured spell stock', rows().get('blue mushroom').sale_amount === 42);
+    c.spells = [{ name: 'zap' }];
+    k.s.reserveWho.character = 'Other';
+    ok('the Ocean profile alone keeps ten blue mushrooms for Zap', rows().get('blue mushroom').sale_amount === 50);
+    k.s.reserveWho.character = 'Fixture';
+    k.loadout = () => ({ keep: ['mushroom'], sell: [], gear: { weapon: [], slots: {} },
+      carry: [{ item: 'blue mushroom', min: 27, max: 32, match: 'exact' }] });
+    k.saleProtectedNames = () => ['red mushroom'];
+    const protectedRows = rows();
+    ok('personal carry ceilings and both personal and guild hard keeps still win',
+      protectedRows.get('blue mushroom').sale_amount === 28 &&
+      protectedRows.get('mushroom').state !== 'sell' && protectedRows.get('red mushroom').blocked === 'protected item');
+    ok('a pre-existing finite personal ceiling still allows an emergency drop',
+      k.salePlanView().rows.find(row => row.name === 'blue mushroom').droppable);
+    k.heldBackIds = () => new Set([1]);
+    ok('exact held cargo is excluded even above the configured ceiling',
+      rows().get('blue mushroom').blocked === 'held out of the offer by the caller');
+    k.heldBackIds = () => new Set();
+    k.loadout = () => null;
+    k.saleProtectedNames = () => [];
+    k.policy.farmTown = normalizeFarmTown({ ...MARION, sellReserve: { 'blue mushroom': 10 } });
+    ok('another town with sale reserves retains ordinary fleet wants',
+      rows().get('blue mushroom').blocked === 'wanted by the fleet');
+  } finally {
+    interest.forget(buyerWant);
+    if (oldReserveFile === undefined) delete process.env.M59_REAGENT_RESERVE_FILE;
+    else process.env.M59_REAGENT_RESERVE_FILE = oldReserveFile;
+    unlinkSync(reserveFile);
+    rmdirSync(directory);
+  }
+}
+
 console.log('\nselling without a banking threshold');
 {
   const limited = normalizeFarmTown({ ...MARION, sellReserve: { mushroom: 48 },
@@ -248,6 +332,63 @@ console.log('\nthe keeper, on the real prototype');
   ok('no bank in the farm town: unaffordable is returned and nothing walks', r.unaffordable === true && walked.length === 0, JSON.stringify(r));
   ok('the trip is kept for when the purse can pay', f.deferredShoppingTrip?.target?.room === 202 && f.townTrip === null);
   ok('and the note says why', f.notes.some(n => /no bank/.test(n.what)));
+}
+
+console.log('\nmarket cooldown when purchases defer');
+{
+  function marketTrip(purse) {
+    const calls = [];
+    const client = {
+      inventory: [{ id: 1, nameRsc: 1, amount: 350 }, { id: 2, nameRsc: 2, amount: 1 },
+        { id: 3, nameRsc: 3, amount: purse }],
+      rsc: new Map([[1, 'blue mushroom'], [2, 'long sword'], [3, 'shilling']]),
+      stat: name => name === 'might' ? 15 : null,
+      evSeq: 0, requestInventory: () => {}, waitFor: async () => ({ events: [] }),
+    };
+    const world = { room: { num: 202 } };
+    const trip = { target: { room: 202 }, purpose: 'sell', trigger: 'load', nextService: 1, marketStops: town.sell };
+    const k = Object.create(Autopilot.prototype);
+    Object.assign(k, {
+      policy: { farmTown: town, maxCarry: 100 }, townTrip: trip,
+      s: { world, client, need: () => client, bankKnown: () => null, pacer: { submit: async (_kind, fn) => fn() } },
+      travelInterrupted: () => false, note: () => {}, standingOrderUnstarted: () => null,
+      overfarmHoldsTrip: () => null, supplyShortfall: () => ({ short: false }),
+      ownSalePlan: () => ({ items: [{ id: 2, name: 'long sword', amount: 1, sale_amount: 1, state: 'sell' }] }),
+      minSellTripValue: () => 0,
+      travel: async room => { calls.push(`walk ${room}`); world.room.num = room; return { arrived: true }; },
+      sellInTown: async ({ seller }) => { calls.push(`sell ${seller}`); return { sold: [], total_received: 0 }; },
+      shoppingPlan: () => ({ lines: [{ item: 'loaf of bread', amount: 1, cost: 60 }],
+        unpriced: [], required_purse: 60, expected_cost: 60, reserve: 0 }),
+      farmTownCurseErrand: async () => {}, guildTitheFromSale: async () => {}, farmTownHallVisit: async () => {},
+      bankSurplus: async () => {}, fundStandingOrder: async () => {},
+      restockInTown: async () => { calls.push('restock'); },
+      buyFoodInTown: async () => { calls.push('buy food'); },
+      buyReagentsInTown: async () => { calls.push('buy reagents'); },
+      chaliceTownCargo: async () => {}, chaliceBuyCargo: async () => {}, buyFarmDeliveryCargo: async () => {},
+      gatherTownFavors: async () => {}, vaultRunIfPassing: async () => {}, kocatanGateClear: async () => {},
+      progress: () => { calls.push('finished'); },
+    });
+    return { k, trip, calls };
+  }
+
+  const poor = marketTrip(20);
+  ok('the same pack would open a new load sale before visiting the counters',
+     poor.k.checkIfShouldSell().trigger === 'load');
+  const deferred = await poor.k.continueTownTrip();
+  ok('an empty circuit defers only at no-bank purchase funding, after both normal counters',
+     deferred === false && poor.k.townTrip === null && poor.k.deferredShoppingTrip === poor.trip &&
+     poor.trip.nextService === 7 && poor.calls.join('|') === 'sell Morrigan|walk 201|sell Colhorr');
+  ok('the completed market respects the existing cooldown while purchases are deferred',
+     Number.isFinite(poor.k.lastMarketServiceAt) && poor.k.lastTownServiceAt == null &&
+     poor.k.checkIfShouldSell().sell === false);
+
+  const funded = marketTrip(100);
+  const completed = await funded.k.continueTownTrip();
+  ok('a funded circuit still buys and completes in the usual order',
+     completed === true && funded.k.townTrip === null && !funded.k.deferredShoppingTrip &&
+     funded.calls.join('|') === 'sell Morrigan|walk 201|sell Colhorr|restock|buy food|buy reagents|finished');
+  ok('normal completion still starts the market cooldown from the full service stamp',
+     Number.isFinite(funded.k.lastTownServiceAt) && funded.k.lastMarketServiceAt === funded.k.lastTownServiceAt);
 }
 
 console.log('\nwired in');

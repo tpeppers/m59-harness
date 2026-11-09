@@ -75,6 +75,15 @@ export function minorHealBlockedByKarma(karma, spellName) {
   return Number.isFinite(karma) && karma < 0 && /^(?:minor heal|heal)$/i.test(String(spellName ?? '').trim());
 }
 
+const SHALILLE_HEAL_LEVELS = new Map([['heal', 1], ['minor heal', 1], ['hospice', 3], ['major heal', 5]]);
+
+// Autonomous healing should skip a known server refusal. These spells inherit the
+// ordinary Shal'ille karma rule (spell.kod). An unread karma keeps the old behavior.
+export function shalilleHealBlockedByKarma(karma, spellName) {
+  const level = SHALILLE_HEAL_LEVELS.get(String(spellName ?? '').trim().toLowerCase());
+  return level !== undefined && Number.isFinite(karma) && !karmaAllows(SS.SHALILLE, level, karma);
+}
+
 // ------------------------------------------------------------------ compile
 
 // kod identifiers are CASE-INSENSITIVE, and the tree uses that freely: blakston.khd

@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';import{test}from'node:test';import{mkdtempSync,rmSync}from'node:fs';import{join}from'node:path';import{tmpdir}from'node:os';
 import{affordableHeal,castRecoveryHeal}from'./m59-recovery-heal.mjs';import{publishFleetHealth,readFleetHealth}from'./m59-fleet-health.mjs';
 import { BP, M59Client } from './m59-client.mjs';
-const fixture=()=>{const names=new Map([[1,'minor heal'],[2,'major heal'],[3,'herbs']]);const vitals={health:{value:40,max:75},mana:{value:30},vigor:{value:180}};let casts=0;
+import { shalilleHealBlockedByKarma } from './m59-spells.mjs';
+const fixture=()=>{const names=new Map([[1,'minor heal'],[2,'major heal'],[3,'herbs'],[4,'hospice']]);const vitals={health:{value:40,max:75},mana:{value:30},vigor:{value:180}};let casts=0;
  const c={stand(){this.lastPostureCommand={verb:'stand',at:Date.now(),room_object_id:this.room.id};},selfId:7,me:{name:'Patient'},self:{id:7,row:5,col:8,x:544,y:352},combatReady:true,state:'game',room:{id:10,objects:new Map()},spells:[{id:12,nameRsc:2},{id:11,nameRsc:1}],inventory:[{id:15,nameRsc:3,amount:8}],rsc:{get:k=>names.get(k)},vitals:()=>structuredClone(vitals),evSeq:4,cast(){casts++;vitals.mana.value-=3;vitals.health.value+=8;},waitFor:async()=>({events:[]})};
  const s={client:c,credentials:{host:'127.0.0.1',port:15959},world:{room:{num:827}},pacer:{submit:async(_kind,fn)=>fn()}};return{s,c,vitals,casts:()=>casts};};
 test('recovery chooses affordable minor heal even when an expensive heal precedes it in the spell book',async()=>{const f=fixture();assert.equal(affordableHeal(f.c).name,'minor heal');const r=await castRecoveryHeal(f.s);assert.equal(f.casts(),1);assert.equal(r.health_gain,8);assert.equal(r.mana_spent,3);assert(r.confirmed);});
-test('negative karma skips Minor Heal in recovery and cancels it if karma drops before the packet', async () => {
+test('negative karma skips Shal’ille healing and cancels a queued Minor Heal if karma drops', async () => {
   const f = fixture();
   let karma = -1;
   f.c.stat = () => karma;
-  assert.equal(affordableHeal(f.c).name, 'major heal');
+  assert.equal(affordableHeal(f.c), null);
   const allow = ['minor heal'];
   assert.equal((await castRecoveryHeal(f.s, { allow })).cast, false);
   karma = 20;
@@ -19,6 +20,24 @@ test('negative karma skips Minor Heal in recovery and cancels it if karma drops 
   };
   assert.equal((await castRecoveryHeal(f.s, { allow })).cast, false);
   assert.equal(f.casts(), 0);
+});
+
+test('known Shal’ille karma requirements choose an eligible learned heal and leave unknown karma unchanged', async () => {
+  for (const [name, threshold] of [['minor heal', 10], ['heal', 10], ['hospice', 30], ['major heal', 50]]) {
+    assert(shalilleHealBlockedByKarma(threshold - 1, name));
+    assert(!shalilleHealBlockedByKarma(threshold, name));
+    assert(!shalilleHealBlockedByKarma(undefined, name));
+  }
+  assert(!shalilleHealBlockedByKarma(-61, 'mystic touch'));
+  const f = fixture();
+  f.c.spells.push({ id: 13, nameRsc: 4 });
+  f.c.stat = () => 20;
+  assert.equal(affordableHeal(f.c, { allow: ['hospice', 'minor heal'] }).name, 'minor heal');
+  assert((await castRecoveryHeal(f.s, { allow: ['hospice', 'minor heal'] })).confirmed);
+  f.c.stat = () => 30;
+  assert.equal(affordableHeal(f.c, { allow: ['major heal', 'hospice'] }).name, 'hospice');
+  f.c.stat = () => undefined;
+  assert.equal(affordableHeal(f.c, { allow: ['hospice'] }).name, 'hospice');
 });
 
 test('the client sends no Minor Heal packet at negative karma and resumes when it clears', () => {
@@ -62,9 +81,16 @@ test('actual farm and idle healers treat fresh fleetmates without requiring coop
  const {Autopilot}=await import('./m59-autopilot.mjs');const {setRosterSource}=await import('./m59-party.mjs');const {createHash}=await import('node:crypto');const {unlinkSync}=await import('node:fs');
  const f=fixture(),patient=fixture(),name='Offline Healing Fixture Patient',port=65530;
  patient.c.me.name=name;patient.c.selfId=22;patient.c.self.id=22;patient.vitals.health={value:8,max:20};patient.s.credentials.port=port;
- f.s.credentials.port=port;f.vitals.health.value=75;f.c.rsc.get=id=>id===99?name:({1:'minor heal',2:'major heal',3:'herbs'})[id];f.c.room.objects.set(22,{id:22,nameRsc:99,flags:5});f.s.movementGeneration=0;f.s.movementWasCancelled=()=>false;
+ f.s.credentials.port=port;f.vitals.health.value=75;f.c.rsc.get=id=>id===99?name:({1:'minor heal',2:'major heal',3:'herbs',4:'hospice'})[id];f.c.spells.push({id:13,nameRsc:4});f.c.room.objects.set(22,{id:22,nameRsc:99,flags:5});f.s.movementGeneration=0;f.s.movementWasCancelled=()=>false;
  const file=new URL('../substrate/fleet-health/'+createHash('sha256').update(JSON.stringify(['127.0.0.1',port,name.toLowerCase()])).digest('hex')+'.json',import.meta.url);
- try{setRosterSource(()=>new Set([name]));assert(publishFleetHealth(patient.s));const notes=[],evidence=[];f.c.observeSessionEvidence=e=>evidence.push(e);const a=Object.assign(Object.create(Autopilot.prototype),{s:f.s,mode:'farm',policy:{strategy:'fieldrest'},facultyHeld:()=>false,checkFreeze:()=>false,note:(...v)=>notes.push(v),recordCast:()=>{}});assert.equal(await a.healObservedFleetmate(),true);assert.equal(f.casts(),1);assert.equal(notes[0][1].target,name);const result=JSON.parse(evidence.find(e=>e.opcode==='HEAL_RESULT').reason);assert.equal(result.trigger,'observed_fleetmate');assert.equal(result.self,false);assert.deepEqual(result.target_health_before,patient.s.client.vitals().health);assert(result.target_report_before_at>0);assert.equal(result.mana_spent,3);assert.equal(await a.healObservedFleetmate(),false,'one cast per short cooldown');a._observedAllyHealAt=0;
+ try{setRosterSource(()=>new Set([name]));assert(publishFleetHealth(patient.s));const notes=[],evidence=[];f.c.observeSessionEvidence=e=>evidence.push(e);const a=Object.assign(Object.create(Autopilot.prototype),{s:f.s,mode:'farm',policy:{strategy:'fieldrest'},facultyHeld:()=>false,checkFreeze:()=>false,note:(...v)=>notes.push(v),recordCast:()=>{}});
+ // Pepe held his Ocean wall at full HP, 188 vigor, 43 mana and -61 karma, retrying Hospice every pass.
+ f.vitals.health={value:119,max:119};f.vitals.vigor.value=188;f.vitals.mana.value=43;f.c.stat=()=>-61;
+ a.policy.healSpells=['hospice'];
+ assert.equal(await a.healObservedFleetmate(),false,'Pepe cannot pay the karma cost even with full mana and a wounded ally');
+ assert.equal(f.casts(),0);
+ f.c.stat=()=>20;a.policy.healSpells=null;
+ assert.equal(await a.healObservedFleetmate(),true);assert.equal(f.casts(),1);assert.equal(notes[0][1].target,name);const result=JSON.parse(evidence.find(e=>e.opcode==='HEAL_RESULT').reason);assert.equal(result.trigger,'observed_fleetmate');assert.equal(result.self,false);assert.deepEqual(result.target_health_before,patient.s.client.vitals().health);assert(result.target_report_before_at>0);assert.equal(result.mana_spent,3);assert.equal(await a.healObservedFleetmate(),false,'one cast per short cooldown');a._observedAllyHealAt=0;
  patient.vitals.health={value:17,max:20};await new Promise(r=>setTimeout(r,510));assert(publishFleetHealth(patient.s));a.mode='idle';assert.equal(await a.healObservedFleetmate(),true,'idle support may finish an85-percent ally toward the90-percent readiness gate');assert.equal(f.casts(),2);a._observedAllyHealAt=0;patient.vitals.health={value:18,max:20};await new Promise(r=>setTimeout(r,510));assert(publishFleetHealth(patient.s));assert.equal(await a.healObservedFleetmate(),false,'a ready ally missing fewer than three HP is not wastefully healed');patient.vitals.health={value:8,max:20};await new Promise(r=>setTimeout(r,510));assert(publishFleetHealth(patient.s));
  a.mode='train';assert.equal(await a.healObservedFleetmate(),false,'unrequested work modes do not become healers');a.mode='farm';
  a.facultyHeld=kind=>kind==='work';assert.equal(await a.healObservedFleetmate(),false,'leased work retains ownership');a.facultyHeld=()=>false;
@@ -73,6 +99,92 @@ test('actual farm and idle healers treat fresh fleetmates without requiring coop
  assert.equal(await a.healObservedFleetmate(),false,'a recycled target ID cannot heal a different player');assert.equal(f.casts(),2);
  f.c.room.objects.set(22,{id:22,nameRsc:99,flags:5});f.s.pacer.submit=send;a._observedAllyHealAt=0;f.s.client=f.c;f.vitals.health.value=30;assert.equal(await a.healObservedFleetmate(),false,'a wounded caster protects its own health');}
  finally{setRosterSource(null);try{unlinkSync(file);}catch{}}
+});
+
+test('dedicated Ocean medic prioritizes recent damage in sight and moves past an unpaid cast', async () => {
+  const { Autopilot } = await import('./m59-autopilot.mjs');
+  const { setRosterSource } = await import('./m59-party.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'm59-ocean-medic-'));
+  const originalDir = process.env.M59_FLEET_HEALTH_DIR;
+  const f = fixture(), now = Date.now(), casts = [], turns = [], sources = new Map();
+  const patients = [
+    { id: 21, name: 'Offline Ocean Recent', row: 5, col: 4, hp: 16, damage: 500 },
+    { id: 22, name: 'Offline Ocean Older', row: 5, col: 12, hp: 10, damage: 1200 },
+    { id: 23, name: 'Offline Ocean Blocked', row: 8, col: 8, hp: 10, damage: 100 },
+    { id: 24, name: 'Offline Ocean Whole', row: 5, col: 10, hp: 20, damage: 50 },
+  ];
+  try {
+    process.env.M59_FLEET_HEALTH_DIR = directory;
+    setRosterSource(() => new Set(patients.map(p => p.name)));
+    f.s.world.room.num = 552;
+    f.s.live = true;
+    f.c.self.degrees = 0;
+    f.c.room.security = 14;
+    f.c.statsById = new Map([['karma', { value: 65 }]]);
+    f.c.rest = () => { f.c.lastPostureCommand = { verb: 'rest', room_object_id: f.c.room.id }; };
+    f.s.world.geometry = { collisionReady: true, security: 14, canMove: (r, _c, nextRow) => r === nextRow };
+    f.vitals.health.value = f.vitals.health.max;
+    f.c.stat = () => 65;
+    const named = f.c.rsc.get;
+    f.c.rsc.get = id => patients.find(p => p.id === id)?.name ?? named(id);
+    for (const p of patients) {
+      const patient = fixture();
+      patient.s.world.room.num = 552;
+      patient.c.selfId = p.id;
+      patient.c.me.name = p.name;
+      patient.vitals.health = { value: p.hp, max: 20 };
+      patient.s.lastFleetDamage = { client: patient.c, bodyId: p.id, roomId: patient.c.room.id, at: now - p.damage };
+      assert(publishFleetHealth(patient.s, { now }));
+      sources.set(p.id, patient);
+      f.c.room.objects.set(p.id, { id: p.id, row: p.row, col: p.col, nameRsc: p.id, flags: 5 });
+    }
+    f.s.faceToward = async (target, { beforePacket }) => {
+      beforePacket();
+      turns.push(target.id);
+      f.c.self.degrees = target.col < f.c.self.col ? 180 : 0;
+    };
+    f.c.cast = (_, [id]) => {
+      casts.push(id);
+      if (id === 22) f.vitals.mana.value -= 3;
+    };
+    const healer = Object.assign(Object.create(Autopilot.prototype), {
+      s: f.s, mode: 'idle', policy: { neverAttack: true, assignedRoom: 552, healSpells: ['minor heal'] },
+      facultyHeld: () => false, checkFreeze: () => false, note() {}, recordCast() {},
+    });
+    assert.equal(await healer.healObservedFleetmate(), true);
+    healer._observedAllyHealAt = 0;
+    assert.equal(await healer.healObservedFleetmate(), true);
+    assert.deepEqual(casts, [21, 22]);
+    assert.deepEqual(turns, [21, 22]);
+    await healer.medic();
+    assert.deepEqual(casts, [21, 22], 'the dedicated medic does not bypass the observed policy');
+
+    f.vitals.vigor.value = 65;
+    healer._observedAllyHealAt = 0;
+    assert.equal(await healer.healObservedFleetmate(), false);
+    assert.equal(await healer.restOceanMedic(), true);
+    assert.equal(f.c.lastPostureCommand.verb, 'rest');
+    f.vitals.vigor.value = 69;
+    assert.equal(await healer.healObservedFleetmate(), false, 'stay resting in the hysteresis band');
+    const urgent = sources.get(23);
+    urgent.vitals.health.value = 8;
+    urgent.s.lastFleetDamage.at = Date.now();
+    assert(publishFleetHealth(urgent.s));
+    assert.equal(await healer.healObservedFleetmate(), true, 'recent serious injury overrides rest');
+    assert.deepEqual(casts, [21, 22, 23]);
+    assert.equal(f.c.lastPostureCommand.verb, 'stand');
+    urgent.vitals.health.value = 20;
+    assert(publishFleetHealth(urgent.s));
+    f.vitals.vigor.value = 72;
+    healer._observedAllyHealAt = 0;
+    assert.equal(await healer.healObservedFleetmate(), true, 'routine healing resumes at 72 vigor');
+    assert.deepEqual(casts, [21, 22, 23, 22]);
+  } finally {
+    setRosterSource(null);
+    if (originalDir === undefined) delete process.env.M59_FLEET_HEALTH_DIR;
+    else process.env.M59_FLEET_HEALTH_DIR = originalDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 
