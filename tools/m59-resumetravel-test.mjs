@@ -435,6 +435,26 @@ console.log('A WALL THAT HAS FINISHED ITS WORK IS RELEASED IN THE STAGE THAT OWN
     ok('and says what it needed, so the number is arguable from the record',
        said(whole, /needed/) || said(whole, /full health/));
   }
+  // Kermit reached 120/120 at proven cover in 544. The ordinary wall release
+  // reconnected him immediately and spent the logout he needed later in 552.
+  for (const situation of ['quiet', 'hit', 'missed swing', 'unproven', 'PvP', 'other map']) {
+    const room = situation === 'other map' ? 534 : 544;
+    const k = keeper({ room, health: 120, max: 120, vigor: 200,
+      hold: { room, row: 2, col: 24, proven: situation !== 'unproven' },
+      policy: { farmStrategy: 'great-ocean-marion', assignedRoom: 552, pullToSafeWall: false } });
+    k.mode = 'farm';
+    k.s.client.self = { id: 1, row: 2, col: 24 };
+    k.s.damagedAt = situation === 'hit' ? Date.now() - 1000 : 0;
+    k.s.lastCombatLine = situation === 'missed swing' ? { at: Date.now() - 1000 } : null;
+    k.playerThreatPresent = () => situation === 'PvP';
+    k.leaveHold = Autopilot.prototype.leaveHold;
+    let breakouts = 0, steps = 0;
+    k.breakOut = async () => { breakouts++; return { did: true }; };
+    k.stepOutOfThePocket = async () => { steps++; return true; };
+    k.releaseHold = () => { k.hold = null; };
+    ok(`rested Ocean return (${situation}) keeps existing departure and the appropriate logout behavior`,
+      await k.releaseRestedHold() && !k.hold && steps === 1 && breakouts === (situation === 'quiet' ? 0 : 1));
+  }
 }
 
 console.log('');

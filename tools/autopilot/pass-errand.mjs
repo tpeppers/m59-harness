@@ -385,7 +385,16 @@ export class PassErrandPart {
            'can make it. Staying is how a journey times out without ever being in danger.',
     });
     try {
-      const left = await this.leaveHold('rested to the ceiling — back on the road', { force: true });
+      const { s, hold } = this;
+      const me = s.client?.self;
+      // A quiet recovery stop in 544 is the last safe place before the Ocean.
+      // Keep the healing session's one logout available for the next fight.
+      const preserveRecoveryLogoff = this.mode === 'farm' && this.policy.farmStrategy === 'great-ocean-marion' &&
+        this.policy.assignedRoom === 552 && s.world?.room?.num === 544 && hp === 1 &&
+        hold.room === 544 && hold.proven === true && !!me && !me.predicted && me.row === hold.row && me.col === hold.col &&
+        !s.combat?.active && !this.playerThreatPresent() &&
+        Date.now() - Math.max(s.damagedAt ?? 0, s.lastCombatLine?.at ?? 0) >= 6000;
+      const left = await this.leaveHold('rested to the ceiling — back on the road', { force: true, preserveRecoveryLogoff });
       return left.left === true;
     } catch (e) {
       this.note('could not leave the rested hold', { why: e.message });
