@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 25 methods: pull, farmBuffContext, farmBuffAsk, farmBuffPass, castSelfSpell, pullFocusId,
+// 26 methods: pull, deferCrowdedOceanPull, farmBuffContext, farmBuffAsk, farmBuffPass, castSelfSpell, pullFocusId,
 //   closestPullable, closeOnQuarry, breakOut, pullFollowWaitMs, pullTargetCooling, deferPullTarget,
 //   combatApproachCooling, deferBlockedCombatApproach, finishFailedCombatApproach, finishChasePiece, pendingPullWait,
 //   switchFromStalledPull, pullDidNotConvert, pullAttemptFailed, pullConverted, huntRoomCheck,
@@ -85,7 +85,7 @@ export class PullPart {
     const throughCrowd = crowd && this.policy?.pullThroughCrowd === true;
     if (!buddyCrowdOk && crowd && !throughCrowd) {
       this.noteCrowdRefusal('pulling quarry to the wall');
-      return { pulled: false, why: 'too many things in this room to walk out and back through' };
+      return { pulled: false, reason_code: 'pull_crowd', why: 'too many things in this room to walk out and back through' };
     }
     // AND THE SAME ONE UNTIL IT DIES. Operator, 2026-10-12, after a lupogg room where each pull re-picked
     // the closest and a lupogg that had taken a cut was dropped for a fresh one nearer the wall: "fix it to
@@ -757,6 +757,16 @@ export class PullPart {
     this.pullsWithoutContact = 0;
     this.releaseHold('this stand produced no fight');
     this.noProgress('holding a square that produced no fight');
+    return true;
+  }
+
+  deferCrowdedOceanPull(result) {
+    if (result.reason_code !== 'pull_crowd' || this.mode !== 'farm' ||
+        this.policy.farmStrategy !== 'great-ocean-marion' || this.s.world?.room?.num !== 552) return false;
+    // The crowd gate refused the trip before we moved. Another wall cannot fix this refusal.
+    // Keep the hold so the next pass can swing in reach or take its normal quorum-backed approach.
+    this.doing = 'waiting';
+    this.noProgress('crowd blocked the pull; waiting for reachable prey or a safe open approach');
     return true;
   }
 

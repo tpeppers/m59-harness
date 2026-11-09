@@ -200,6 +200,26 @@ export function orderByWalk(candidates, geo, self, { room = null, cache = null, 
   return { ordered, walks, planned, ms: +(clock() - t0).toFixed(2) };
 }
 
+/** Choose a fresh swing before a walk, and a verified short walk before a guess. */
+export function orderByAttackOrWalk(candidates, self, { preferId, walks, reach } = {}) {
+  const knownPosition = o => !o?.predicted && Number.isInteger(o?.row) && Number.isInteger(o?.col);
+  const selfKnown = knownPosition(self);
+  const score = quarry => {
+    if (quarry.id === preferId) return [-1, 0];
+    if (!selfKnown || !knownPosition(quarry)) return [2, Infinity];
+    const walk = walks?.get(quarry.id);
+    const distance = straightOf(quarry, self);
+    // Player swings use integer range and facing, independent of the movement path.
+    if (distance <= reach) return [0, distance];
+    if (walk?.found && !walk.goal_exempt && Number.isFinite(walk.length)) return [1, walk.length];
+    const blocked = walk?.known && !walk.found && !walk.budget;
+    return [blocked ? 3 : 2, distance];
+  };
+  return candidates.map(quarry => ({ quarry, score: score(quarry) }))
+    .sort((a, b) => a.score[0] - b.score[0] || a.score[1] - b.score[1])
+    .map(({ quarry }) => quarry);
+}
+
 /**
  * WALK ONE PIECE OF THE CHASE. The only function here that moves anything, and it moves only through the
  * session's own `walkTo` -- the same walker, door work, body detours and terminal-reason handling as every

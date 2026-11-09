@@ -103,6 +103,33 @@ await ok('the gate: refuses in a crowd unless pullThroughCrowd, and only then re
   assert.ok(body.includes('below the flee line'));
 });
 
+await ok('room-wide crowd refusals keep Bunsen’s Ocean wall without claiming pull or relocation progress', async () => {
+  const ap = keeper([]);
+  ap.mode = 'farm';
+  ap.policy.farmStrategy = 'great-ocean-marion';
+  ap.s.world.room = { num: 552 };
+  const hold = ap.hold = { room: 552, row: 4, col: 74, proven: true };
+  ap.crowded = () => true;
+  ap.noteCrowdRefusal = () => {};
+  ap.noProgress = why => assert.match(why, /waiting for reachable prey/);
+  for (let i = 0; i < 8; i++) {
+    const refusal = await ap.pull({ id: 16769 });
+    assert.equal(refusal.pulled, false);
+    assert.equal(ap.deferCrowdedOceanPull(refusal), true);
+    assert.equal(ap.doing, 'waiting');
+    assert.equal(ap.hold, hold);
+    assert.equal(ap.pullFailures, undefined);
+  }
+  assert.equal(ap.deferCrowdedOceanPull({ pulled: false, why: 'no route beside the target' }), false);
+  const refusal = await ap.pull({ id: 16769 });
+  ap.s.world.room.num = 544;
+  assert.equal(ap.deferCrowdedOceanPull(refusal), false);
+  ap.s.world.room.num = 552;
+  ap.policy.farmStrategy = 'other';
+  assert.equal(ap.deferCrowdedOceanPull(refusal), false);
+  assert.match(AUTOPILOT, /if \(this\.deferCrowdedOceanPull\(p\)\) return HANDLED;\s*if \(p\.pulled && p\.back\)/);
+});
+
 await ok('the field, the argument, and qor-lupogg-sewers declares it', async () => {
   const f = STRATEGY_FIELDS.find(x => x.path === 'pull.throughCrowd');
   assert.equal(f?.arg, 'pull_through_crowd');

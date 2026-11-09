@@ -13,7 +13,7 @@
 import {cooperativePass} from '../m59-cooperative-combat.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { publishGroupQuarry, spreadGroupQuarries } from '../m59-group-quarry.mjs';
-import { chaseCache, orderByWalk } from '../m59-chase.mjs';
+import { chaseCache, orderByAttackOrWalk, orderByWalk } from '../m59-chase.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
@@ -674,8 +674,13 @@ export class PassFarmPart {
           : found.some(o => o.id === agreed?.id) ? agreed.id : null;
         found = rankQuarries(this.s.name, room?.num, found, { preferId });
         found = spreadGroupQuarries(this, found, preferId, { walks: quarryWalks });
-        // hunt_priority: reorder only — every filter above has already run (m59-hunt-priority.mjs).
-        if (this.policy.huntPriority) found = this.huntPriorityOrder(found, preferId);
+        // On assigned Ocean ground a fresh swing or shorter proved walk comes before
+        // species preference and advisory claims. Existing exact engagements keep their place.
+        if (room?.num === 552 && this.policy.assignedRoom === 552 && this.policy.molluskCoverRecovery === true &&
+            c.self && !c.self.predicted) {
+          found = orderByAttackOrWalk(found, c.self, { preferId, walks: quarryWalks, reach: PLAYER_REACH });
+          this._huntPriorityLast = null;
+        } else if (this.policy.huntPriority) found = this.huntPriorityOrder(found, preferId);
         claimQuarry(this.s.name, room?.num, found[0]?.id);
         publishGroupQuarry(this, found[0]);
         // THE TOUCH AT THE TARGET (touch_spell_timing 'on_target'): the quarry is chosen, so cast
@@ -1897,6 +1902,7 @@ export class PassFarmPart {
         }
         const p = quarry ? await this.pull(quarry) : { pulled: false, why: 'nothing to pull' };
         bodyAuthority(s).guard();
+        if (this.deferCrowdedOceanPull(p)) return HANDLED;
         if (p.pulled && p.back) {
           const waitMs = this.pullFollowWaitMs(p.steps);
           const startedAt = Date.now();

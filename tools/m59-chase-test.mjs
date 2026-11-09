@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { loadMap } from './m59-map.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
 import { sharedRoomGeometry, MAX_STEP_HEIGHT } from './m59-roo.mjs';
-import { CHASE_DEFAULTS, chaseAim, chaseCache, chaseCapable, orderByWalk, walkPlan } from './m59-chase.mjs';
+import { CHASE_DEFAULTS, chaseAim, chaseCache, chaseCapable, orderByAttackOrWalk, orderByWalk, walkPlan } from './m59-chase.mjs';
 import { replayOnMover } from './m59-patrol-farm.mjs';
 import { bastionHarness } from './fixtures/bastion-fallback-client.mjs';
 
@@ -85,6 +85,41 @@ test('orderByWalk stays inside its budget: past it the rest keep their straight-
   const r = orderByWalk(many, geo, W(35, 41), { budgetMs: 20, clock });
   assert.ok(r.planned <= 1, `planned ${r.planned}`);
   assert.equal(r.ordered.length, 3);
+});
+
+test('Ocean fresh target order prefers a swing and the shortest verified walk, preserving exact continuation', () => {
+  const self = W(10, 10);
+  const quarry = (id, name, row, col) => ({ id, name, ...W(row, col) });
+  const blockedWalkWithinReach = quarry(1, 'mollusk creature', 10, 11);
+  const distant = quarry(2, 'mollusk creature', 13, 10);
+  const closer = quarry(3, 'frogman', 10, 14);
+  const inReach = quarry(4, 'frogman', 12, 10);
+  const budget = quarry(5, 'mollusk creature', 10, 13);
+  const equallyClose = quarry(6, 'mollusk creature', 14, 10);
+  const unknown = quarry(7, 'frogman', 16, 10);
+  const exempt = quarry(8, 'mollusk creature', 10, 15);
+  const blocked = quarry(9, 'mollusk creature', 10, 17);
+  const predicted = { ...quarry(10, 'frogman', 10, 10), predicted: true };
+  const missingPosition = quarry(11, 'frogman', null, null);
+  const candidates = [blocked, distant, equallyClose, exempt, budget, unknown, closer, inReach,
+    predicted, missingPosition, blockedWalkWithinReach];
+  const walks = new Map([
+    [1, { known: true, found: false }],
+    [2, { known: true, found: true, length: 18 }],
+    [3, { known: true, found: true, length: 4 }],
+    [4, { known: true, found: true, length: 2 }],
+    [5, { known: true, found: false, budget: true }],
+    [6, { known: true, found: true, length: 4 }],
+    [8, { known: true, found: true, length: 5, goal_exempt: true }],
+    [9, { known: true, found: false }],
+    [10, { known: true, found: true, length: 0 }],
+    [11, { known: true, found: true, length: 0 }],
+  ]);
+  const rank = preferId => orderByAttackOrWalk(candidates, self, { walks, reach: 2, preferId }).map(o => o.id);
+  assert.deepEqual(rank(), [1, 4, 6, 3, 2, 5, 8, 7, 10, 11, 9]);
+  assert.deepEqual(rank(2), [2, 1, 4, 6, 3, 5, 8, 7, 10, 11, 9]);
+  assert.deepEqual(rank(99), rank());
+  assert.deepEqual(candidates.map(o => o.id), [9, 2, 6, 8, 5, 7, 3, 4, 10, 11, 1]);
 });
 
 test('silence is the old behaviour: no mask, no position, a floorless goal or a throwing planner all answer known:false', () => {
