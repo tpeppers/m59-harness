@@ -341,14 +341,11 @@ export class FacultiesPart {
           };
           if (!confirmed || !onWall())
             return replace('route refuge arrival was not confirmed at the selected square');
-          if (!whole && room === 552 && this.mode === 'farm' && this.policy?.molluskCoverRecovery === true) {
-            const { casters, complete } = this.casterScene();
-            if (!complete || (casters.length && !this.molluskRecoveryCoverAt(casters))) {
-              const why = 'route refuge cover against the observed casters was not established';
-              settle({ rested_to: null, why, arrival_confirmed: true, safe_wall: false });
-              if (decision?.strategy === 'route_refuge') finishSurvivalDecision(this.s, decision.id, 'blocked', why);
-              return false;
-            }
+          if (!whole && !this.recoveryRangedCoverAt(client.self)) {
+            const why = 'route refuge cover against the observed casters was not established';
+            settle({ rested_to: null, why, arrival_confirmed: true, safe_wall: false });
+            if (decision?.strategy === 'route_refuge') finishSurvivalDecision(this.s, decision.id, 'blocked', why);
+            return false;
           }
           if (!whole && !this.adoptRecoveryWall())
             return replace('route refuge arrival did not establish a geometric safe wall','blocked');

@@ -1012,11 +1012,14 @@ export class PassFarmPart {
         this.doing = 'recovering';
         // A wall first, if one is going and we do not already have it — resting with
         // something adjacent is only safe behind one.
-        if (!this.hold && room)
+        const rangedRecovery = this.oceanRangedRecoveryEnabled();
+        if (room && (!this.hold || (rangedRecovery && !this.currentRecoveryWall())))
           await this.takeRecoverySpot('too tired to fight — need somewhere safe to rest')
             .catch(() => {});
+        if (rangedRecovery && !this.currentRecoveryWall()) return HANDLED;
         const r = await skills.restUntil(s, {
-          health: 0.98, vigor: REST_VIGOR_CAP, maxSeconds: 120 }).catch(() => null);
+          health: 0.98, vigor: REST_VIGOR_CAP, maxSeconds: 120,
+          shouldCancel: rangedRecovery ? () => !this.currentRecoveryWall() : null }).catch(() => null);
         this.tally.rests++;
         this.note('too tired to start a fight', {
           vigor: vigorNow, need: vigorFloor, after_resting: r?.vitals?.vigor?.value,

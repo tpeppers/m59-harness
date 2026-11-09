@@ -99,7 +99,9 @@ export class PassSurvivalPart {
     const worstHit = Math.min(30, Math.floor(((v.health?.max ?? 0) + 2) / 3));
     // `let`, NOT `const`: two rungs below take a wall as a side effect and let the pass carry on to the rest gate, and a
     // value read before the wall was taken sends that gate the wrong answer. See the "a wall before a rest" rung.
-    let sheltered = this.holdWorks();
+    const rangedRecovery = this.oceanRangedRecoveryEnabled();
+    const recoveryWallStillHolds = () => !rangedRecovery || !!this.currentRecoveryWall();
+    let sheltered = this.holdWorks() && recoveryWallStillHolds();
     // THE TRIGGER IS DIFFERENT BEHIND A WALL, and it has to be, because the cost of a
     // false alarm is not zero. Two of the biggest hit the game can land works out at
     // about 70% of health for these characters — sensible in the open, absurd in a
@@ -388,6 +390,10 @@ export class PassSurvivalPart {
     const healthNeedsRest = hp !== null && hp < restAt;
     const hurt = healthNeedsRest || ((vig !== null && vig < vigorRestAt) || spent)&&!scriptedWalkDefersVigorRest(this,v)&&!farmVigorWorkReady(this,v);
     const relayVigorOnly = relayRest && hp !== null && !healthNeedsRest;
+    if ((hurt || relayRest) && this.hold && !recoveryWallStillHolds()) {
+      this.releaseHold('live ranged cover is no longer proved for recovery');
+      sheltered = false;
+    }
     // In a NO_COMBAT room nothing can swing, so recovery needs no wall: rest where we stand (see continueSurvivalDecision).
     const noCombatHere = roomIsNoCombat(s);
     if((hurt || relayRest) && !noCombatHere && this.currentRecoveryWall()) {
@@ -942,7 +948,8 @@ export class PassSurvivalPart {
     }
 
     const canRelayRest = noCombatHere || sheltered || testing || (!combatZone && !spawnsHere);
-    if (((!combatZone || sheltered || testing) && hurt) || (relayRest && canRelayRest)) {
+    if ((((!combatZone || sheltered || testing) && hurt) || (relayRest && canRelayRest)) &&
+        recoveryWallStillHolds()) {
       // After a packet, reobserve before resting. A failed or unavailable cast
       // falls straight through to rest. Probing an unproved wall stays a rest.
       if (relayRest && (sheltered || !combatZone) && await tryFarmRelay(this, ctx, relayProfile).catch(() => false))
@@ -1047,6 +1054,7 @@ export class PassSurvivalPart {
       // full rather than to a threshold — the next fight starts from whatever we
       // stand up with, and there is nothing to spend the difference on.
       const r = await skills.restUntil(s, {
+        shouldCancel: rangedRecovery ? () => !recoveryWallStillHolds() : null,
         // Always finish above the threshold that sent us here, or the next pass sends
         // us straight back and the character rests in one-second slices forever.
         health: Math.min(0.99, Math.max(0.95, restAt + 0.02)),

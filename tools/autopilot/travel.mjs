@@ -528,6 +528,7 @@ export class TravelPart {
              : (vigorPct(this.s.client?.vitals?.()) ?? 0) >= REST_VIGOR_WORTH_WAITING
                ? REST_VIGOR_CAP : 0,
       maxSeconds: Math.round(Math.min(90_000, budget - this.travelHeldMs) / 1000),
+      shouldCancel: this.oceanRangedRecoveryEnabled() ? () => !this.currentRecoveryWall() : null,
     }).catch(e => ({ error: e.message }));
     const heldMs = Date.now() - t0;
     this.recordTravelShelterStop('hop_wall', { heldMs });

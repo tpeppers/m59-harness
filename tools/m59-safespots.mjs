@@ -908,6 +908,7 @@ export function nearestSafeSpot(geo, from, {
   // false withholds every wall and leaves the exit (when a journey names one): the crowd
   // rule — see Autopilot.crowded — because a wall in a room of thirteen trolls is not one.
   wallsAllowed = true,
+  wallFilter = null,
   // SQUARES WE COULD NOT GET TO. A different fact from a square that failed to HOLD, which
   // is what `discredited` records — this one is about the walk, not about the wall.
   // See `unreachableSpots` on the keeper for why it is session-scoped and expires.
@@ -1023,6 +1024,7 @@ export function nearestSafeSpot(geo, from, {
   const passages=fineChokesFor(geo);
   const candidates=fineRecovery?[...all].sort((a,b)=>cheb(from,a)-cheb(from,b)):all;
   for (const s of (wallsAllowed ? candidates : [])) {
+    if (wallFilter && !wallFilter(s.col, s.row)) continue;
     // Recovery ranks only by walking distance. Once a checked choice beats the
     // distance to every remaining square, farther path searches cannot improve
     // it. Subtract one square for fine footing near a cell boundary; keep ties

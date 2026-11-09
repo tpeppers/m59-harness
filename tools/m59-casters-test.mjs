@@ -117,6 +117,54 @@ console.log('healthy Great Ocean farmers can retain proved cover from a rock thr
   const outside = coastal();
   outside.k.s.world.room = { ...room, num: 562 };
   await leave('the opt-in cannot change the rule outside 552', outside);
+  const exposed = coastal({ hp: 30, at: { row: 61, col: 30 },
+    bodies: [mollusk({ row: 60, col: 30 })] });
+  ok('Kermit’s melee wall cannot be adopted or reused for recovery with a live throwing line',
+    exposed.k.wallHere()?.ok === true && !exposed.k.currentRecoveryWall() &&
+    !exposed.k.adoptRecoveryWall() && !exposed.k.sessionSpotHere());
+  const covered = coastal({ hp: 3, at: { row: 43, col: 57 },
+    bodies: [mollusk({ row: 44, col: 55 })] });
+  ok('Pepe’s blocked throwing line still permits recovery at very low HP',
+    covered.k.currentRecoveryWall()?.ok && covered.k.sessionSpotHere());
+  const caster = covered.k.s.client.room.objects.values().next().value;
+  caster.col = 56;
+  caster.row = 43;
+  ok('a moved ranged attacker invalidates previously proved cover before another rest',
+    !covered.k.currentRecoveryWall() && !covered.k.sessionSpotHere());
+  const legacy = coastal({ enabled: false, at: { row: 61, col: 30 },
+    bodies: [mollusk({ row: 60, col: 30 })] });
+  ok('non-opted-in recovery uses the prior melee wall verdict',
+    legacy.k.currentRecoveryWall()?.ok === true);
+  const onlyWall = (f, at, onward = null) => {
+    const k = f.k, { client } = k.s;
+    k.spotExclusions = () => null;
+    return k.searchSafeSpot(geometry, client.self, room, { within: 100, los: 0, recovery: true,
+      stats: {}, onward, candidateFilter: (col, row) => (at.row === row && at.col === col) ||
+        (onward?.row === row && onward.col === col) });
+  };
+  ok('the recovery search rejects the exposed wall before walking to it',
+    onlyWall(exposed, { row: 61, col: 30 }) === null);
+  caster.col = 55;
+  caster.row = 44;
+  ok('the recovery search retains a verified covered wall',
+    onlyWall(covered, { row: 43, col: 57 })?.row === 43);
+  const fallback = coastal({ at: { row: 61, col: 28 },
+    bodies: [{ ...hostile(['unresolved hostile'])[0], row: 45, col: 66 }] });
+  ok('an uncertain caster scene blocks walls but keeps a verified onward exit eligible',
+    onlyWall(fallback, { row: 61, col: 30 }, { row: 65, col: 27 })?.kind === 'exit');
+  const { restUntil } = await import('./m59-skills.mjs');
+  const k = covered.k, c = k.s.client;
+  let rests = 0;
+  c.rest = () => { rests++; };
+  c.stats = () => {};
+  c.waitFor = async () => ({ events: [] });
+  Object.assign(k.s, { need: () => c, pacer: { async submit(lane, action) {
+    if (lane === 'rest') { caster.row = 43; caster.col = 56; }
+    return action();
+  } } });
+  const queued = await restUntil(k.s, { health:1, shouldCancel: () => !k.currentRecoveryWall() });
+  ok('a ranged attacker acquiring a line while rest is queued prevents the rest packet',
+    queued.cancelled === true && !rests);
   const spec = validateStrategy({ name: 'great-ocean', molluskCoverRecovery: true });
   ok('the strategy opts in with a boolean, without changing protected recovery thresholds',
     spec.ok && spec.strategy.desired.molluskCoverRecovery === true &&

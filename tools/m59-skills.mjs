@@ -2537,10 +2537,14 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = 0.4,
   if (typeof shouldCancel === 'function' && shouldCancel())
     return { rested: false, cancelled: true, vitals: v };
 
+  let sentRest = false;
   await s.pacer.submit('rest', () => {
+    if (typeof shouldCancel === 'function' && shouldCancel()) return;
     if (typeof beforeMutation === 'function') beforeMutation('rest');
+    sentRest = true;
     return c.rest();
   });
+  if (!sentRest) return { rested: false, cancelled: true, vitals: v };
   const t0 = now();
   let stalled = 0, last = -1, interrupted = null, lastProgressAt = t0;
   let cleanupSkipped = null;

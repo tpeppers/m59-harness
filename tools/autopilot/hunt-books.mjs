@@ -329,8 +329,10 @@ export class HuntBooksPart {
     const spotClaims = snapshotSpotClaims();
     const recoveryReach = recovery ? recoveryRefugeReach(geo, me,
       s.client?.room?.objects, s.client?.selfId, s.client?.playersOnline) : null;
+    const rangedScene = recovery && this.oceanRangedRecoveryEnabled() ? this.casterScene() : null;
     return nearestSafeSpot(geo, me, {
       wallsAllowed, fineRecovery: recovery,
+      wallFilter: rangedScene ? (col, row) => this.recoveryRangedCoverAt({ col, row }, rangedScene) : null,
       // WHAT MAKES A SQUARE A CANDIDATE. `wall` asks for a wall to stand against and
       // ranks by how much of it there is; `disc` is the old attackers_avoided >= 20
       // gate, kept so the two can be compared rather than swapped on faith. See

@@ -130,6 +130,9 @@ export class SafeSpotsPart {
     // cap is not, which is why the two are asked for differently.
     if ((before ?? 1) >= REST_VIGOR_CAP && (manaBefore ?? 1) >= mana)
       return { rested: false, note: 'already at the resting cap', vigor_pct: before, mana_pct: manaBefore };
+    const rangedRecovery = this.oceanRangedRecoveryEnabled();
+    if (rangedRecovery && !this.currentRecoveryWall())
+      return { rested: false, note: 'ranged cover is unavailable for resting before Blink' };
     this.doing = 'recovering';
     const r = await skills.restUntil(this.s, {
       // HEALTH IS NOT THE POINT HERE AND MUST NOT HOLD THE CAST UP. A stalled crossing is
@@ -137,6 +140,7 @@ export class SafeSpotsPart {
       // on its own clock. Asking for health too would sit a healthy character down for
       // nothing and a hurt one down for the wrong reason.
       health: 0, vigor: this.restVigorCap(), mana, maxSeconds, abortOnDamage: true,
+      shouldCancel: rangedRecovery ? () => !this.currentRecoveryWall() : null,
     }).catch(e => ({ error: e.message }));
     const after = vigorPct(this.s.client?.vitals?.());
     const manaAfter = pct(this.s.client?.vitals?.()?.mana);
@@ -330,7 +334,8 @@ export class SafeSpotsPart {
     // A failed rest here, or a monster already ON the square (the exposure disc excludes its origin, so geometry alone
     // cannot shelter us from it): restSpotRefused, the same answer the healing session's "is this the spot" reads.
     if(wall?.ok && this.restSpotRefused({room:this.s.world?.room?.num,row:wall.row,col:wall.col}))return null;
-    return wall?.ok && geo?.walkable?.(wall.row,wall.col) ? wall : null;
+    return wall?.ok && geo?.walkable?.(wall.row,wall.col) &&
+      this.recoveryRangedCoverAt(this.s.client?.self) ? wall : null;
   }
 
   adoptRecoveryWall() {
@@ -625,6 +630,19 @@ export class SafeSpotsPart {
     return this.molluskRecoveryCoverAt(casters) && !!this.currentRecoveryWall();
   }
 
+  oceanRangedRecoveryEnabled() {
+    return this.s.world?.room?.num === 552 && this.mode === 'farm' && this.policy?.molluskCoverRecovery === true;
+  }
+
+  recoveryRangedCoverAt(at, scene = null) {
+    if (!this.oceanRangedRecoveryEnabled()) return true;
+    const { client, world } = this.s, geo = world?.geometry;
+    if (!at || at.predicted || !client?.room?.objects || !Number.isInteger(geo?.security) ||
+        client.room.security !== geo.security) return false;
+    const { casters, complete } = scene ?? this.casterScene();
+    return complete && (!casters.length || mollusksBlockedAt(geo, at, casters));
+  }
+
   molluskRecoveryCoverAt(casters) {
     const { client, world } = this.s, geo = world?.geometry;
     return Number.isInteger(geo?.security) && client?.room?.security === geo.security &&
@@ -641,7 +659,7 @@ export class SafeSpotsPart {
     const resting = (!!this.hold && !full) || (hp?.max > 0 && hp.value / hp.max < (this.policy?.restBelow ?? 0.6));
     if (!resting) return false;
     const here = Number(this.s.world?.room?.num);
-    const checkCover = here === 552 && this.mode === 'farm' && this.policy?.molluskCoverRecovery === true;
+    const checkCover = this.oceanRangedRecoveryEnabled();
     const { casters, complete } = this.casterScene(checkCover ? null : hostiles);
     if (!casters.length) return false;
     if (checkCover && complete) {
@@ -1160,6 +1178,10 @@ export class SafeSpotsPart {
     }
 
     const now = c.self;
+    if (recovery && !this.recoveryRangedCoverAt(now)) {
+      releaseSpot(s.name);
+      return { took: false, why: 'ranged cover changed before the recovery wall was reached' };
+    }
     // GEOMETRY DECIDES, AND NOTHING ELSE DOES. THE LEDGER IS GONE.
     //
     // This used to read a per-square history — `book.get()`, then `book.discredited()` — and

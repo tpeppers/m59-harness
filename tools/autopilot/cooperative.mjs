@@ -381,6 +381,7 @@ export class CooperativePart {
   // up itself -- so "shelter in place while poisoned" is unchanged.
   sessionSpotHere() {
     const me=this.s?.client?.self,h=this.hold,room=this.s?.world?.room?.num;
+    if (!this.recoveryRangedCoverAt(me)) return false;
     if(h&&this.restSpotRefused?.({room:h.room??room,row:h.row,col:h.col}))return false;
     if(h&&(!me||!Number.isFinite(me.row)||!Number.isFinite(me.col)))return true;
     if(h&&(h.room==null||room==null||Number(h.room)===Number(room))&&h.row===me.row&&h.col===me.col)return true;
