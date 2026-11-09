@@ -16,7 +16,7 @@ import { recordEvent } from '../m59-ledger.mjs';
 import { keeperOrigin, liveMoveOrder, moveOrigin } from '../m59-move-origin.mjs';
 import { opensFightFromWall } from '../m59-policydiff.mjs';
 import * as skills from '../m59-skills.mjs';
-import { currentSurvivalDecision } from '../m59-survival-decision.mjs';
+import { currentSurvivalDecision, isActiveRecoveryDecision } from '../m59-survival-decision.mjs';
 import { scriptedDeviationResumeCandidate, scriptedTrafficResumeReady } from '../m59-traffic-resume.mjs';
 import { roadHuntResume } from '../m59-travel-hunt.mjs';
 import { CONTINUE, HANDLED, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, RESUME_FLAT_SAMPLES, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorPct } from '../m59-autopilot.mjs';
@@ -312,6 +312,22 @@ export class PassErrandPart {
   async releaseRestedHold() {
     // Full health does not finish a stationary room-enchantment assignment.
     if (this.isRoomEnchantPost()) return false;
+    const journey = this.suspendedJourney;
+    if (journey?.origin?.source === 'keeper' && journey.origin.name === 'caster_exit' &&
+        (this.tally?.deaths ?? 0) === journey.deaths_at) {
+      const { client, movementGeneration } = this.s;
+      const fulfilled = await this.casterRecoveryFulfilled(journey);
+      if (this.suspendedJourney !== journey || this.s.client !== client ||
+          this.s.movementGeneration !== movementGeneration) return false;
+      if (fulfilled) {
+        const why = 'the caster recovery finished at a confirmed covered wall in the assigned farm';
+        this.suspendedJourney = null;
+        this.note('completed the suspended caster recovery', { to: journey.to, why, attempts: journey.attempts });
+        recordEvent(this.who(), 'travel_resume_dropped', { to: journey.to, why, attempts: journey.attempts });
+        // Keep the cover. Ordinary farm logic can use it or leave it when ready.
+        return false;
+      }
+    }
     if (!this.hold) return false;
     const v = this.s.client?.vitals?.();
     const hp = v?.health?.max ? v.health.value / v.health.max : null;
@@ -407,12 +423,12 @@ export class PassErrandPart {
         Number.isFinite(s.damagedAt) && Date.now() - s.damagedAt >= 5000 &&
         !(c.ailments?.() ?? []).length && !s.combat?.active && !s._rite && !this.playerThreatPresent() &&
         !this.stopping && !this.inert && !this.recoverUntilWhole && !this.wantsForwardShelter &&
-        !(this.frozenUntil > Date.now()) && !currentSurvivalDecision(s) &&
+        !(this.frozenUntil > Date.now()) && !isActiveRecoveryDecision(currentSurvivalDecision(s)) &&
         !this.busyStatus() && !liveMoveOrder(s) &&
         !['work', 'movement', 'survival', 'recovery', 'combat'].some(f => this.facultyHeld(f));
     };
-    if (!recovered() || !this.currentRecoveryWall() || typeof s.confirmPosition !== 'function') return false;
-    const confirmed = await s.confirmPosition({ timeoutMs: 1500 }).catch(() => null);
+    if (!recovered() || !this.currentRecoveryWall() || typeof s.confirmFinePosition !== 'function') return false;
+    const confirmed = await s.confirmFinePosition({ timeoutMs: 1500 }).catch(() => null);
     if (!confirmed || this.suspendedJourney !== journey || s.movementGeneration !== generation ||
         !recovered() || !this.currentRecoveryWall()) return false;
     const { casters, complete } = this.casterScene();
@@ -423,8 +439,11 @@ export class PassErrandPart {
     // Asked FIRST, and unconditionally: a held character that is whole should be moving
     // whether or not it has an objective to resume. Releasing costs nothing when there is
     // no hold, and the stage below decides where to go.
+    const before = this.suspendedJourney, { client, movementGeneration } = this.s;
     await this.releaseRestedHold();
     const j = this.suspendedJourney;
+    if (before?.origin?.source === 'keeper' && before.origin.name === 'caster_exit' && j &&
+        (j !== before || this.s.client !== client || this.s.movementGeneration !== movementGeneration)) return CONTINUE;
     if (!j) { this.resumeBest = null; this.resumeFlat = 0; this.resumeSaid = null; return CONTINUE; }
     if (Date.now() < (j.next_try_at ?? 0)) return CONTINUE;
     if (this.policy.resumeTravel === false)
@@ -470,15 +489,6 @@ export class PassErrandPart {
 
     if ((this.tally?.deaths ?? 0) !== j.deaths_at)
       return drop('died since it was suspended — the road is not worth a second body');
-    // This automatic exit existed solely to recover. Once confirmed whole at a
-    // covered wall in the assigned farm, its purpose has already been fulfilled.
-    if (j.origin?.source === 'keeper' && j.origin.name === 'caster_exit') {
-      const { client, movementGeneration } = this.s;
-      const fulfilled = await this.casterRecoveryFulfilled(j);
-      if (this.suspendedJourney !== j || this.s.client !== client ||
-          this.s.movementGeneration !== movementGeneration) return CONTINUE;
-      if (fulfilled) return drop('the caster recovery finished at a confirmed covered wall in the assigned farm');
-    }
     // THESE TWO ARE RUNAWAY BACKSTOPS, NOT THE ABANDON POLICY. The rule is that a journey
     // is only given up when a PLAYER is on us; everything else pauses at a wall and carries
     // on. A tight cap here would quietly become a second abandon rule and undo that — so it

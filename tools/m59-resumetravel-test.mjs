@@ -46,6 +46,7 @@ import { readToolSource } from './autopilot/source.mjs';
 // something other than a player starts abandoning journeys.
 
 import { Autopilot, HANDLED, CONTINUE, PASS_STAGES } from './m59-autopilot.mjs';
+import { Session } from './m59-game.mjs';
 import { chooseSurvivalDecision } from './m59-survival-decision.mjs';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -123,13 +124,31 @@ function casterRecoveryFixture(options = {}) {
   c.room.id = 552;
   c.state = 'game';
   c.combatReady = true;
+  Object.assign(c.self, { x:1632, y:352 });
   s.damagedAt = Date.now() - 6000;
   s.movementGeneration = 1;
   k.suspendedJourney = { to:544, at:Date.now(), attempts:1, deaths_at:0,
     origin:{ source:'keeper', name:'caster_exit' } };
   let confirmations = 0;
-  s.confirmPosition = async () => { confirmations++; return c.self; };
+  s.confirmPosition = async () => { confirmations++; return { row:c.self.row, col:c.self.col }; };
+  s.confirmFinePosition = Session.prototype.confirmFinePosition;
   return { k, s, c, confirmations:() => confirmations };
+}
+{
+  const hold = { row:5, col:25, room:552, source:'recovery' };
+  const f = casterRecoveryFixture({ hold });
+  f.k.leaveHold = async () => { f.c.self.col++; f.k.hold = null; return { left:true }; };
+  const released = await f.k.releaseRestedHold();
+  ok('a real held wall is checked before the ordinary release could move the body',
+    released === false && f.k.hold === hold && f.c.self.col === 25 &&
+      !f.k.suspendedJourney && !f.k.travelled.length && f.confirmations() === 1);
+}
+{
+  const f = casterRecoveryFixture();
+  chooseSurvivalDecision(f.s, { strategy:'yield_to_controller', status:'yielded', reason:'a completed handoff' });
+  await f.k.resumeSuspendedJourney(ctxFor(f.k));
+  ok('archived controller yield does not count as active recovery or a live lease',
+    !f.k.suspendedJourney && !f.k.travelled.length && f.confirmations() === 1);
 }
 {
   const f = casterRecoveryFixture();
