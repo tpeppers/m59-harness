@@ -16,8 +16,9 @@ import { OF } from '../m59-parse.mjs';
 import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
 import { relayFarmVigor, tryFarmRelay } from '../m59-relay-farming.mjs';
 import * as skills from '../m59-skills.mjs';
-import { AILING_SHELTER_BELOW, belowRoomRetreatHealth, CONTINUE, farmVigorWorkReady, HANDLED, healAllowOf, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorOf, vigorPct } from '../m59-autopilot.mjs';
+import { AILING_SHELTER_BELOW, belowRoomRetreatHealth, CONTINUE, farmVigorWorkReady, HANDLED, healAllowOf, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, SPAWN_FILE, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorOf, vigorPct } from '../m59-autopilot.mjs';
 import { roomIsNoCombat } from '../m59-hazards.mjs';
+import { loadSpawns } from '../m59-spawns.mjs';
 
 function oceanSupportCanRestOpen(pilot, s, c) {
   const karma = c.statsById?.get('karma')?.value;
@@ -1065,6 +1066,11 @@ export class PassSurvivalPart {
             await this.askForHelp('badly hurt and out of flasks').catch(() => {});
         }
       }
+      const quietRestStart = sheltered && hp === 1 && !spawnsHere && !hostiles.length &&
+        loadSpawns(SPAWN_FILE)?.rooms && s.live === true && c.combatReady === true && c.state === 'game' &&
+        Number.isInteger(c.room?.id) && c.room.id > 0 && Number.isInteger(c.selfId) && c.selfId > 0 &&
+        s.world?.roomBinding?.room === room
+        ? { at: Date.now(), roomId: c.room.id, bodyId: c.selfId, life: s.lifeBoundary } : null;
       this.tally.rests++;
       // Sheltered, resting is free and uninterruptible, so take it all the way to
       // full rather than to a threshold — the next fight starts from whatever we
@@ -1141,6 +1147,24 @@ export class PassSurvivalPart {
       const afterVigor = vigorOf(r.vitals ?? {});
       const relayRestProgress = relayRest && afterVigor != null && rawVigor != null && afterVigor > rawVigor;
       if (sheltered && !relayRestProgress && r.reached_target !== true && afterHp != null && hp != null && afterHp <= hp) {
+        // A healthy vigor stall in a quiet sanctuary is no evidence of aggro.
+        // Recheck the same native body, room and recent combat after the rest.
+        const before = r.from?.health, native = c.vitals?.()?.health;
+        if (quietRestStart && r.rested === true && !r.cancelled &&
+            s.live === true && s.client === c && c.combatReady === true && c.state === 'game' &&
+            s.lifeBoundary === quietRestStart.life && c.selfId === quietRestStart.bodyId &&
+            c.self?.id === c.selfId && !c.self.predicted && c.room?.id === quietRestStart.roomId &&
+            s.world?.roomBinding?.room === room && c.room.objects instanceof Map &&
+            before?.max === after.max && before.value === before.max && afterHp === 1 &&
+            native?.max === after.max && native.value === native.max &&
+            Number.isFinite(afterVigor) && Number.isFinite(vigorOf(r.from)) &&
+            c.statsById?.get('health')?.observed_at >= quietRestStart.at &&
+            s.damagedAt < quietRestStart.at - 5000 && (s.lastCombatLine?.at ?? 0) < quietRestStart.at - 5000 &&
+            !s.combat?.active && c.ailments?.()?.length === 0 && !this.playerThreatPresent() &&
+            ![...c.room.objects.values()].some(o => o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER))) {
+          this.note('full-health vigor rest stalled in a quiet sanctuary', { room: room.num, vigor: afterVigor });
+          return HANDLED;
+        }
         this.note('rested and gained nothing — giving the square up', {
           health_before: Math.round(hp * 100) + '%', health_after: Math.round(afterHp * 100) + '%',
           seconds: r.seconds, crowd: near.length, why: r.note,
