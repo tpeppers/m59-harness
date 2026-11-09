@@ -12218,6 +12218,7 @@ const TOOLS = [
       'Sell items to an NPC merchant. Selling is not a separate command — it IS the trade protocol: ' +
       'you offer the merchant your items, it counteroffers with MONEY, and you accept. That means you ' +
       'see the price BEFORE committing, so call with confirm=false to get a quote and nothing else.\n' +
+      'Keeper-backed characters take one item or stack per call. Use {id, amount} for a stack.\n' +
       'A merchant only buys what it deals in, and it refuses by SPEAKING, so the reason arrives as ' +
       'said-text rather than as a system message. Both of you must be in the same room, and a merchant ' +
       'already serving another customer will say so.' + ID_HANDLE_NOTE,
@@ -12234,6 +12235,10 @@ const TOOLS = [
       const items = (a.items || []).map(x =>
         (typeof x === 'object' && x !== null) ? { id: Number(x.id), amount: x.amount } : Number(x));
       if (!items.length) throw new Error('nothing to sell');
+      if (s instanceof KeeperProxy) {
+        if (items.length !== 1) throw new Error('sell takes one item or stack per call for keeper-backed characters');
+        return s.sellOne(t.id, items[0], a.confirm !== false);
+      }
 
       const before = c.evSeq;
       await s.pacer.submit('trade', () => c.offer(t.id, items));
