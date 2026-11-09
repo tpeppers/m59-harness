@@ -489,6 +489,12 @@ export class DeskPracticePart {
     const now = Date.now();
     const mana = c.vitals()?.mana;
     const have = n => this.reagentExact(n);
+    const declineReserve = name => {
+      const veto = s.lastReserveVeto;
+      if (veto?.spell !== name) return this.declinedCast(name, 'reagent reserve');
+      const { reagent, have, need, floor } = veto;
+      return this.declinedCast(name, 'reagent reserve', { reagent, have, need, floor });
+    };
     let next = null;
 
     for (const buff of Autopilot.BUFFS) {
@@ -516,6 +522,12 @@ export class DeskPracticePart {
         continue;
       }
 
+      // Check the same reserve that guards the cast packet. A payable buff must
+      // keep its turn when another buff would spend protected working stock.
+      let reserved = false;
+      try { reserved = c.castVeto?.(spell.id) === true; } catch { /* the packet guard still checks */ }
+      if (reserved) { declineReserve(buff.name); continue; }
+
       // The caster's own ability drives spell power (about half of it, spell.kod:2066),
       // which drives the duration. `c.abilities` is keyed by spell id and filled from the
       // server's stat groups, so this is the server's number, not a guess -- but it is
@@ -540,8 +552,14 @@ export class DeskPracticePart {
     const since = c.evSeq;
     this.lastBuffAt = now;
     this._buffedAt.set(key, { at: now, retryAt: now + gap });
-    await withCastRite(s, { spell, targets: [target.id], why: 'buffAllies' }, () =>
+    const submitted = await withCastRite(s, { spell, targets: [target.id], why: 'buffAllies' }, () =>
       s.pacer.submit('cast', () => c.cast(spell.id, [target.id]), 1050));
+    if (submitted === false || submitted?.held) {
+      const veto = s.lastReserveVeto;
+      if (veto?.spell === buff.name && veto.at >= now) declineReserve(buff.name);
+      else this.declinedCast(buff.name, submitted?.held ? 'concentration hold' : 'cast packet withheld');
+      return;
+    }
     const ev = await c.waitFor({ since, kinds: ['message', 'stat', 'changed', 'left', 'inventory'], timeoutMs: 3000,
       match: e => (e.kind === 'message' && !!classifyCast([e.text])) || paid() })
       .catch(() => ({ events: [] }));

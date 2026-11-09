@@ -184,6 +184,32 @@ console.log('\nit falls through to bless when super strength cannot be paid for'
   ok('due strength renewals do not starve allies never given bless', ap.receipts[2]?.spell === 'bless');
 }
 
+console.log('\nreserved reagents leave the next payable buff eligible');
+{
+  const ap = makeAp({ pack: [['mushroom', 20], ['orc tooth', 2], ['sapphire', 10]], spells: BOTH });
+  ap.s.client.castVeto = id => {
+    if (id !== 11) return false;
+    ap.s.lastReserveVeto = { at: Date.now(), spell: 'super strength', reagent: 'orc tooth', have: 2, need: 1, floor: 2 };
+    return true;
+  };
+  await ap.buffAllies();
+  ok('protected teeth are identified before gearing up or casting', ap.declined.some(d =>
+    d.what === 'super strength' && d.why === 'reagent reserve' && d.detail.floor === 2));
+  ok('the same turn goes to payable Bless', ap.s.client.casts === 1 && ap.receipts[0]?.spell === 'bless');
+}
+{
+  const ap = makeAp({ pack: FULL, spells: BOTH });
+  let waited = false;
+  ap.s.client.waitFor = async () => { waited = true; return { events: [] }; };
+  ap.s.client.cast = async () => {
+    ap.s.lastReserveVeto = { at: Date.now(), spell: 'super strength', reagent: 'orc tooth', have: 2, need: 1, floor: 2 };
+    return false;
+  };
+  await ap.buffAllies();
+  ok('a late reserve refusal is named without waiting for a server reply', !waited &&
+    !ap.receipts.length && ap.declined.at(-1)?.why === 'reagent reserve');
+}
+
 console.log('\na target inside the guaranteed window is not re-buffed');
 {
   const ap = makeAp({ pack: FULL, spells: BOTH });
