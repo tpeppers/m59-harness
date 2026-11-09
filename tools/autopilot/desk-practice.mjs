@@ -610,7 +610,7 @@ export class DeskPracticePart {
     const outcome = classifyCast(said);
     if (outcome || !paid()) {
       this.recordCast(buff.name, { ok: false, target: c.rsc.get(target.nameRsc),
-        why: outcome?.why ?? 'no complete reagent payment observed', outcome: outcome?.outcome });
+        why: outcome?.why ?? 'no complete reagent payment observed', outcome: outcome?.outcome, said: said.slice(0, 2) });
       return;
     }
 
