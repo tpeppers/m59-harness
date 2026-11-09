@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { healUp, restUntil, isHealingFlaskDescription } from './m59-skills.mjs';
 const { Autopilot } = await import(process.env.M59_TEST_AUTOPILOT ?? './m59-autopilot.mjs');
 import { Session } from './m59-game.mjs';
+import { bodyAuthority } from './m59-body-command.mjs';
 import { geometryFor } from './m59-safespots.mjs';
 import { observeRefugeProgress, REFUGE_PROGRESS_MS } from './m59-recovery-refuge.mjs';
 import { attachSurvivalDecisions, chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision } from './m59-survival-decision.mjs';
@@ -151,7 +152,8 @@ test('confirmed fine progress within a square renews only the best route',()=>{
 test('predicted recovery arrival is confirmed before the watchdog can cancel',async t=>{
  t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
  const {s,c,k,target}=approachFixture();c.self={...c.self,id:1,x:1312,y:480,predicted:true};c.room.id=777;s.damagedAt=Date.now();
- let reads=0;s.confirmFinePosition=async()=>{reads++;return {id:1,row:target.row,col:target.col,x:1504,y:480,room_object_id:777};};
+ let reads=0;s.confirmFinePosition=async()=>{reads++;assert.equal(bodyAuthority(s).priority,1);
+  return {id:1,row:target.row,col:target.col,x:1504,y:480,room_object_id:777};};
  const stop=k.watchRecoveryApproach(target);t.mock.timers.tick(2000);await Promise.resolve();await Promise.resolve();
  assert.equal(reads,1);assert.equal(s.movementGeneration,0);t.mock.timers.tick(8000);assert.equal(s.movementGeneration,0);stop();
 });

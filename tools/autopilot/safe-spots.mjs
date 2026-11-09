@@ -14,6 +14,7 @@
 //   continueSurvivalDecision, continueSurvivalDecisionStep, leaveRoomForRecovery, blinkPastSurvivalJam,
 //   takeRecoverySpot, watchRecoveryApproach, takeSafeSpotObserved
 import { noteHealingRecovery, spentSessionExit } from '../m59-healing-session.mjs';
+import { withRecoveryCommand } from '../m59-body-command.mjs';
 import { oceanRockThreats } from '../m59-cooperative-logoff.mjs';
 import { keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
@@ -801,7 +802,7 @@ export class SafeSpotsPart {
         confirming=true;
         // Prediction is neither progress nor a proved jam. Read the actual body
         // once before cancelling a short escape; no packet is licensed by it.
-        void s.confirmFinePosition({timeoutMs:1000}).then(p=>{
+        void withRecoveryCommand(s,()=>s.confirmFinePosition({timeoutMs:1000})).then(p=>{
           confirming=false;
           if(!stillOwned()){close();return;}
           const valid=p && !p.predicted && Number.isInteger(p.id) && p.id>0
