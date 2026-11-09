@@ -229,6 +229,7 @@ export class PassErrandPart {
       // OUT OF THE PASSAGE BEFORE ANYTHING THAT SITS STILL. See makeWay.
       if (await this.makeWay().catch(() => false)) return HANDLED;
       if (await this.eatToFloor(ctx) === 'ate') return HANDLED;
+      if (await this.restOceanMedic().catch(() => false)) return HANDLED;
       if (await this.hibernate('idle: no job to do').catch(() => false)) return HANDLED;
       return HANDLED;
     }

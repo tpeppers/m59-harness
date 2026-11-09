@@ -8,7 +8,8 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 1 methods: passFleeAndRest
+// 2 methods: restOceanMedic, passFleeAndRest
+import { dedicatedOceanMedic } from './social.mjs';
 import { poisonedNow } from '../m59-poison.mjs';
 import { closeIfHealed, staysPut } from '../m59-healing-session.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
@@ -33,6 +34,27 @@ function oceanSupportCanRestOpen(pilot, s, c) {
 
 export class PassSurvivalPart {
   // @part 1
+
+  async restOceanMedic() {
+    const s = this.s, c = s.client;
+    const roomId = c?.room?.id, bodyId = c?.selfId;
+    const canRest = () => {
+      if (!dedicatedOceanMedic(this) || !c || c.room?.id !== roomId || c.selfId !== bodyId ||
+          !oceanSupportCanRestOpen(this, s, c) || this.inert || this.suspendedJourney || s._rite ||
+          this.facultyHeld('work') || this.facultyHeld('movement')) return false;
+      const vigor = c.vitals()?.vigor?.value;
+      return Number.isFinite(vigor) && vigor < this.restVigorCap() * skills.VIGOR_MAX;
+    };
+    if (!canRest()) return false;
+    if (c.lastPostureCommand?.verb === 'rest' && c.lastPostureCommand.room_object_id === roomId) return true;
+    let sent = false;
+    await s.pacer.submit('rest', () => {
+      if (!canRest()) return;
+      c.rest();
+      sent = true;
+    });
+    return sent;
+  }
 
   // ── passFleeAndRest: extracted from pass() ────────────────────────────────
   async passFleeAndRest(ctx) {
@@ -407,6 +429,13 @@ export class PassSurvivalPart {
     // A healthy, positive-karma Ocean support post can recover vigor in place.
     // Do not turn a two-point vigor deficit into emergency wall or logoff work.
     const openSupportRest = hurt && !healthNeedsRest && oceanSupportCanRestOpen(this, s, c);
+    if (openSupportRest && dedicatedOceanMedic(this) && !this.inert && !this.suspendedJourney &&
+        !this.facultyHeld('movement')) {
+      if (await this.healObservedFleetmate().catch(e=>this.note('observed ally heal failed',{why:e.message})))
+        return HANDLED;
+      // Keep the native rest timer running, while the next pass can still stand for an urgent heal.
+      if (await this.restOceanMedic().catch(e=>this.note('Ocean medic rest failed',{why:e.message}))) return HANDLED;
+    }
     if ((hurt || relayRest) && this.hold && !recoveryWallStillHolds()) {
       this.releaseHold('live ranged cover is no longer proved for recovery');
       sheltered = false;

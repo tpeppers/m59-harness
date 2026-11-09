@@ -101,6 +101,92 @@ test('actual farm and idle healers treat fresh fleetmates without requiring coop
  finally{setRosterSource(null);try{unlinkSync(file);}catch{}}
 });
 
+test('dedicated Ocean medic prioritizes recent damage in sight and moves past an unpaid cast', async () => {
+  const { Autopilot } = await import('./m59-autopilot.mjs');
+  const { setRosterSource } = await import('./m59-party.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'm59-ocean-medic-'));
+  const originalDir = process.env.M59_FLEET_HEALTH_DIR;
+  const f = fixture(), now = Date.now(), casts = [], turns = [], sources = new Map();
+  const patients = [
+    { id: 21, name: 'Offline Ocean Recent', row: 5, col: 4, hp: 16, damage: 500 },
+    { id: 22, name: 'Offline Ocean Older', row: 5, col: 12, hp: 10, damage: 1200 },
+    { id: 23, name: 'Offline Ocean Blocked', row: 8, col: 8, hp: 10, damage: 100 },
+    { id: 24, name: 'Offline Ocean Whole', row: 5, col: 10, hp: 20, damage: 50 },
+  ];
+  try {
+    process.env.M59_FLEET_HEALTH_DIR = directory;
+    setRosterSource(() => new Set(patients.map(p => p.name)));
+    f.s.world.room.num = 552;
+    f.s.live = true;
+    f.c.self.degrees = 0;
+    f.c.room.security = 14;
+    f.c.statsById = new Map([['karma', { value: 65 }]]);
+    f.c.rest = () => { f.c.lastPostureCommand = { verb: 'rest', room_object_id: f.c.room.id }; };
+    f.s.world.geometry = { collisionReady: true, security: 14, canMove: (r, _c, nextRow) => r === nextRow };
+    f.vitals.health.value = f.vitals.health.max;
+    f.c.stat = () => 65;
+    const named = f.c.rsc.get;
+    f.c.rsc.get = id => patients.find(p => p.id === id)?.name ?? named(id);
+    for (const p of patients) {
+      const patient = fixture();
+      patient.s.world.room.num = 552;
+      patient.c.selfId = p.id;
+      patient.c.me.name = p.name;
+      patient.vitals.health = { value: p.hp, max: 20 };
+      patient.s.lastFleetDamage = { client: patient.c, bodyId: p.id, roomId: patient.c.room.id, at: now - p.damage };
+      assert(publishFleetHealth(patient.s, { now }));
+      sources.set(p.id, patient);
+      f.c.room.objects.set(p.id, { id: p.id, row: p.row, col: p.col, nameRsc: p.id, flags: 5 });
+    }
+    f.s.faceToward = async (target, { beforePacket }) => {
+      beforePacket();
+      turns.push(target.id);
+      f.c.self.degrees = target.col < f.c.self.col ? 180 : 0;
+    };
+    f.c.cast = (_, [id]) => {
+      casts.push(id);
+      if (id === 22) f.vitals.mana.value -= 3;
+    };
+    const healer = Object.assign(Object.create(Autopilot.prototype), {
+      s: f.s, mode: 'idle', policy: { neverAttack: true, assignedRoom: 552, healSpells: ['minor heal'] },
+      facultyHeld: () => false, checkFreeze: () => false, note() {}, recordCast() {},
+    });
+    assert.equal(await healer.healObservedFleetmate(), true);
+    healer._observedAllyHealAt = 0;
+    assert.equal(await healer.healObservedFleetmate(), true);
+    assert.deepEqual(casts, [21, 22]);
+    assert.deepEqual(turns, [21, 22]);
+    await healer.medic();
+    assert.deepEqual(casts, [21, 22], 'the dedicated medic does not bypass the observed policy');
+
+    f.vitals.vigor.value = 65;
+    healer._observedAllyHealAt = 0;
+    assert.equal(await healer.healObservedFleetmate(), false);
+    assert.equal(await healer.restOceanMedic(), true);
+    assert.equal(f.c.lastPostureCommand.verb, 'rest');
+    f.vitals.vigor.value = 69;
+    assert.equal(await healer.healObservedFleetmate(), false, 'stay resting in the hysteresis band');
+    const urgent = sources.get(23);
+    urgent.vitals.health.value = 8;
+    urgent.s.lastFleetDamage.at = Date.now();
+    assert(publishFleetHealth(urgent.s));
+    assert.equal(await healer.healObservedFleetmate(), true, 'recent serious injury overrides rest');
+    assert.deepEqual(casts, [21, 22, 23]);
+    assert.equal(f.c.lastPostureCommand.verb, 'stand');
+    urgent.vitals.health.value = 20;
+    assert(publishFleetHealth(urgent.s));
+    f.vitals.vigor.value = 72;
+    healer._observedAllyHealAt = 0;
+    assert.equal(await healer.healObservedFleetmate(), true, 'routine healing resumes at 72 vigor');
+    assert.deepEqual(casts, [21, 22, 23, 22]);
+  } finally {
+    setRosterSource(null);
+    if (originalDir === undefined) delete process.env.M59_FLEET_HEALTH_DIR;
+    else process.env.M59_FLEET_HEALTH_DIR = originalDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 
 test('delayed self healing observes beyond the first mana payment without sending another cast',async()=>{const f=fixture();let reads=0;f.c.cast=()=>{f.vitals.mana.value-=3;};f.c.waitFor=async()=>{reads++;if(reads===2)f.vitals.health.value+=8;return{events:[{seq:4+reads,kind:'stat',name:reads===1?'mana':'health'}]};};const r=await castRecoveryHeal(f.s);assert.equal(reads,2);assert.equal(r.mana_spent,3);assert.equal(r.health_gain,8);assert(r.confirmed);});
 test('paid failed spells retain the server verdict and never claim a confirmed heal',async()=>{const f=fixture();f.c.cast=()=>{f.vitals.mana.value-=2;};f.c.waitFor=async()=>({events:[{seq:5,kind:'message',text:'You were unsuccessful in casting minor heal.'}]});const r=await castRecoveryHeal(f.s);assert.equal(r.server_outcome,'failed');assert(r.paid);assert.equal(r.health_gain,0);assert.equal(r.confirmed,false);});
