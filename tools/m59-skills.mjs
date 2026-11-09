@@ -19,6 +19,7 @@
 
 import { writeDeclaration, forgetDeclaration, readDeclarations } from './m59-interest-store.mjs';
 import { withCastRite } from './m59-castrite.mjs';
+import { minorHealBlockedByKarma } from './m59-spells.mjs';
 import { isSpared, sparePatternsOf, provokeExempt } from './m59-spare.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { isEnemyHit } from './m59-combatlog.mjs';
@@ -1716,12 +1717,17 @@ export async function healUp(s, { target = 0.9, maxItems = 8, allow = null } = {
   if (s.client !== undefined && s.client !== c)
     return { healed: false, used, skipped, cancelled: true, reason: 'healing client changed' };
   // `allow` (policy.healSpells): only these heals, or every heal when null.
-  const spell = (c.spells || []).find(sp => HEAL_SPELL.test(c.rsc.get(sp.nameRsc) || '')
-    && (!Array.isArray(allow) || allow.some(a => String(a).toLowerCase() === String(c.rsc.get(sp.nameRsc) || '').toLowerCase())));
+  const spell = (c.spells || []).find(sp => {
+    const name = c.rsc.get(sp.nameRsc) || '';
+    return HEAL_SPELL.test(name) && !minorHealBlockedByKarma(c.stat?.('karma'), name)
+      && (!Array.isArray(allow) || allow.some(a => String(a).toLowerCase() === name.toLowerCase()));
+  });
   if (spell && (frac() ?? 1) < target) {
     for (let i = 0; i < 3 && (frac() ?? 1) < target; i++) {
       const before2 = frac();
-      await withCastRite(s, { spell, targets: [c.selfId], why: 'heal' }, () => s.pacer.submit('cast', () => c.cast(spell.id, [c.selfId]), 1050));
+      const sent = await withCastRite(s, { spell, targets: [c.selfId], why: 'heal' },
+        () => s.pacer.submit('cast', () => c.cast(spell.id, [c.selfId]), 1050));
+      if (sent === false) break;
       await c.waitFor({ kinds: ['stat', 'message'], timeoutMs: 3000 });
       used.push(c.rsc.get(spell.nameRsc));
       if ((frac() ?? 0) <= (before2 ?? 0)) break;      // out of mana or reagents

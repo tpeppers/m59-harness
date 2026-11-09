@@ -31,6 +31,7 @@ import { publishAccepts, noteRefusal } from '../m59-floor-cache.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
 import { affordableHeal, castRecoveryHeal, healAllowed, healReadiness } from '../m59-recovery-heal.mjs';
+import { minorHealBlockedByKarma } from '../m59-spells.mjs';
 import { normalizeShare, planGift } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { huntLabel } from '../m59-spawns.mjs';
@@ -244,6 +245,10 @@ export class SocialPart {
       const found = (c.spells || [])
         .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === h.name);
       if (!found) continue;
+      if (minorHealBlockedByKarma(c.stat?.('karma'), h.name)) {
+        tried.push(`${h.name} (blocked by negative karma)`);
+        continue;
+      }
       if (mana && mana.value < h.mana + 1) { tried.push(`${h.name} (needs ${h.mana + 1} mana)`); continue; }
       const short = h.reagents.filter(([n, k]) => this.reagentOnHand(n) < k);
       if (short.length) { tried.push(`${h.name} (short ${short.map(([n]) => n).join(', ')})`); continue; }
@@ -306,11 +311,12 @@ export class SocialPart {
 
     this.lastHealAt = Date.now();
     const manaBefore = c.vitals()?.mana?.value ?? null;
-    await withCastRite(s, { spell, targets: [other.id], why: 'medic' }, () => s.pacer.submit('cast', () => {
+    const sent = await withCastRite(s, { spell, targets: [other.id], why: 'medic' }, () => s.pacer.submit('cast', () => {
       const r=s.credentials ? readFleetHealth({...s.credentials,character:c.rsc.get(other.nameRsc)},{room:s.world?.room?.num,bodyId:other.id}) : null;
       if(other.healthReport && (!r || r.health.value>=r.health.max)) return;
-      c.cast(spell.id,[other.id]);
+      return c.cast(spell.id,[other.id]);
     }, 1050));
+    if (sent === false) return;
     const ev = await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
     // A CAST THAT SPENT NO MANA DID NOT HAPPEN, and here it usually means the target was
     // already whole. Remember that for a few minutes so the next pass tries somebody else.

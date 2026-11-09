@@ -22,6 +22,7 @@ process.env.M59_KEEPER = '1';
 
 import { configureInterestStore } from './m59-interest-store.mjs';
 import { withCastRite } from './m59-castrite.mjs';
+import { minorHealBlockedByKarma } from './m59-spells.mjs';
 import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf, loginSettling, combatReadyOverdue, ATTR_HEAL_TICK_MS } from './m59-attr-heal.mjs';
 import { carryFile, captureCarry, writeCarry, readCarry, consumeCarry, policyToAdopt, leasesToAdopt } from './m59-keeper-carry.mjs';
 // WHO SET EACH POLICY KEY, and which faculty a strategy-governed key belongs to (a push that lands
@@ -2462,7 +2463,8 @@ const server = createServer(async (req, res) => {
                   throw new Error(`RTS cast refused: exact target ${target} is absent or changed`);
                 if (!rtsCastArityOk(spellIdentity.targets, spellHasTarget))
                   throw new Error(`RTS cast refused: ${spellIdentity.name} takes ${spellIdentity.targets} target(s)`);
-                return live.cast(currentSpell.id, spellHasTarget ? [target] : []);
+                if (live.cast(currentSpell.id, spellHasTarget ? [target] : []) === false)
+                  throw new Error(`RTS cast refused: ${spellIdentity.name} was vetoed before sending`);
               });
               return { spell: spellName, ...(Number.isSafeInteger(target) ? { target } : {}) };
             }, { controlToken, leaseToken });
@@ -5012,6 +5014,8 @@ const server = createServer(async (req, res) => {
             });
             if (!spell) {
               result = { error: `spell not found: ${spellName}` };
+            } else if (minorHealBlockedByKarma(c.stat('karma'), spellName)) {
+              result = { error: 'Minor Heal is disabled at negative karma' };
             } else {
               // A TARGETED SPELL SENT WITH NO TARGETS IS REFUSED IN SILENCE.
               //
@@ -5088,7 +5092,10 @@ const server = createServer(async (req, res) => {
                 // moved". The pacer hold above now suppresses any new sit, and this stand
                 // (a no-op on a standing body) goes out on the same socket ahead of the cast.
                 c.stand?.();
-                c.cast(spell.id, targets);
+                if (c.cast(spell.id, targets) === false) {
+                  result = { error: `${spellName} was vetoed before sending` };
+                  return;
+                }
                 // Stop as soon as the server has DECIDED — blink relocates, everything else
                 // announces — and otherwise sit out the whole charge.
                 const w = await c.waitFor({

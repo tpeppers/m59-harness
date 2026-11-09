@@ -230,6 +230,7 @@ export class DeskPracticePart {
                                   keep: this.chaliceReagentFloor() });
     const mana = ignoreMana && v?.mana?.max > 0 ? { value: v.mana.max, max: v.mana.max } : v?.mana;
     const choice = choosePractice({ practice: one, spells, mana, reserve, now,
+                                    karma: c.stat?.('karma'),
                                     have: (item) => this.reagentOnHand(item),
                                     refusedUntil: this._practiceRefused ?? new Map() });
     if (!ignoreMana) this.practiceSessionState = { at: now, entry: entry.name, room: entry.room, why: choice.why };
@@ -314,6 +315,7 @@ export class DeskPracticePart {
     // SHORT OF A REAGENT A COUNTER IN THIS ROOM SELLS: BUY IT HERE (buy_here), then practise from the next pass.
     if (!session && cfg.buy_here && await this.practiceBuyHere(cfg, spells, reserve, now)) return true;
     const choice = choosePractice({ practice: cfg, spells, mana: v?.mana, reserve, now, vigor: v?.vigor?.value ?? null,
+                                    karma: c.stat?.('karma'),
                                     have: (item) => this.reagentOnHand(item),
                                     refusedUntil: this._practiceRefused });
     this.practiceState = { at: now, reserve: reserve.mana, reserve_why: reserve.why,
@@ -399,7 +401,9 @@ export class DeskPracticePart {
     try { await skills.standToAct(s); } catch {}
     const manaBefore = c.vitals?.()?.mana?.value ?? null;
     const castAt = Date.now();
-    await withCastRite(s, { spell, targets: targets, why: 'practiceAtDesk' }, () => s.pacer.submit('cast', () => c.cast(spell.id, targets), 1050));
+    const sent = await withCastRite(s, { spell, targets: targets, why: 'practiceAtDesk' },
+      () => s.pacer.submit('cast', () => c.cast(spell.id, targets), 1050));
+    if (sent === false) return false;
     await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
     const manaAfter = c.vitals?.()?.mana?.value ?? null;
     const spent = manaBefore != null && manaAfter != null ? manaBefore - manaAfter : null;

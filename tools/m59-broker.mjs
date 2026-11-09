@@ -92,7 +92,7 @@ import { loadMerchants, findMerchants, stockMatching, merchantForObject } from '
 import { loadShopsSeen, recordShopSeen, withShopsSeen } from './m59-shops-seen.mjs';
 import { resolveBuyNames } from './m59-shop-names.mjs';
 import { buyInChunks, countByKey, itemKey } from './m59-shop-arrival.mjs';
-import { loadSpells, karmaAllows, requiredKarma, SCHOOLS } from './m59-spells.mjs';
+import { loadSpells, karmaAllows, minorHealBlockedByKarma, requiredKarma, SCHOOLS } from './m59-spells.mjs';
 
 // THE SPELL COST TABLE, LOADED ONCE AND ALLOWED TO BE ABSENT.
 //
@@ -14951,6 +14951,9 @@ const TOOLS = [
       if (!mine)
         return { cast: false, reason: `you do not know a spell matching "${a.spell}"`,
                  you_know: known.map(k => k.name) };
+      const karma = c.stat('karma');
+      if (minorHealBlockedByKarma(karma, mine.name))
+        return { cast: false, spell: mine.name, reason: `Minor Heal is disabled at negative karma (${karma})` };
       // mine.id is the runtime OBJECT id — which is exactly what BP_REQ_CAST wants —
       // but the catalogue is keyed by SID, so the cost lookup goes by name.
       const norm = x => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -14959,7 +14962,6 @@ const TOOLS = [
                 ?? null;
 
       if (!a.force && info) {
-        const karma = c.stat('karma');
         if (karma != null && !karmaAllows(info.school, info.level ?? 0, karma))
           return { cast: false, reason: `your karma is ${karma}; ${info.name} needs ` +
                    `${info.required_karma > 0 ? '>= +' : '<= '}${info.required_karma}`,
@@ -15038,6 +15040,8 @@ const TOOLS = [
       // a spell the character does not know, a wire arity that does not match the spell list,
       // and a spell or target whose identity changed between the intent and the packet. It no
       // longer refuses a spell for BEING a particular spell, or a target for being a player.
+      if (sent === false)
+        return { cast: false, spell: mine.name, targets, reason: 'the cast was vetoed before sending' };
       if (sent && typeof sent === 'object' && sent.error)
         return { cast: false, reason: sent.error, refused_by: 'the keeper process',
                  spell: mine.name, targets,

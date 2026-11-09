@@ -1,9 +1,49 @@
 import assert from 'node:assert/strict';import{test}from'node:test';import{mkdtempSync,rmSync}from'node:fs';import{join}from'node:path';import{tmpdir}from'node:os';
 import{affordableHeal,castRecoveryHeal}from'./m59-recovery-heal.mjs';import{publishFleetHealth,readFleetHealth}from'./m59-fleet-health.mjs';
+import { BP, M59Client } from './m59-client.mjs';
 const fixture=()=>{const names=new Map([[1,'minor heal'],[2,'major heal'],[3,'herbs']]);const vitals={health:{value:40,max:75},mana:{value:30},vigor:{value:180}};let casts=0;
  const c={stand(){this.lastPostureCommand={verb:'stand',at:Date.now(),room_object_id:this.room.id};},selfId:7,me:{name:'Patient'},self:{id:7,row:5,col:8,x:544,y:352},combatReady:true,state:'game',room:{id:10,objects:new Map()},spells:[{id:12,nameRsc:2},{id:11,nameRsc:1}],inventory:[{id:15,nameRsc:3,amount:8}],rsc:{get:k=>names.get(k)},vitals:()=>structuredClone(vitals),evSeq:4,cast(){casts++;vitals.mana.value-=3;vitals.health.value+=8;},waitFor:async()=>({events:[]})};
  const s={client:c,credentials:{host:'127.0.0.1',port:15959},world:{room:{num:827}},pacer:{submit:async(_kind,fn)=>fn()}};return{s,c,vitals,casts:()=>casts};};
 test('recovery chooses affordable minor heal even when an expensive heal precedes it in the spell book',async()=>{const f=fixture();assert.equal(affordableHeal(f.c).name,'minor heal');const r=await castRecoveryHeal(f.s);assert.equal(f.casts(),1);assert.equal(r.health_gain,8);assert.equal(r.mana_spent,3);assert(r.confirmed);});
+test('negative karma skips Minor Heal in recovery and cancels it if karma drops before the packet', async () => {
+  const f = fixture();
+  let karma = -1;
+  f.c.stat = () => karma;
+  assert.equal(affordableHeal(f.c).name, 'major heal');
+  const allow = ['minor heal'];
+  assert.equal((await castRecoveryHeal(f.s, { allow })).cast, false);
+  karma = 20;
+  f.s.pacer.submit = async (kind, send) => {
+    if (kind === 'cast') karma = -1;
+    return send();
+  };
+  assert.equal((await castRecoveryHeal(f.s, { allow })).cast, false);
+  assert.equal(f.casts(), 0);
+});
+
+test('the client sends no Minor Heal packet at negative karma and resumes when it clears', () => {
+  const packets = [];
+  const statsById = new Map([['karma', { value: -1 }]]);
+  const c = Object.assign(Object.create(M59Client.prototype), {
+    state: 'game', statsById, sock: { write: packet => packets.push(packet) }, _outboundActivity() {},
+    spells: [{ id: 81, nameRsc: 1 }, { id: 82, name: 'heal' }, { id: 83, name: 'Mystic Touch' }],
+    rsc: new Map([[1, 'Minor Heal']]),
+    room: { objects: new Map() },
+  });
+  assert.equal(c.cast(81, [7]), false);
+  assert.equal(c.cast(82, [7]), false);
+  assert.equal(packets.length, 0);
+  assert.equal(c.lastCastSent, undefined);
+  c.cast(83, [7]);
+  assert.equal(packets.length, 1);
+  statsById.set('karma', { value: 0 });
+  c.cast(81, [7]);
+  assert.equal(packets.length, 2);
+  assert.equal(packets[1][7], BP.REQ_CAST);
+  statsById.delete('karma');
+  c.cast(81, [7]);
+  assert.equal(packets.length, 3);
+});
 test('no unknown spell, missing herbs, unknown mana or exhausted mana produces a cast',async()=>{for(const change of[f=>f.c.spells=[],f=>f.c.inventory=[],f=>f.vitals.mana.value=undefined,f=>f.vitals.mana.value=3]){const f=fixture();change(f);assert.equal(affordableHeal(f.c),null);assert.equal((await castRecoveryHeal(f.s)).cast,false);assert.equal(f.casts(),0);}});
 test('a movement takeover or changed socket while queued cancels the actual cast',async()=>{for(const socket of[false,true]){const f=fixture();let cancelled=false;f.s.pacer.submit=async(_kind,fn)=>{if(socket)f.s.client={};else cancelled=true;return fn();};assert.equal((await castRecoveryHeal(f.s,{shouldCancel:()=>cancelled})).cast,false);assert.equal(f.casts(),0);}});
 test('a self heal that becomes unnecessary before send spends nothing',async()=>{const f=fixture();f.s.pacer.submit=async(_kind,fn)=>{f.vitals.health.value=75;return fn();};assert.equal((await castRecoveryHeal(f.s)).cast,false);assert.equal(f.casts(),0);});

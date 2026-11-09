@@ -28,6 +28,7 @@ import { EnchantmentObservations } from './m59-enchantment-observations.mjs';
 import { AudioObservations, parseAudio } from './m59-audio-observations.mjs';
 import { groanBand } from './m59-player-health.mjs';
 import { MonsterAttention } from './m59-monster-attention.mjs';
+import { minorHealBlockedByKarma } from './m59-spells.mjs';
 import { retireGeneration, closeGeneration } from './m59-idgen.mjs';
 import {
   Reader, objId, MAX_ANGLE, KOD_FINENESS, OF,
@@ -1297,6 +1298,13 @@ export class M59Client {
   // BP_REQ_CAST {4,OBJECT spell} {2,LIST_OBJ_PARM targets}. A spell with no
   // target still sends an empty list.
   cast(spellId, targets = []) {
+    const id = objId(spellId);
+    const spell = this.spells?.find(s => objId(s.id) === id);
+    const spellName = spell?.name ?? this.rsc?.get?.(spell?.nameRsc) ?? null;
+    if (minorHealBlockedByKarma(this.statsById?.get('karma')?.value, spellName)) {
+      this.tapSent?.('cast', { spell: spellName, spell_id: id, vetoed: true, why: 'negative_karma' });
+      return false;
+    }
     // THE PVP REAGENT RESERVE (m59-reagent-reserve.mjs; installed by the session): outside a PvP fight, a cast that
     // would take a reserved reagent below its floor is not sent. Every caster reaches the wire here, which is the point.
     try {
@@ -1310,14 +1318,10 @@ export class M59Client {
     this.send(BP.REQ_CAST, u32(objId(spellId)), encodeIdList([].concat(targets)));
     try { this.cooperativeCastSent?.([].concat(targets)); } catch { /* optional telemetry */ }
     // Every cast arms the server's attack timer (spell.kod:760) — read by the wand-shot record.
-    try {
-      const sp = this.spells?.find(s => objId(s.id) === objId(spellId));
-      this.lastCastSent = { at: Date.now(), id: objId(spellId), name: sp?.name ?? this.rsc?.get?.(sp?.nameRsc) ?? null };
-    } catch { /* recording must not change whether a cast is sent */ }
+    this.lastCastSent = { at: Date.now(), id, name: spellName };
     if ([].concat(targets).length === 1) this.noteAttackTarget([].concat(targets)[0], 'cast');
     try {
-      const spell = this.spells?.find(s => objId(s.id) === objId(spellId));
-      const name = String(spell?.name ?? this.rsc?.get?.(spell?.nameRsc) ?? '').toLowerCase();
+      const name = String(spellName ?? '').toLowerCase();
       if (name === 'rescue' || name === 'elusion') this.emit('travel-cast', { spell: name });
       // The session's trance hold (Session.noteCastSent) is opened from here, so it covers every
       // cast site there is rather than the ones that remembered to ask.

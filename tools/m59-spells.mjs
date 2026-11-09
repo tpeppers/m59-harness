@@ -71,6 +71,10 @@ export function karmaAllows(school, level, karma) {
   return karma <= need;
 }
 
+export function minorHealBlockedByKarma(karma, spellName) {
+  return Number.isFinite(karma) && karma < 0 && /^(?:minor heal|heal)$/i.test(String(spellName ?? '').trim());
+}
+
 // ------------------------------------------------------------------ compile
 
 // kod identifiers are CASE-INSENSITIVE, and the tree uses that freely: blakston.khd

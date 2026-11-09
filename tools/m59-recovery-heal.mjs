@@ -3,6 +3,7 @@ import{affordablePoisonCure}from'./m59-recovery-cure.mjs';
 // Ordinary resource-checked healing, usable from recovery without a work-pass detour.
 import{withCastRite}from'./m59-castrite.mjs';
 import{healingFeedback}from'./m59-healing-feedback.mjs';
+import { minorHealBlockedByKarma } from './m59-spells.mjs';
 export function healingManaReserve(c){const h=c?.vitals?.()?.health;return h?.max>0&&h.value>0&&h.value/h.max<=0.4?0:1;}
 // WHICH HEALS THIS CHARACTER MAY CAST (policy.healSpells, broker `heal_spells`). null means every heal it knows, as before.
 // Operator 2026-10-26, Pepe practising hospice on himself: "make sure he's only practicing hospice" -- the keeper's own
@@ -12,7 +13,8 @@ export const HEAL_COSTS=Object.freeze([{name:'minor heal',mana:3,herbs:1},{name:
 export function affordableHeal(c,{reserve=healingManaReserve(c),allow=null}={}){
  const mana=c?.vitals?.()?.mana?.value;if(!Number.isFinite(mana))return null;
  const herbs=(c.inventory??[]).filter(o=>/^herbs?$/i.test(c.rsc.get(o.nameRsc)??'')).reduce((n,o)=>n+(Number(o.amount)||1),0);
- for(const cost of HEAL_COSTS){if(!healAllowed(cost.name,allow))continue;const spell=(c.spells??[]).find(sp=>String(c.rsc.get(sp.nameRsc)??'').toLowerCase()===cost.name);if(spell&&mana>=cost.mana+reserve&&herbs>=cost.herbs)return{spell,...cost};}return null;
+ const karma=c.stat?.('karma');
+ for(const cost of HEAL_COSTS){if(!healAllowed(cost.name,allow)||minorHealBlockedByKarma(karma,cost.name))continue;const spell=(c.spells??[]).find(sp=>String(c.rsc.get(sp.nameRsc)??'').toLowerCase()===cost.name);if(spell&&mana>=cost.mana+reserve&&herbs>=cost.herbs)return{spell,...cost};}return null;
 }
 export async function castRecoveryHeal(s,{targetId=s.client?.selfId,shouldCancel=()=>false,targetHealth=null,allow=null}={}){
  const c=s.client,self=c?.selfId,room=c?.room?.id;if(!c||!self||shouldCancel())return{cast:false,reason:'healing ownership changed'};

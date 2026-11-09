@@ -28,6 +28,8 @@
 // THIS FILE IS PURE. It decides and explains; `Autopilot.practiceAtDesk` (m59-autopilot.mjs)
 // stands the character up, casts, and reads the mana back. `m59-deskpractice-test.mjs` pins it.
 
+import { minorHealBlockedByKarma } from './m59-spells.mjs';
+
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -398,7 +400,7 @@ export function deskReserve({ practice = PRACTICE_DEFAULTS, services = [], known
  * @returns { cast: { name, target: 'self'|'none', mana }, why } | { cast: null, why, blocked }
  */
 export function choosePractice({ practice, spells = [], mana = null, have = () => 0,
-                                 reserve, refusedUntil = new Map(), now = 0, vigor = null,
+                                 reserve, refusedUntil = new Map(), now = 0, vigor = null, karma = null,
                                  catalogue = loadCatalogue() } = {}) {
   if (!practice) return { cast: null, why: 'practice is off', blocked: 'off' };
   if (!(mana && Number.isFinite(mana.value)))
@@ -407,7 +409,7 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
   // fires, however long it waits. Said out loud, with the arithmetic, so it is not read as idle.
   if (Number.isFinite(mana.max) && reserve.mana < mana.max) {
     const known = new Set(spells.map(s => String(s.name).toLowerCase()));
-    const costs = practice.spells.filter(w => known.has(w.name))
+    const costs = practice.spells.filter(w => known.has(w.name) && !minorHealBlockedByKarma(karma, w.name))
       .map(w => spellCost(w.name, catalogue)?.mana).filter(Number.isFinite);
     if (costs.length && Math.min(...costs) > mana.max - reserve.mana)
       return { cast: null, blocked: 'reserve_leaves_no_room',
@@ -424,6 +426,7 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
   for (const want of practice.spells) {
     const s = byName.get(want.name);
     if (!s) { tried.push(`${want.name}: not known`); continue; }
+    if (minorHealBlockedByKarma(karma, want.name)) { tried.push(`${want.name}: blocked by negative karma`); continue; }
     // A SPELL AT 99 HAS NOTHING LEFT TO LEARN (the cap; m59-farmpractice.mjs MAXED), so a practice cast
     // of it only spends the reagents -- two purple mushrooms a Hold. Operator, 2026-10-19: "have Robin stop
     // practicing it once her skill hits 99%". Skipped only when the ability was actually read; an unread
