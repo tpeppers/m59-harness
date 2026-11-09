@@ -95,7 +95,7 @@ export class SafeSpotsPart {
       const hop = route?.found ? route.hops?.[0] : null;
       if (!hop || Number(hop.from) !== Number(roomNum)) return null;
       const exit = exits.find(e => Number(e.to) === Number(hop.to) &&
-        e.reachable !== false && e.verified !== false &&
+        e.reachable === true && e.verified === true &&
         Number.isFinite(e.stand_on?.row) && Number.isFinite(e.stand_on?.col));
       return exit ? { ...exit.stand_on, destination: Number(hop.to) } : null;
     } catch { return null; }

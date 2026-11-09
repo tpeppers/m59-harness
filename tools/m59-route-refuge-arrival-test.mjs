@@ -122,10 +122,14 @@ await test('a fallback endpoint cannot become the onward exit without a live off
  await k.takeSafeSpotObserved('fallback',null,{source:'travel',recovery:true,recoveryRoute:true,doorCrossings:1});
  assert.equal(selected,null,'continue wall selection without a fabricated exit');
  s.world.route=()=>({found:true,hops:[{from:552,to:544}]});
- s.world.exits=()=>[
-  {to:544,stand_on:{row:28,col:65},verified:false},
-  {to:544,stand_on:{row:65,col:27},verified:true},
+ const uncertain=[
+  {to:544,stand_on:{row:28,col:65},reachable:true,verified:false},
+  {to:544,stand_on:{row:29,col:65},reachable:true,verified:null},
+  {to:544,stand_on:{row:30,col:65},verified:true},
  ];
+ s.world.exits=()=>uncertain;
+ assert.equal(k.verifiedRouteRefugeExit(552,544),null);
+ s.world.exits=()=>[...uncertain,{to:544,stand_on:{row:65,col:27},reachable:true,verified:true}];
  assert.deepEqual(k.verifiedRouteRefugeExit(552,544),{row:65,col:27,destination:544});
 });
 await test('Pepe’s confirmed covered refuge hands the walker to spent-session recovery',async()=>{

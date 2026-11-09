@@ -290,7 +290,7 @@ for (const crossing of ['blocked','arrived']) test('exit-as-refuge approach is b
   const {k,s,c,geo,target}=approachFixture();
   k.checkFreeze=()=>false;k.travelInterrupted=()=>false;
   k.searchSafeSpot=()=>({...target,kind:'exit',steps_away:3});k.recordSurvivalPath=()=>{};
-  s.world.exits=()=>[{to:583,stand_on:target,verified:true}];
+  s.world.exits=()=>[{to:583,stand_on:target,reachable:true,verified:true}];
   s.world.route=()=>({found:true,hops:[{from:38,to:583}]});
   let release;const blocked=new Promise(r=>{release=r;});
   const cancel=s.cancelMovement.bind(s);s.cancelMovement=(...args)=>{const r=cancel(...args);release({arrived:false,cancelled:true});return r;};
