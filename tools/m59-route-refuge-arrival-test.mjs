@@ -14,13 +14,14 @@ const {withMoveOrder,keeperOrigin,liveMoveOrder}=await import('./m59-move-origin
 const map=JSON.parse(readToolSource(new URL('../substrate/m59-map.json',import.meta.url),'utf8'));
 let passed=0;
 async function test(name,run){await run();console.log('PASS '+name);passed++;}
-function fixture({predicted=true,row=7,col=16,whole=false}={}){
+function fixture({predicted=true,row=7,col=16,whole=false,room=39,prepareStop=true,leaveRoom=false}={}){
  const calls=[],events=[];
- const c={state:'game',selfId:1,self:{id:1,row,col,predicted},room:{id:39,objects:new Map()},
+ const geometry=geometryFor(map.rooms[room]);
+ const c={state:'game',selfId:1,self:{id:1,row,col,predicted},room:{id:room,security:geometry?.security,objects:new Map()},
   vitals:()=>({health:{value:whole?50:32,max:50},vigor:{value:80}}),
   rest:()=>assert.fail('route arrival must not fall back to unverified rest')};
  const s={client:c,name:null,movementGeneration:0,need:()=>c,
-  world:{room:map.rooms[39],geometry:geometryFor(map.rooms[39]),map},
+  world:{room:map.rooms[room],geometry,map},
   movementWasCancelled(g){return g!==this.movementGeneration;},
   cancelMovement(_token,why,{preserveId}={}){
    assert.equal(currentSurvivalDecision(s)?.id,preserveId,'replacement owns cancellation');
@@ -36,8 +37,11 @@ function fixture({predicted=true,row=7,col=16,whole=false}={}){
   continueSurvivalDecision:async()=>{calls.push('replacement');assert.equal(currentSurvivalDecision(s).status,'pending');return true;},
  });
  attachSurvivalDecisions(s,{record:e=>events.push(e)});
- k.goTravelling('route arrival test',{to:544});
- const where={row,col};s.shelterPolicy.onDivert(where,{source:'route',atStep:0});
+ if(leaveRoom)chooseSurvivalDecision(s,{strategy:'leave_room',status:'approaching',reason:'spent logoff',
+  chosen_refuge:{row:65,col:27,room,kind:'exit',destination:544}});
+ k.goTravelling('route arrival test',{to:544,origin:leaveRoom?keeperOrigin('survival_exit'):null});
+ const where={row,col};
+ if(prepareStop)s.shelterPolicy.onDivert(where,{source:'route',atStep:0});
  const d=currentSurvivalDecision(s),policy=s.shelterPolicy;
  return {s,c,k,calls,events,d,where,run:()=>policy.onArrive(where)};
 }
@@ -97,5 +101,56 @@ await test('a nested shelter retains its original journey issuer during suspensi
      assert.equal(f.k.suspendedJourney.to,544);assert.deepEqual(f.k.suspendedJourney.origin,parent);
    });
  });
+});
+await test('the spent-session exit owns its crossing until its decision changes',async()=>{
+ const f=fixture({room:552,prepareStop:false,leaveRoom:true});
+ assert.equal(f.d.strategy,'leave_room');
+ assert.equal(f.s.shelterPolicy.need(),false);
+ chooseSurvivalDecision(f.s,{strategy:'nearest_refuge',reason:'an independent emergency'});
+ assert.equal(f.s.shelterPolicy.need(),true);
+});
+await test('a fallback endpoint cannot become the onward exit without a live offered hop',async()=>{
+ const f=fixture({room:552,row:28,col:65,prepareStop:false});
+ const {s,k}=f;
+ s.activeShelter={onward:{row:28,col:65}};
+ s.world.exits=opts=>{assert.deepEqual(opts,{cachedOnly:true});return null;};
+ s.world.route=()=>assert.fail('recovery must not price a cold exit flood');
+ assert.equal(k.verifiedRouteRefugeExit(552,544),null);
+ let selected;
+ k.checkFreeze=()=>false;
+ k.searchSafeSpot=(_geo,_me,_room,opts)=>{selected=opts.onward;return null;};
+ await k.takeSafeSpotObserved('fallback',null,{source:'travel',recovery:true,recoveryRoute:true,doorCrossings:1});
+ assert.equal(selected,null,'continue wall selection without a fabricated exit');
+ s.world.route=()=>({found:true,hops:[{from:552,to:544}]});
+ s.world.exits=()=>[
+  {to:544,stand_on:{row:28,col:65},verified:false},
+  {to:544,stand_on:{row:65,col:27},verified:true},
+ ];
+ assert.deepEqual(k.verifiedRouteRefugeExit(552,544),{row:65,col:27,destination:544});
+});
+await test('Pepe’s confirmed covered refuge hands the walker to spent-session recovery',async()=>{
+ const f=fixture({room:552,row:43,col:57,predicted:false});
+ f.k.mode='farm';
+ f.k.policy.molluskCoverRecovery=true;
+ f.k.casterScene=()=>({complete:true,casters:[{name:'mollusk creature',row:44,col:55}]});
+ f.k.playDead=async reason=>{
+  f.calls.push('spent');
+  chooseSurvivalDecision(f.s,{strategy:'rest_safe',status:'recovering',reason,chosen_refuge:f.k.hold});
+  return false;
+ };
+ await f.run();
+ assert.deepEqual(f.calls,['count:route','spent','cancel']);
+ assert.equal(f.k.suspendedJourney.to,544);
+ assert.equal(currentSurvivalDecision(f.s).strategy,'rest_safe');
+});
+await test('Kermit’s arrived geometric wall leaves a mollusk in throw range',async()=>{
+ const f=fixture({room:552,row:61,col:30,predicted:false});
+ f.k.mode='farm';
+ f.k.policy.molluskCoverRecovery=true;
+ f.k.casterScene=()=>({complete:true,casters:[{name:'mollusk creature',row:60,col:30}]});
+ assert.equal(await f.run(),false);
+ assert.deepEqual(f.calls,[]);
+ assert.equal(f.events.at(-1).decision.outcome,'blocked');
+ assert.equal(f.k.inert.to,544);
 });
 console.log(passed+' route refuge arrival scenarios passed');

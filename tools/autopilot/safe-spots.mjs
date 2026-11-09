@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 19 methods: onwardExit, restBeforeBlink, takeSafeSpot, replacementSurvivalChoice,
+// onwardExit, verifiedRouteRefugeExit, restBeforeBlink, takeSafeSpot, replacementSurvivalChoice,
 //   clearSurvivalJam, survivalJam, rememberSurvivalJam, cancelForSurvival,
 //   recoverFromTravelFallback, recordSurvivalPath, currentRecoveryWall, adoptRecoveryWall,
 //   continueSurvivalDecision, continueSurvivalDecisionStep, leaveRoomForRecovery, blinkPastSurvivalJam,
@@ -79,6 +79,25 @@ export class SafeSpotsPart {
         : (() => { const a = anchorFor(activeRoutes(), roomNum, hop.to); return a && Number.isFinite(a.row) ? { row: a.row, col: a.col } : null; })();
       this._onwardMemo.set(memoKey, { at: Date.now(), value: answer });
       return answer;
+    } catch { return null; }
+  }
+
+  verifiedRouteRefugeExit(roomNum, destination) {
+    const world = this.s.world;
+    if (destination == null || Number(roomNum) === Number(destination)) return null;
+    try {
+      // A walker's local endpoint can be a detour tile. Only a reachable exit
+      // for the first route hop can compete with walls or drive exit progress.
+      // A cold exit flood can block for seconds while the body is taking hits.
+      const exits = world.exits({ cachedOnly: true });
+      if (!exits?.length) return null;
+      const route = world.route(destination);
+      const hop = route?.found ? route.hops?.[0] : null;
+      if (!hop || Number(hop.from) !== Number(roomNum)) return null;
+      const exit = exits.find(e => Number(e.to) === Number(hop.to) &&
+        e.reachable !== false && e.verified !== false &&
+        Number.isFinite(e.stand_on?.row) && Number.isFinite(e.stand_on?.col));
+      return exit ? { ...exit.stand_on, destination: Number(hop.to) } : null;
     } catch { return null; }
   }
 
@@ -590,15 +609,20 @@ export class SafeSpotsPart {
   }
 
   canRecoverBehindMolluskCover(casters) {
-    const s = this.s, c = s.client, geo = s.world?.geometry, at = c?.self;
+    const s = this.s, c = s.client, at = c?.self;
     const hp = c?.vitals?.()?.health;
     const floor = Math.max(0.9, this.policy.restBelow ?? 0.6, this.policy.fleeBelow ?? 0);
     const hold = this.hold;
     if (!(hp?.max > 0 && hp.value / hp.max >= floor) || this.recoverUntilWhole || !hold || hold.failures
         || hold.room !== 552 || hold.row !== at?.row || hold.col !== at?.col
-        || !Number.isFinite(s.damagedAt) || Date.now() - s.damagedAt < 5000 || !Number.isInteger(geo?.security)
-        || c.room?.security !== geo.security) return false;
-    return mollusksBlockedAt(geo, at, casters) && !!this.currentRecoveryWall();
+        || !Number.isFinite(s.damagedAt) || Date.now() - s.damagedAt < 5000) return false;
+    return this.molluskRecoveryCoverAt(casters) && !!this.currentRecoveryWall();
+  }
+
+  molluskRecoveryCoverAt(casters) {
+    const { client, world } = this.s, geo = world?.geometry;
+    return Number.isInteger(geo?.security) && client?.room?.security === geo.security &&
+      mollusksBlockedAt(geo, client.self, casters);
   }
   async leaveForCasters({ hostiles = null, v = null } = {}) {
     if (this.operatorSurvivalStandDown?.()) return false;
@@ -731,7 +755,7 @@ export class SafeSpotsPart {
   async takeSafeSpotObserved(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
                                            nearestOnly = false, afterExit = false, recovery = false,
                                            recoveryRoute = false, decisionId = null, shouldInterrupt = null, shelterOnly = false,
-                                           onward: onwardGiven = null, destination: destinationGiven = null,
+                                           destination: destinationGiven = null,
                                            candidateFilter = null, doorCrossings = 0, preparedRefuge = null } = {}) {
     const s = this.s, c = s.client;
     const movementGeneration = s.movementGeneration;
@@ -753,7 +777,7 @@ export class SafeSpotsPart {
     // `nearestOnly` is the search on the far side of a crossing: the first available wall,
     // ranked by distance alone, and never the next exit — a stopover, not the destination.
     const onward = source === 'travel' && !nearestOnly && (!recovery || recoveryRoute)
-      ? (onwardGiven ?? this.onwardExit(room.num, destinationGiven ?? this.inert?.to ?? this.suspendedJourney?.to ?? null)) : null;
+      ? this.verifiedRouteRefugeExit(room.num, destinationGiven ?? this.inert?.to ?? this.suspendedJourney?.to) : null;
     // Once several independently tested walls have all failed, continuing to scan the
     // room is research, not survival. `noWallRooms` feeds the already-bounded choice
     // below between a safe open fight and relocating; it does not block the strategic
@@ -972,7 +996,7 @@ export class SafeSpotsPart {
           return this.takeSafeSpotObserved(why, null, { source, nearQuarry, nearestOnly, afterExit,
             recovery, recoveryRoute, decisionId, shouldInterrupt, shelterOnly,
             destination: destinationGiven, doorCrossings: doorCrossings + 1,
-            candidateFilter: null, onward: null });
+            candidateFilter: null });
         }
         if (escaped.why) doorWhy = '; ' + escaped.why;
       }
@@ -1008,17 +1032,11 @@ export class SafeSpotsPart {
     // happen the answer is a refusal that says so, never a hold on a square in another room.
     if (spot.kind === 'exit') {
       const roomBefore = room.num;
-      const destination = destinationGiven ?? this.inert?.to ?? this.suspendedJourney?.to ?? null;
-      const route = destination != null ? this.s.world?.route?.(destination) : null;
-      const hop = route?.found ? route.hops?.[0] : null;
-      if (!hop) {
-        releaseSpot(this.s.name);
-        return { took: false, why: 'the exit ranked as the nearest wall, but no hop toward the destination could be planned from here' };
-      }
-      this.recordSurvivalPath(decisionId,{...spot,destination:hop.to});
+      const destination = onward.destination;
+      this.recordSurvivalPath(decisionId,{...spot,destination});
       this.doing = 'travelling';
       this.note('taking the exit as the nearest wall', {
-        at: { col: spot.col, row: spot.row }, to: hop.to, steps_away: spot.steps_away ?? null,
+        at: { col: spot.col, row: spot.row }, to: destination, steps_away: spot.steps_away ?? null,
         why: 'crossing breaks every attack; the first wall in the next room is where the mending happens' });
       // THE LEASE IS REFRESHED AROUND THE CROSSING. The journey's control lease
       // (inert.at + maxMs) is never touched while it runs; a one-hop crossing inside the
@@ -1030,8 +1048,8 @@ export class SafeSpotsPart {
       // memory and cancellation lease instead of spending an entire escape on it.
       const stopProgressWatch = recovery || source === 'travel'
         ? this.watchRecoveryApproach(spot) : () => {};
-      const crossed = await traceSurvivalOperation(s, 'refuge_exit', { destination: hop.to,
-        selected: traceRefuge(spot) }, () => this.s.travel(hop.to, { origin: keeperOrigin('safe_spot'), maxHops: 1 }))
+      const crossed = await traceSurvivalOperation(s, 'refuge_exit', { destination,
+        selected: traceRefuge(spot) }, () => this.s.travel(destination, { origin: keeperOrigin('safe_spot'), maxHops: 1 }))
                                 .catch(e => ({ arrived: false, why: e.message }))
                                 .finally(stopProgressWatch);
       if (interrupted()) return cancelled();
@@ -1043,12 +1061,12 @@ export class SafeSpotsPart {
         recordTactic({ character: this.s.client?.me?.name ?? this.s.name ?? null, room: Number(roomBefore),
                        tactic: 'exit_as_wall', trigger: source, worked: roomAfter != null && Number(roomAfter) !== Number(roomBefore),
                        ms: 0, hp_lost: 0, attempted: true,
-                       note: `the exit toward ${hop.to} ranked as the nearest wall (${spot.steps_away ?? '?'} squares); ` +
+                       note: `the exit toward ${destination} ranked as the nearest wall (${spot.steps_away ?? '?'} squares); ` +
                              (roomAfter != null && Number(roomAfter) !== Number(roomBefore) ? `crossed into ${roomAfter}` : `did not cross: ${crossed?.why ?? crossed?.reason ?? '?'}`) });
       } catch { /* evidence, not a dependency */ }
       if (roomAfter == null || Number(roomAfter) === Number(roomBefore)) {
         return { took: false, exit_refused: true,
-                 why: `could not take the exit toward ${hop.to}: ${crossed?.why ?? crossed?.reason ?? 'the crossing did not happen'}` };
+                 why: `could not take the exit toward ${destination}: ${crossed?.why ?? crossed?.reason ?? 'the crossing did not happen'}` };
       }
       const far = await this.takeSafeSpot(`${why} — the first wall after the exit`, null,
                                           { source, nearestOnly: true, afterExit: true, recovery, decisionId })

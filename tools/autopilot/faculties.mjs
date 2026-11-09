@@ -186,6 +186,8 @@ export class FacultiesPart {
     // `need()` is read by the walker between legs, so it must be cheap and must answer about
     // NOW rather than about when the journey started.
     if (allow.safe_spot) {
+      const exitDecision = origin?.source === 'keeper' && origin.name === 'survival_exit'
+        ? currentSurvivalDecision(this.s) : null;
       this.s.shelterPolicy = {
         onFallback: context => this.recoverFromTravelFallback(context),
         unreachable: room => this.unreachableIn(room),
@@ -224,6 +226,14 @@ export class FacultiesPart {
         // still. That number is a property of stopping, not of the room: twenty-hitpoint
         // mules cross to Castle Victoria every day by never doing it.
         need: () => {
+          if (exitDecision) {
+            const recovery = currentSurvivalDecision(this.s);
+            // This crossing follows an exhausted refuge search and spent
+            // logoff. A fuel stop must not replace the escape that now owns it.
+            if (recovery?.id === exitDecision.id && recovery.strategy === 'leave_room' &&
+                recovery.status === 'approaching' && recovery.chosen_refuge?.room === this.s.world?.room?.num &&
+                Number(recovery.chosen_refuge?.destination) === Number(to)) return false;
+          }
           const v = this.s.client?.vitals?.();
           const hp = v?.health?.max ? v.health.value / v.health.max : null;
           if (hp === null) return false;
@@ -331,6 +341,15 @@ export class FacultiesPart {
           };
           if (!confirmed || !onWall())
             return replace('route refuge arrival was not confirmed at the selected square');
+          if (!whole && room === 552 && this.mode === 'farm' && this.policy?.molluskCoverRecovery === true) {
+            const { casters, complete } = this.casterScene();
+            if (!complete || (casters.length && !this.molluskRecoveryCoverAt(casters))) {
+              const why = 'route refuge cover against the observed casters was not established';
+              settle({ rested_to: null, why, arrival_confirmed: true, safe_wall: false });
+              if (decision?.strategy === 'route_refuge') finishSurvivalDecision(this.s, decision.id, 'blocked', why);
+              return false;
+            }
+          }
           if (!whole && !this.adoptRecoveryWall())
             return replace('route refuge arrival did not establish a geometric safe wall','blocked');
           if (decision) updateSurvivalDecision(this.s,decision.id,{arrived_at:Date.now()});
@@ -343,7 +362,19 @@ export class FacultiesPart {
           // "approaching" even after healing and walking away from the refuge.
           settle({rested_to:null,why:'handed to logoff, turn, and recovery at this safe wall'});
           this.recordTravelShelterStop(source);
-          await this.playDead('reached the chosen route refuge — logoff before recovering');
+          const why = 'reached the chosen route refuge — logoff before recovering';
+          await this.playDead(why);
+          const recovery = currentSurvivalDecision(this.s);
+          if (recovery?.strategy === 'rest_safe' && recovery.status === 'recovering' && recovery.reason === why &&
+              !this.s.movementWasCancelled?.(movementGeneration, controlToken) &&
+              this.s.client === client && this.s.world?.room?.num === room && client?.room?.id === roomId &&
+              onWall() && this.currentRecoveryWall()) {
+            // The spent-logoff branch installs a rest without cancelling the
+            // walker. Hold this verified square while that rest owns the body.
+            this.suspendJourney(why);
+            this.revive(why);
+            this.cancelForSurvival(controlToken, why, { preserveId: recovery.id, origin: keeperOrigin('shelter') });
+          }
           return true;
         },
         // THE DECISION ROW — WRITTEN WHEN THE WALL IS CHOSEN, NOT WHEN IT IS REACHED.
