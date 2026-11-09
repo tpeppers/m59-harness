@@ -14,7 +14,8 @@ import {cooperativePass} from '../m59-cooperative-combat.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { publishGroupQuarry, spreadGroupQuarries } from '../m59-group-quarry.mjs';
 import { chaseCache, orderByAttackOrWalk, orderByWalk } from '../m59-chase.mjs';
-import { keeperOrigin } from '../m59-move-origin.mjs';
+import { molluskRockThreatAt } from '../m59-casters.mjs';
+import { keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import { opensFightFromWall } from '../m59-policydiff.mjs';
@@ -22,7 +23,8 @@ import { notePreySide } from '../m59-preyside.mjs';
 import { beginPullProgress } from '../m59-pull-progress.mjs';
 import { stalePullReason } from '../m59-quarry-identity.mjs';
 import { relayFarmVigor, tryFarmRelay } from '../m59-relay-farming.mjs';
-import { PLAYER_REACH } from '../m59-safespots.mjs';
+import { lineOfSight, PLAYER_REACH } from '../m59-safespots.mjs';
+import { currentSurvivalDecision, isActiveRecoveryDecision } from '../m59-survival-decision.mjs';
 import * as skills from '../m59-skills.mjs';
 import { huntLabel, huntMatcher, loadSpawns } from '../m59-spawns.mjs';
 import * as tougher from '../m59-tougher.mjs';
@@ -75,6 +77,65 @@ export class PassFarmPart {
       openFightHealth: Math.max(this.safety().engageAt, this.policy.openFightHealth ?? 0.9),
       minimumBlows: this.policy.openFightBlows ?? 7,
     }).ready;
+  }
+
+  // A distant pull still owns its follow window, but does not own our next swing.
+  // Spend one stationary round on an exact eligible contact while it closes.
+  oceanCoveredPullAlternate(found) {
+    const { s, hold, pendingPull } = this, c = s.client, me = c?.self;
+    if (this.mode !== 'farm' || this.policy.neverAttack === true || this.policy.assignedRoom !== 552 ||
+        !this.oceanRangedRecoveryEnabled() ||
+        s.world?.room?.num !== 552 || !pendingPull?.target_id || !hold?.proven || hold.failures ||
+        hold.room !== 552 || hold.row !== me?.row || hold.col !== me?.col || me?.predicted ||
+        this.policy.partner || this.clearing) return null;
+    const { id: roomId, security } = c.room;
+    const { selfId, idGenerations } = c;
+    const generation = s.movementGeneration, life = s.lifeBoundary;
+    const pullId = pendingPull.target_id, geo = s.world?.geometry;
+    const distance = target => Math.hypot(target.row - hold.row, target.col - hold.col);
+    const livePull = c.room.objects.get(pullId);
+    if (!livePull || livePull.predicted || !(distance(livePull) > PLAYER_REACH) ||
+        pendingPull.wall?.room !== 552 || pendingPull.wall.row !== hold.row || pendingPull.wall.col !== hold.col ||
+        !geo?.collisionReady || !Number.isInteger(security) || geo.security !== security ||
+        geo.grid?.length !== geo.rows * geo.cols || geo.monsterGrid?.length !== geo.rows * geo.cols) return null;
+    const canSwing = target => {
+      const d = distance(target);
+      return !target.predicted && d > 0 && d <= PLAYER_REACH &&
+        (target.flags & OF.ATTACKABLE) && !(target.flags & OF.PLAYER) &&
+        this.huntMatch()(c.rsc.get(target.nameRsc)) && this.cooperativeTargetAllowed(target) &&
+        lineOfSight(geo, hold.row, hold.col, target.row, target.col);
+    };
+    const target = found.find(quarry => quarry.id !== pullId && canSwing(quarry));
+    if (!target) return null;
+    const { id, nameRsc } = target;
+    const allowed = live => {
+      const at = c.self, vitals = c.vitals?.(), health = vitals?.health;
+      if (!live || live.id !== id || live.nameRsc !== nameRsc || s.client !== c || c.room.id !== roomId ||
+          c.room.security !== security || c.selfId !== selfId || c.idGenerations !== idGenerations ||
+          this.mode !== 'farm' || this.policy.neverAttack === true || this.policy.assignedRoom !== 552 ||
+          !this.oceanRangedRecoveryEnabled() || this.policy.partner || this.clearing ||
+          s.world?.room?.num !== 552 || s.world?.geometry !== geo ||
+          s.movementGeneration !== generation || s.lifeBoundary !== life ||
+          this.hold !== hold || !hold.proven || hold.failures || at?.predicted ||
+          at?.row !== hold.row || at?.col !== hold.col || this.pendingPull?.target_id !== pullId ||
+          this.stopping || this.inert || this.suspendedJourney || s.job?.busy ||
+          liveMoveOrder(s) || s.combat?.active || s._rite ||
+          this.recoverUntilWhole || this.wantsForwardShelter || this.frozenUntil > Date.now() ||
+          isActiveRecoveryDecision(currentSurvivalDecision(s)) || this.playerThreatPresent() ||
+          this.facultyHeld('movement') || this.facultyHeld('work') || this.busyStatus() ||
+          s.pacer?.holdStatus?.()?.active || c.ailments?.()?.length ||
+          !(health?.max > 0 && health.value === health.max) ||
+          !(vigorOf(vitals ?? {}) >= this.fightFloor()) || !this.armedForSure() ||
+          !Number.isFinite(s.damagedAt) || Date.now() - s.damagedAt < 5_000 || !canSwing(live)) return false;
+      const pulledNow = c.room.objects.get(pullId);
+      if (!pulledNow || !(distance(pulledNow) > PLAYER_REACH) ||
+          !this.wallHere()?.ok || this.restSpotRefused(hold)) return false;
+      const { casters, complete } = this.casterScene();
+      return complete && !molluskRockThreatAt(geo, at, casters);
+    };
+    if (!allowed(c.room.objects.get(id))) return null;
+    const follow = this.pendingPullWait();
+    return { follow, alternate: follow && !follow.missing && !follow.stalled ? { target, pullId, allowed } : null };
   }
 
   async passFarm(ctx) {
@@ -1673,15 +1734,18 @@ export class PassFarmPart {
           this.pendingPull = null;
         } else if (this.gangUpLapsedPull(pulled)) this.pendingPull = null;   // the quorum left it (gang up)
       }
+      const coveredPull = !bystander && !partyFoe ? this.oceanCoveredPullAlternate(found) : null;
+      const alternate = coveredPull?.alternate;
+      if (alternate) engageName = c.rsc.get(alternate.target.nameRsc);
       const plannedQuarryId = this.pendingPull?.target_id ?? selectedQuarry?.id ?? null;
-      const swingAt = bystander ? bystander.id : (partyFoe ? partyFoe.id : plannedQuarryId);
+      const swingAt = bystander ? bystander.id : (partyFoe ? partyFoe.id : (alternate?.target.id ?? plannedQuarryId));
       const claimedSwing = swingAt ?? null;
       const sameGroupTarget = groupApproach && !bystander && claimedSwing === selectedQuarry.id;
       // Keep any existing cover until the final swing id is known. A different
       // defensive or pending target must never inherit the open-ground exception.
       if (groupApproach && !sameGroupTarget && !this.hold) return HANDLED;
       if (sameGroupTarget && !this.gangUpFightInPlace(c.room.objects.get(claimedSwing))) return HANDLED;
-      if (sameGroupTarget && this.hold && !this.inReachOfUs().length)
+      if (!alternate && sameGroupTarget && this.hold && !this.inReachOfUs().length)
         this.releaseHold('approaching a quorum-backed quarry where it stands');
       const holding = !!this.hold;
       const guardGroupApproach = sameGroupTarget && !holding;
@@ -1756,7 +1820,8 @@ export class PassFarmPart {
       }
       if (this.policy.partner && !this.pendingPull)
         party.declareTarget(this.s.name, claimedSwing, engageName);
-      const groupPosture = guardGroupApproach ? { fight_in_place: true } : {};
+      const groupPosture = guardGroupApproach ? { fight_in_place: true }
+        : alternate ? { covered_pull_alternate: true, kept_pull_target_id: alternate.pullId } : {};
       this.farmCombat = {at:Date.now(),pending:true,target:engageName,target_id:claimedSwing,holding:!!holding,...groupPosture};
       const f = await skills.fight(s, { target: engageName,
                                         // The same predicate that chose the quarry. An order naming
@@ -1779,13 +1844,13 @@ export class PassFarmPart {
                                         avoid: bystander ? null : this.preyAvoid(s.world?.room?.num ?? null),
                                         preferId: claimedSwing,
                                         exactTargetId: claimedSwing,
-                                        targetAllowed: groupTargetAllowed,
+                                        targetAllowed: alternate?.allowed ?? groupTargetAllowed,
                                         disengageAt: safe.fleeAt, loot: true,
                                         holdPosition: holding, reach: PLAYER_REACH,
                                         // m59-chase.mjs, off unless a strategy turned it on (policy.chaseOnFoot).
                                         chase: this.policy.chaseOnFoot === true,
                                         equip: training.equip,
-                                        rounds: training.rounds,
+                                        rounds: alternate ? 1 : training.rounds,
                                         weaponPriority: this.weaponPriorityNow(engageName),
                                         bannedWeapons: this.bannedWeaponsNow() });
 
@@ -1820,6 +1885,7 @@ export class PassFarmPart {
       // a monster that will not come to the wall has to be fetched. Hit it once and
       // walk back, and the fight happens where we chose.
       if (f.out_of_reach) {
+        if (alternate) return HANDLED; // never approach or retag the opportunistic contact
         this.doing = 'pulling';
         // A DISTANT QUARRY IS STILL ON THE ROAD.
         //
@@ -1827,7 +1893,7 @@ export class PassFarmPart {
         // gave a quarry one or two seconds to cross routes that took us tens of seconds,
         // then hit it again and repeated the mistake. Wait out a distance-sized follow
         // window before this pull is allowed to count toward the empirical cliff verdict.
-        let waiting = this.pendingPullWait();
+        const waiting = coveredPull?.follow ?? this.pendingPullWait();
         // A quarry that despawned, died to somebody else, or left the room did not fail
         // to follow. Rotate immediately without charging the square.
         if (waiting?.missing) {
@@ -1951,10 +2017,12 @@ export class PassFarmPart {
       // A submitted round is not contact: range-refused attacks can consume a round and
       // land nothing. Close the exact quarry's progress watch only on an observed hit or
       // its death, and use the id fight() actually selected rather than our old claim.
-      if ((f.landed_hits ?? 0) > 0 || f.killed)
-        this.pullConverted(f.target_id ?? f.foe_id, f.target ?? engageName);
-      this.swungAt = Date.now();
-      this.foeId = f.foe_id ?? null;
+      if (!alternate) {
+        if ((f.landed_hits ?? 0) > 0 || f.killed)
+          this.pullConverted(f.target_id ?? f.foe_id, f.target ?? engageName);
+        this.foeId = f.foe_id ?? null;
+      }
+      if (!alternate || f.fought) this.swungAt = Date.now();
       // fight() can now tell death apart from a stale object id. If it is the
       // latter, reconnecting fixes it; treating it as death would loop forever.
       if (f.stale_identity) {
@@ -2010,7 +2078,9 @@ export class PassFarmPart {
           return HANDLED;
         }
       }
-      await this.recordFarmFightOutcome(f, { room, v, holding });
+      await this.recordFarmFightOutcome(f, { room, v, holding, ...(alternate ? { extra: groupPosture } : {}) });
+      if (alternate && f.killed && this.pendingPull?.target_id === alternate.pullId)
+        claimQuarry(this.s.name, room?.num, alternate.pullId);
       return HANDLED;
     }
 
