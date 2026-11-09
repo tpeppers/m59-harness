@@ -12,6 +12,7 @@
 //   recordFarmFightOutcome
 import {cooperativePass} from '../m59-cooperative-combat.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
+import { publishGroupQuarry, spreadGroupQuarries } from '../m59-group-quarry.mjs';
 import { chaseCache, orderByWalk } from '../m59-chase.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
@@ -671,9 +672,11 @@ export class PassFarmPart {
           : found.some(o => o.id === this.foeId) ? this.foeId
           : found.some(o => o.id === agreed?.id) ? agreed.id : null;
         found = rankQuarries(this.s.name, room?.num, found, { preferId });
+        found = spreadGroupQuarries(this, found, preferId, { walks: quarryWalks });
         // hunt_priority: reorder only — every filter above has already run (m59-hunt-priority.mjs).
         if (this.policy.huntPriority) found = this.huntPriorityOrder(found, preferId);
         claimQuarry(this.s.name, room?.num, found[0]?.id);
+        publishGroupQuarry(this, found[0]);
         // THE TOUCH AT THE TARGET (touch_spell_timing 'on_target'): the quarry is chosen, so cast
         // now, during the approach. A no-op unless training a touch spell here. m59-touchspell.mjs.
         if (found[0] && this.touchTrainingHere())
@@ -1737,8 +1740,10 @@ export class PassFarmPart {
           .catch(e => { const st = this.touchState(); if (st) st.blockedReason = e.message; });
       // Defensive contact must not release the claim on a pulled quarry whose progress
       // is still being watched. Once that experiment ends, normal claim convergence resumes.
-      if (!this.pendingPull && claimedSwing != null)
+      if (!this.pendingPull && claimedSwing != null) {
         claimQuarry(this.s.name, room?.num, claimedSwing);
+        publishGroupQuarry(this, c.room.objects.get(claimedSwing));
+      }
       if (this.policy.partner && !this.pendingPull)
         party.declareTarget(this.s.name, claimedSwing, engageName);
       const groupPosture = guardGroupApproach ? { fight_in_place: true } : {};

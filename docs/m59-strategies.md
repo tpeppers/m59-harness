@@ -456,6 +456,9 @@ monsters in reach than the crowd threshold. It rechecks the quorum before leavin
 cover and before each attack packet. If a crowd forms or support moves away, the
 keeper re-evaluates on its next pass. For example, the Great Ocean can use
 `gangUp: { 'mollusk creature': { min: 2, radius: 6, fightInPlace: true } }`.
+At the assigned station, keepers share recent quarry choices and prefer a comparable
+verified walk to another eligible target once a group is full. A pending pull or
+preferred target retains priority.
 
 ### Patrol (`patrol`): walk the spawn points in a loop
 
