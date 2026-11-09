@@ -7,6 +7,7 @@ import {OF} from './m59-parse.mjs';
 import {withPacketScope} from './m59-packet-scope.mjs';
 import {keeperOrigin, liveMoveOrder, withMoveOrder} from './m59-move-origin.mjs';
 import {isActiveRecoveryDecision,currentSurvivalDecision} from './m59-survival-decision.mjs';
+import {lineOfSight} from './m59-safespots.mjs';
 import * as party from './m59-party.mjs';
 import {stationaryTradeActive} from './m59-stationary-trade.mjs';
 import {recordEvent} from './m59-ledger.mjs';
@@ -165,7 +166,8 @@ export async function configureCooperativeLogoff(pilot,phase) {
   const s=pilot.s;if(typeof s._askStrategies!=='function')return null;
   const c=s.client,objects=[...(c?.room?.objects?.values?.()??[])];
   const fleetmates=objects.filter(o=>o.id!==c?.selfId&&(o.flags&OF.PLAYER)&&party.isFleetmate(c.rsc?.get(o.nameRsc)));
-  const monsters=(pilot.inReachOfUs?.()??[]).filter(o=>(o.flags&OF.ATTACKABLE)&&!(o.flags&OF.PLAYER));
+  let monsters=(pilot.inReachOfUs?.()??[]).filter(o=>(o.flags&OF.ATTACKABLE)&&!(o.flags&OF.PLAYER));
+  if (phase === 'request' && monsters.length === 0) monsters = oceanRockThreats(pilot, objects);
   const ctx={phase,agent:s.name,room:s.world?.room?.num,at_safe_spot:!!pilot.currentRecoveryWall?.(),
     fleetmates:fleetmates.map(o=>({id:o.id,character:c.rsc.get(o.nameRsc)})),monsters:monsters.map(o=>({id:o.id,name:c.rsc.get(o.nameRsc)}))};
   const got=await s._askStrategies('cooperativeLogoff',ctx);
@@ -173,6 +175,28 @@ export async function configureCooperativeLogoff(pilot,phase) {
   if(phase==='helper')pilot._cooperativeLogoffConfig=config;
   if(config){pilot._cooperativeLogoffConfig=config;publishCooperativePresence(pilot);}
   return config?{config,ctx,monsters,fleetmates,strategy:got.strategy}:null;
+}
+
+function oceanRockThreats(pilot, objects) {
+  const { client, world } = pilot.s;
+  if (pilot.mode !== 'farm' || pilot.policy?.molluskCoverRecovery !== true ||
+      world?.room?.num !== 552 || client?.combatReady !== true) return [];
+  const geo = world.geometry, self = position(client.self);
+  if (!self || !geo?.collisionReady || !Number.isInteger(geo.security) ||
+      typeof geo.inBounds !== 'function' || typeof geo.canMove !== 'function' ||
+      client.room?.security !== geo.security || !geo.inBounds(self.row, self.col)) return [];
+
+  // The Ocean's mollusks can throw rocks through a clear line up to ten squares away.
+  // Require both LOS grids to agree because the server may use either.
+  return objects.filter(body => {
+    if (body.id === client.selfId || !(body.flags & OF.ATTACKABLE) || (body.flags & OF.PLAYER) ||
+        fold(client.rsc?.get(body.nameRsc)) !== 'mollusk creature') return false;
+    const at = position(body);
+    return at && geo.inBounds(at.row, at.col) &&
+      (at.row - self.row) ** 2 + (at.col - self.col) ** 2 <= 100 &&
+      lineOfSight(geo, at.row, at.col, self.row, self.col) &&
+      lineOfSight(geo, at.row, at.col, self.row, self.col, { fine: true });
+  });
 }
 // Serialize admission so the last available fleetmate cannot also go offline.
 export function requestCooperativeLogoff(pilot,offered,{now=Date.now()}={}) {

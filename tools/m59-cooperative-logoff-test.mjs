@@ -69,6 +69,58 @@ try{
   console.log('PASS exact roster/server/room admission reserves the last online helper');
  }
  {
+  const f = fixture('ocean-rock-threat');
+  const { loadMap, CHECKED_MAP_FILE } = await import('./m59-map.mjs');
+  const { sharedRoomGeometry } = await import('./m59-roo.mjs');
+  const room = loadMap(CHECKED_MAP_FILE).rooms[552];
+  const geometry = sharedRoomGeometry(room);
+  for (const actor of [f.a, f.b]) {
+   Object.assign(actor.s.world, { room, geometry });
+   Object.assign(actor.c.room, { id: 1416, security: geometry.security });
+   actor.c.room.objects.delete(40);
+  }
+  // Fozzie's exact replay pose at the refused 06:02:06.204 logoff.
+  Object.assign(f.a.c.self, { row: 49, col: 44, x: 2848, y: 3168 });
+  const mollusk = { id: 11790, nameRsc: 'mollusk creature', flags: OF.ATTACKABLE,
+   row: 55, col: 41, x: 2653, y: 3567 };
+  const frogman = { id: 11890, nameRsc: 'frogman', flags: OF.ATTACKABLE,
+   row: 57, col: 41, x: 2668, y: 3682 };
+  const distant = { ...mollusk, id: 11850, row: 56, col: 33, x: 2135, y: 3627 };
+  const player = { ...mollusk, id: 3, flags: OF.PLAYER | OF.ATTACKABLE };
+  for (const actor of [f.a, f.b])
+   for (const object of [mollusk, frogman, distant, player]) actor.c.room.objects.set(object.id, object);
+  f.a.pilot.inReachOfUs = Autopilot.prototype.inReachOfUs;
+  f.a.pilot.policy = { molluskCoverRecovery: true };
+  const offer = async (phase = 'request') => configureCooperativeLogoff(f.a.pilot, phase);
+  assert.deepEqual(f.a.pilot.inReachOfUs(), []);
+  assert.deepEqual((await offer()).ctx.monsters, [{ id: mollusk.id, name: mollusk.nameRsc }]);
+  assert.deepEqual((await offer('helper')).ctx.monsters, []);
+  const melee = { ...frogman, id: 41, row: 49, col: 46, x: 2976, y: 3168 };
+  f.a.c.room.objects.set(melee.id, melee);
+  assert.deepEqual((await offer()).ctx.monsters, [{ id: melee.id, name: melee.nameRsc }]);
+  f.a.c.room.objects.delete(melee.id);
+  mollusk.predicted = true;
+  assert.deepEqual((await offer()).ctx.monsters, []);
+  delete mollusk.predicted;
+  f.a.c.self.predicted = true;
+  assert.deepEqual((await offer()).ctx.monsters, []);
+  delete f.a.c.self.predicted;
+  f.a.c.room.security++;
+  assert.deepEqual((await offer()).ctx.monsters, []);
+  f.a.c.room.security = geometry.security;
+  f.a.pilot.policy.molluskCoverRecovery = false;
+  assert.deepEqual((await offer()).ctx.monsters, []);
+  f.a.pilot.policy.molluskCoverRecovery = true;
+  await configureCooperativeLogoff(f.b.pilot, 'helper');
+  const request = requestCooperativeLogoff(f.a.pilot, await offer());
+  assert.deepEqual(request?.targets.map(t => t.id), [mollusk.id]);
+  assert.deepEqual(request?.helpers, ['helper']);
+  Object.assign(f.a.c.self, { row: 45, col: 55, x: 3552, y: 2912 });
+  Object.assign(mollusk, { row: 45, col: 65, x: 4192, y: 2912 });
+  assert.deepEqual((await offer()).ctx.monsters, []);
+  console.log('PASS an opted-in Ocean requester can capture the observed rock thrower, with identity, range and LOS guards');
+ }
+ {
   const f=fixture('defer');await f.setup();f.offline();let calls=0;
   f.b.pilot.fightNow=async opts=>(calls++,{target_id:opts.exactTargetId,landed_hits:0});
   f.b.s.combat={active:{}};assert.equal(await cooperativeAssist(f.b.pilot),false);f.b.s.combat=null;
