@@ -1,4 +1,4 @@
-import {cooperativeBeforeLogin,cooperativeAfterLogin,markCooperativeOffline} from './m59-cooperative-logoff.mjs';
+import {cooperativeBeforeLogin,cooperativeAfterLogin,markCooperativeOffline,recordCooperativeSaveBoundary} from './m59-cooperative-logoff.mjs';
 import {observeStationaryMutation} from './m59-stationary-trade.mjs';
 import {guardRegionPacket} from './m59-movement-region.mjs';
 import {guardNeverAttackPacket} from './m59-never-attack.mjs';
@@ -2700,6 +2700,10 @@ class Session {
     c.castVeto = makeCastVeto(this, c, { who: () => this.reserveWho ?? null, inPvp: () => !!this.combat?.active?.pvp,
       log: line => console.log(line) });
     c.onEvent = ev => {
+      if (ev.kind === 'server-save') {
+        try { recordCooperativeSaveBoundary(this,ev); }
+        catch (error) { console.error(`[cooperative] ${this.name} could not publish a save boundary: ${error.message}`); }
+      }
       c.observeSessionEvidence?.(ev);
       this.observeAttackMessage(ev,c);
       if(ev.kind==='message')recordDeathNotice({host,port},ev,{observer:c.me?.name??character,sessionId:evidence?.active?.id,isFleetmate});

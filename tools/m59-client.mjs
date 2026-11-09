@@ -1779,6 +1779,7 @@ export class M59Client {
         // A new room means the old contents are stale. The real client asks for
         // them on entry; nothing arrives unrequested.
         this.room.objects.clear();
+        this.room.contentsAt = null;
         this.roomContents();
         this.emit('room-entered', { room: p.roomId, roomName: this.rsc.get(p.roomNameRsc) });
         break;
@@ -1806,6 +1807,7 @@ export class M59Client {
         const request = ++this.roomContentsReceived;
         this.room.id = res.roomId;
         const contentsAt = Date.now();
+        this.room.contentsAt = contentsAt;
         this.room.objects = new Map(res.objects.map(o => {
           o.appearanceRevision = ++this.appearanceRevision;
           // WHEN THE SERVER LAST SAID WHERE THIS IS (posAt), so a shot aimed at a square can say

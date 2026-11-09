@@ -12,7 +12,7 @@ import {noteLogoff} from './m59-healing-session.mjs';
 import * as party from './m59-party.mjs';
 import {load,firstAnswer} from './m59-strategies.mjs';
 import {cooperativeStore,configureCooperativeLogoff,publishCooperativePresence,requestCooperativeLogoff,markCooperativeOffline,
-  cooperativeBeforeLogin,cooperativeAfterLogin,cooperativeAssist,cooperativeHelperReady,
+  cooperativeBeforeLogin,cooperativeAfterLogin,cooperativeAssist,cooperativeHelperReady,recordCooperativeSaveBoundary,
   prepareCooperativeRefuge,cooperativeReturnRefuge} from './m59-cooperative-logoff.mjs';
 import {cooperativeReconnectRefusal,cooperativeWaitActive,replaceFileSync,stuckCooperativeLogoff,abortPreparingCooperativeLogoff,
   PREPARING_MAX_MS,OFFLINE_OVERRUN_MS} from './m59-cooperative-logoff.mjs';
@@ -30,7 +30,7 @@ function fixture(label='case'){
  const bodies=[{id:1,nameRsc:'Victim',flags:OF.PLAYER},{id:2,nameRsc:'Helper',flags:OF.PLAYER},monster];
  const actor=(name,id,character)=>{
   const s=Object.create(Session.prototype),c={state:'game',combatReady:true,me:{name:character},selfId:id,self:{id,row:10,col:10},
-   room:{id:8270,objects:new Map(bodies.map(o=>[o.id,{...o}]))},rsc:{get:x=>x},idsAsOf:()=>({last_save_at:7}),vitals:()=>({health:{value:100,max:100},vigor:{value:180}}),sock:{destroy(){c.state='offline';}}};
+   room:{id:8270,contentsAt:20,objects:new Map(bodies.map(o=>[o.id,{...o}]))},rsc:{get:x=>x},idsAsOf:()=>({last_save_at:7}),vitals:()=>({health:{value:100,max:100},vigor:{value:180}}),sock:{destroy(){c.state='offline';}}};
   Object.assign(s,{name,client:c,credentials:cred(character),fleetStateFile:join(directory,'fleet.json'),cooperativeLogoffDirectory:directory,world:{room:{num:827}},movementGeneration:1,
    cancelMovement:()=>({cancelled:true}),movementWasCancelled:g=>g!==s.movementGeneration});
   s._askStrategies=async()=>({strategy:'fixture-private',answer:policy});s.cooperativeRecordEvent=capture;
@@ -543,9 +543,10 @@ try{
   assert.equal(cooperativeReturnRefuge(f.a.s).row,9);
   f.a.c.self.x+=4;assert.equal(cooperativeReturnRefuge(f.a.s),null,'actual shifted landing invalidates the peer hint');f.a.c.self.x-=4;
   f.a.c.self.predicted=true;assert.equal(cooperativeReturnRefuge(f.a.s),null);delete f.a.c.self.predicted;
-  f.a.c.idsAsOf=()=>({last_save_at:8});assert.equal(cooperativeReturnRefuge(f.a.s),null);f.a.c.idsAsOf=()=>({last_save_at:7});
   assert.equal(cooperativeReturnRefuge(f.a.s,{now:Date.now()+31000}),null,'old hints cannot become movement authority');
   f.b.c.room.objects.get(1).nameRsc='Recycled body';assert.equal(prepareCooperativeRefuge(f.b.pilot,r),null);
+  recordCooperativeSaveBoundary(f.b.s,{phase:'begin',at:21});
+  assert.equal(cooperativeReturnRefuge(f.a.s),null,'a peer saw the boundary even when the return socket did not');
   console.log('PASS offline peer preparation uses the victim ghost, never the helper body; changed landing/save/identity and stale hints refuse');
  }
  {
@@ -605,11 +606,66 @@ try{
  const gate=(f,at,why='still waiting')=>cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{now:()=>at,wait:async()=>{throw Error(why);}});
  const seedHit=(f,r,at,room)=>{
   const store=f.store();
-  const prior={request_id:r.id,target_id:40,name:'daemon skeleton',helper:'second',helper_body:3,hit_at:at,landed_hits:1};
+  const prior={request_id:r.id,target_id:40,name:'daemon skeleton',helper:'second',helper_body:3,room_ids_at:20,hit_at:at,landed_hits:1};
   store.write('request','victim',{...r,receipts:{40:prior}});
-  store.write('presence','second',{at,live:true,body:3,room,room_object:8270,health:{value:100,max:100}});
+  store.write('presence','second',{at,live:true,body:3,room,room_object:8270,room_ids_at:20,health:{value:100,max:100}});
   return prior;
  };
+ {
+  const f=fixture('save-fences-null-epochs');
+  for(const actor of [f.a,f.b])actor.c.idsAsOf=()=>({last_save_at:null});
+  assert(await f.setup());
+  const r=f.offline(),store=f.store(),T=r.created_at+1000;
+  r.max_offline_ms=120000;store.write('request','victim',r);
+  assert(await cooperativeAssist(f.b.pilot,{now:()=>T}));
+  const preSaveHit=store.read('request','victim').receipts[40];
+  assert.equal(preSaveHit.helper,'helper');
+
+  recordCooperativeSaveBoundary(f.b.s,{phase:'begin',at:T+100});
+  recordCooperativeSaveBoundary(f.b.s,{phase:'end',at:T+149});
+  recordCooperativeSaveBoundary(f.b.s,{phase:'begin',at:T+100});
+  assert.equal(store.saveBoundary(),T+149,'a delayed observation cannot roll the shared cutoff back');
+  // Same room and body values may be reused. This socket never saw WAIT or UNWAIT.
+  const recycled=f.b.c.room.objects.get(40);
+  f.b.c=f.b.s.client={...f.b.c,room:{...f.b.c.room,contentsAt:T+200}};
+  f.b.c.room.objects.delete(40);
+  watch(f,T+300,T+16300);
+  assert.deepEqual(store.read('request','victim').receipts[40],preSaveHit,'post-save absence cannot prove the old ID gone');
+  await assert.rejects(gate(f,T+16400),/still waiting/,'an otherwise fresh pre-save hit also loses its authority');
+  f.b.c.room.objects.set(40,recycled);
+  f.b.pilot.fightNow=()=>assert.fail('a recycled object with the same name cannot attract a distraction packet');
+  assert.equal(await cooperativeAssist(f.b.pilot,{now:()=>T+16500}),false);
+  await gate(f,r.offline_at+120000);
+  assert.equal(f.a.s.cooperativeLogoffReturn.released,'deadline');
+  assert.deepEqual(f.a.s.cooperativeLogoffReturn.receipts,[]);
+  console.log('PASS shared wire save evidence fences null-local requests, existing hits and recycled targets without extending the deadline');
+ }
+ {
+  const f=fixture('save-fences-preexisting-gone');assert(await f.setup());
+  const r=f.offline(),T=r.created_at+1000;
+  f.b.c.room.objects.delete(40);watch(f,T,T+15000);
+  assert.equal(f.store().read('request','victim').receipts[40].kind,'gone');
+  recordCooperativeSaveBoundary(f.b.s,{phase:'begin',at:T+15100});
+  await assert.rejects(gate(f,T+15200),/still waiting/,'a fresh pre-save gone receipt cannot release during a save');
+ }
+ {
+  const f=fixture('same-save-unequal-local-stamps'),T=Date.now()-2000;
+  recordCooperativeSaveBoundary(f.a.s,{phase:'begin',at:T});
+  recordCooperativeSaveBoundary(f.a.s,{phase:'end',at:T+49});
+  recordCooperativeSaveBoundary(f.b.s,{phase:'end',at:T+98});
+  f.a.c.idsAsOf=()=>({last_save_at:T+49});
+  f.b.c.idsAsOf=()=>({last_save_at:T+98});
+  f.a.c.room.contentsAt=T+150;f.b.c.room.contentsAt=T+200;
+  const created=await f.setup();assert(created);
+  const r=f.offline(),U=r.created_at+1000;
+  // A new helper socket with a proven post-save full room read is equally valid.
+  f.b.c.idsAsOf=()=>({last_save_at:null});
+  f.b.c.room.objects.delete(40);watch(f,U,U+15000);
+  await gate(f,U+15100);
+  assert.equal(f.a.s.cooperativeLogoffReturn.receipts[0].kind,'gone');
+  assert.equal(f.a.s.cooperativeLogoffReturn.released,undefined);
+  console.log('PASS distinct local save timestamps and a reconnect can prove absence after one shared save');
+ }
  {
   const f=fixture('replace-invalid-hit');await f.setup();const r=f.offline(),T=r.offline_at+2000;
   const prior=seedHit(f,r,T-100,827);
@@ -656,7 +712,7 @@ try{
   const lost=fixture('gone-unreadable');await lost.setup();const lr=lost.offline(),L=lr.offline_at+1000;
   lost.b.c.room.objects.delete(40);lost.b.c.room.objects.delete(2);watch(lost,L,L+16000);
   lost.b.c.room.objects.set(2,{id:2,nameRsc:'Helper',flags:OF.PLAYER});lost.b.c.idsAsOf=()=>({last_save_at:7,saving:true});watch(lost,L+17000,L+33000);
-  lost.b.c.idsAsOf=()=>({last_save_at:8});watch(lost,L+34000,L+50000);
+  lost.b.c.idsAsOf=()=>({last_save_at:21});watch(lost,L+34000,L+50000);
   assert.equal(lost.store().read('request','victim').receipts[40],undefined,'an unreadable room (no own body, a save, another epoch) is never absence');
   await assert.rejects(gate(f,T+34100),/still waiting/);
   console.log('PASS one read, a gapped series, or a room the helper could not read never counts as gone');
