@@ -105,6 +105,7 @@ import { autopilotIfAny } from './m59-autopilot.mjs';
 import { lapsedWeapon, dedicatedWeapon, alreadyDedicated } from './m59-weapon-magic.mjs';
 import { planLootOnly, newLootOnlyMemory, isBodyArmor } from './m59-loot-filter.mjs';
 import { readDibs, dibsFile, dibsFilter } from './m59-dibs.mjs';
+import { boundFarmFoodPile, FARM_FOOD_CACHE_ROOM, isFarmFoodCacheItem, readFarmFoodCache } from './m59-farm-food-cache-record.mjs';
 import { killDropItems } from './m59-killdrop.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
@@ -5242,6 +5243,16 @@ class Session {
       ? cands.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || null, amount: o.amount || 1,
                           icon_rsc: o.iconRsc, unrevealed: skills.isUnrevealed(o) }))
       : null;
+    const sweep = !ids?.length || !explicitIdsOverride;
+    const cacheProtected = (id, name) => sweep && this.world?.room?.num === FARM_FOOD_CACHE_ROOM &&
+      isFarmFoodCacheItem(name) && boundFarmFoodPile(this, c, readFarmFoodCache())?.id === id;
+    const cacheSkipped = [];
+    cands = cands.filter(o => {
+      const name = c.rsc.get(o.nameRsc);
+      if (!cacheProtected(o.id, name)) return true;
+      cacheSkipped.push({ id: o.id, item: name, why: 'reserved for counted farm food withdrawals' });
+      return false;
+    });
 
     // NEVER PICK THESE UP.
     //
@@ -5428,8 +5439,8 @@ class Session {
     const ignoredSkipped = [];
     const stationPickupIds = this._stationLootPickup ? new Set() : null;
     const lootRoom = c.room;
-    const stationPickupAllowed = (id, name) => !stationPickupIds?.has(id) ||
-      (this.client === c && c.room === lootRoom && this._stationLootPickup?.()?.some(item => lootName(item) === lootName(name)));
+    const pickupAllowed = (id, name) => !cacheProtected(id, name) && (!stationPickupIds?.has(id) ||
+      (this.client === c && c.room === lootRoom && this._stationLootPickup?.()?.some(item => lootName(item) === lootName(name))));
     if (!ids?.length && this._lootIgnore?.length) {
       const pickup = this._stationLootPickup?.();
       const stationNames = pickup?.length ? new Set(pickup.map(lootName)) : null;
@@ -5513,7 +5524,7 @@ class Session {
     }).map(o => c.rsc.get(o.nameRsc) || '').filter(Boolean)];
     let wasCancelled = false;
     for (const l of lootOnlyLeft) refused.push({ id: l.id, item: l.name, why: l.why });
-    for (const d of dibsSkipped) refused.push(d);
+    refused.push(...dibsSkipped, ...cacheSkipped);
     for (const n of ignoredSkipped)
       refused.push({ item: n, why: 'IGNORED — on the fleet loot-ignore list (substrate/loot-ignore.json): not worth its weight. Left on the floor.' });
     for (const n of gateSkipped)
@@ -5558,7 +5569,7 @@ class Session {
         // The swaps first: the pack has to have the room before the get is sent, or the
         // server refuses the pickup and we have thrown something away for nothing.
         for (const swap of overfarmPlan.swaps) {
-          if (!stationPickupAllowed(swap.take.id, swap.take.name)) continue;
+          if (!pickupAllowed(swap.take.id, swap.take.name)) continue;
           for (const giving of swap.drop) {
             // An explicit planned ID never falls back to a different same-name object.
             const inv = c.inventory || [];
@@ -5568,7 +5579,7 @@ class Session {
             if (!held) continue;
             let stationWithdrew = false;
             await this.pacer.submit('drop', () => {
-              if (!stationPickupAllowed(swap.take.id, swap.take.name)) { stationWithdrew = true; return; }
+              if (!pickupAllowed(swap.take.id, swap.take.name)) { stationWithdrew = true; return; }
               if ((c.equipment?.()?.equipped ?? []).some(e => e.id === held.id)) return;
               if ([...(this._overfarmKeepIds?.() ?? [])].some(id => Number(id) === Number(held.id))) return;
               if (typeof beforeMutation === 'function') beforeMutation('drop', { target_id: held.id });
@@ -5614,7 +5625,7 @@ class Session {
     for (const o of cands) {
       if (cancelled()) { wasCancelled = true; break; }
       const name = c.rsc.get(o.nameRsc);
-      if (!stationPickupAllowed(o.id, name)) continue;
+      if (!pickupAllowed(o.id, name)) continue;
       setIntentTarget(this,{kind:'pickup',object_id:o.id});
       const me = c.self;
       // UserGet measures MANHATTAN distance and refuses past 7, so only walk when
@@ -5640,7 +5651,7 @@ class Session {
       const before = c.evSeq;
       let sent = false;
       await this.pacer.submit('get', () => {
-        if (!stationPickupAllowed(o.id, name)) return;
+        if (!pickupAllowed(o.id, name)) return;
         if (typeof beforeMutation === 'function') beforeMutation('get', { target_id: o.id });
         sent = true;
         return c.get(o.id);

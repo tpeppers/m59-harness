@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { M59Client } from './m59-client.mjs';
+import { dibsVerdict, normalizeBook } from './m59-dibs.mjs';
 import { tryFarmFoodCache } from './m59-farm-food-cache.mjs';
 import { foodValue } from './m59-items.mjs';
 import { OF } from './m59-parse.mjs';
@@ -44,7 +45,8 @@ function fixture() {
     stomach: { roomFor: () => true }, larder: () => [], casterScene: () => ({ complete: true, casters: [] }),
     ledgerEvent: (event, value) => notes.push([event, value]),
   };
-  const run = (read = () => manifest) => tryFarmFoodCache(pilot, { read, now: () => now });
+  const run = (read = () => manifest, readClaims = () => ({ claims: [] })) =>
+    tryFarmFoodCache(pilot, { read, readClaims, now: () => now });
   return { c, s, pilot, v, manifest, pile, holder, sends, notes, run };
 }
 
@@ -114,4 +116,27 @@ test('an unconfirmed server pickup is neither counted nor immediately retried', 
   assert.equal(await f.run(), false);
   assert.deepEqual(f.sends, ['sent']);
   assert.deepEqual(f.notes, []);
+});
+
+test('ordinary loot respects the registered stash while one exact portion can be withdrawn', async () => {
+  const f = fixture();
+  const stash = { room: 552, item: 'loaf of bread', for: ['Statler'], source: 'floor-cache',
+    near: { row: f.holder.row, col: f.holder.col, radius: 3 } };
+  const book = normalizeBook({ claims: [stash] });
+  assert.equal(dibsVerdict({ book, room: 552, item: stash.item, at: f.pile, character: 'Bunsen', now }).allowed, false);
+  assert.equal(await f.run(undefined, () => book), true);
+  assert.equal(f.pile.amount, 19);
+
+  for (const unrelated of [
+    { ...stash, source: 'operator' },
+    { ...stash, for: ['Another keeper'] },
+    { ...stash, for: ['Statler', 'Another keeper'] },
+    { ...stash, near: { ...stash.near, row: stash.near.row + 1 } },
+    { ...stash, near: { ...stash.near, radius: 4 } },
+    { ...stash, near: undefined },
+  ]) {
+    const blocked = fixture();
+    assert.equal(await blocked.run(undefined, () => normalizeBook({ claims: [stash, unrelated] })), false);
+    assert.deepEqual(blocked.sends, []);
+  }
 });
