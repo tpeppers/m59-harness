@@ -11,6 +11,7 @@ import {lineOfSight} from './m59-safespots.mjs';
 import * as party from './m59-party.mjs';
 import {stationaryTradeActive} from './m59-stationary-trade.mjs';
 import {recordEvent} from './m59-ledger.mjs';
+import {SHORT_FIGHT_APPROACH_SQUARES} from './m59-skills.mjs';
 const base = fileURLToPath(new URL('../substrate/cooperative-logoff/', import.meta.url));
 const fold = x => String(x ?? '').trim().toLowerCase();
 const hash = x => createHash('sha256').update(x).digest('hex');
@@ -498,6 +499,10 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
   const offered=await configureCooperativeLogoff(pilot,'helper');if(!offered)return false;
   const {config}=offered,s=pilot.s,store=cooperativeStore(s);if(!store||!cooperativeHelperReady(pilot,config,{now:now()}))return false;
   const c=s.client,room=s.world.room.num;
+  const geometry = s.world.geometry;
+  const origin = room === 552 && pilot.policy?.molluskCoverRecovery === true &&
+    geometry?.collisionReady && Number.isInteger(geometry.security) && c.room.security === geometry.security
+    ? position(c.self) : null;
   const requests=store.list('request').filter(r=>r.state==='offline'&&now()-r.offline_at>=800&&now()-(r.last_attempt_at??0)>=2000&&r.room===room&&r.room_object===c.room.id&&r.helpers.includes(s.name)).sort((a,b)=>a.created_at-b.created_at);
   for(const request of requests){
     // Work on live targets while the absence observer collects proof for missing ones.
@@ -506,8 +511,13 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
       const receivedAt = receipt?.kind === 'gone' ? receipt.at : receipt?.hit_at;
       if (receipt && now() - receivedAt < 30000) return false;
       const object = c.room.objects.get(candidate.id);
-      return object && object.nameRsc === candidate.name_rsc && c.rsc.get(object.nameRsc) === candidate.name &&
-        (object.flags & OF.ATTACKABLE) && !(object.flags & OF.PLAYER);
+      if (!object || object.nameRsc !== candidate.name_rsc || c.rsc.get(object.nameRsc) !== candidate.name ||
+          !(object.flags & OF.ATTACKABLE) || (object.flags & OF.PLAYER)) return false;
+      const aim = origin && position(object);
+      // The one-swing fight declines a positive coarse approach beyond its short range.
+      // Leave the request unclaimed so a nearer helper can act, and preserve its fine-grid fallback.
+      return !(aim && Math.hypot(aim.row - origin.row, aim.col - origin.col) > SHORT_FIGHT_APPROACH_SQUARES &&
+        s.world.approachSquare?.(aim.col, aim.row)?.steps > 0);
     });
     if(!target)continue;
     const lock=store.lock(room,()=>{const r=store.read('request',request.agent);if(r?.id!==request.id||r.state!=='offline'||r.claim&&r.claim.until>now())return null;
@@ -543,7 +553,8 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
     }catch(e){pilot.note?.('cooperative distraction deferred',{request_id:request.id,why:e.message});}
     finally{active=false;if(pilot.doing==='fighting'&&!s.combat?.active)pilot.doing=previousDoing;
       store.lock(room,()=>{const r=store.read('request',request.agent);if(r?.id===request.id&&r.state==='offline'&&r.claim?.token===lock.token){delete r.claim;r.last_attempt_at=now();store.write('request',r.agent,r);}});}
-    pilot.note?.('cooperative distraction result',{request_id:request.id,target_id:target.id,landed_hits:result?.landed_hits??0});
+    pilot.note?.('cooperative distraction result',{request_id:request.id,target_id:target.id,landed_hits:result?.landed_hits??0,
+      reason:result?.reason??null,out_of_reach:result?.out_of_reach===true,approach_blocked:result?.approach_blocked===true});
     return true;
   }
   return false;

@@ -2754,6 +2754,7 @@ export function findCreature(s, needle, { attackableOnly = true, includePlayers 
 // a threshold, and stop rather than dying — but report everything, so the caller can
 // override next time.
 import {withIntent,setIntentTarget} from './m59-intent-observations.mjs';
+export const SHORT_FIGHT_APPROACH_SQUARES = 8;
 export function fight(s,options){return withIntent(s,null,()=>fightWithIntent(s,options));}
 async function fightWithIntent(s, {
   target,
@@ -2966,13 +2967,13 @@ async function fightWithIntent(s, {
     note:'walked one piece of the route toward the quarry; the next pass looks at the room again'});
   // Past 8 squares as well, detour or not: without a wall to hold (no chasePlan when holding) the old answer,
   // out_of_reach, always ended in closeOnQuarry walking the same plan one pass later.
-  if(chasePlan?.found&&localDistance>reach&&(chasePlan.detour||localDistance>8)){
+  if(chasePlan?.found&&localDistance>reach&&(chasePlan.detour||localDistance>SHORT_FIGHT_APPROACH_SQUARES)){
     const piece=await runChase(chasePlan);
     if(approachStopped(piece.walk))return approachFailure(piece.walk);
     if(!piece.in_reach)return chaseClosing(piece);
     chased=piece;
   }
-  const fineApproach=!chased&&!holdPosition&&localDistance<=8&&typeof s.walkToMeleeRange==='function';
+  const fineApproach=!chased&&!holdPosition&&localDistance<=SHORT_FIGHT_APPROACH_SQUARES&&typeof s.walkToMeleeRange==='function';
   const spot = (holdPosition || foeNearby || fineApproach || chased) ? null : s.world?.approachSquare?.(foe.col, foe.row);
   if(fineApproach){
     const walk=await s.walkToMeleeRange(foe.id,{reach,movementGeneration,controlToken});
@@ -3005,7 +3006,7 @@ async function fightWithIntent(s, {
     // grid uses diagonal movement and can report fewer steps than the
     // actual distance.
     const rawDist = meBefore && foe.col != null ? Math.hypot(foe.col - meBefore.col, foe.row - meBefore.row) : spot.steps;
-    if (spot.steps > 6 || rawDist > 8) {
+    if (spot.steps > 6 || rawDist > SHORT_FIGHT_APPROACH_SQUARES) {
       return { fought: false, out_of_reach: true, target: foeName,
                foe_id: foe.id, reason: `target ${rawDist.toFixed(0)} cells away — too far to approach this pass`,
                nearest: { distance: +rawDist.toFixed(1) }, log, note: 'the GOAP will travel closer on the next pass' };

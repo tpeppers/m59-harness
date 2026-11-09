@@ -304,6 +304,43 @@ try{
   console.log('PASS helpers defer during combat/danger/unfinished work; a submitted attack or miss never releases reconnect');
  }
  {
+  const f=fixture('distant-ocean-helper'), geometry={collisionReady:true,security:1416};
+  const close={id:41,nameRsc:'narthyl worm',flags:OF.ATTACKABLE,row:10,col:11,x:736,y:672};
+  for(const actor of [f.a,f.b]){
+   Object.assign(actor.s.world,{room:{num:552},geometry,approachSquare:()=>({steps:24})});
+   Object.assign(actor.c.room,{id:1416,security:geometry.security});
+   Object.assign(actor.c.self,{x:672,y:672});
+   Object.assign(actor.c.room.objects.get(40),{row:10,col:34,x:2208,y:672});
+   actor.c.room.objects.set(close.id,close);
+  }
+  f.b.pilot.policy={molluskCoverRecovery:true};
+  await f.setup();f.offline();
+  f.b.c.room.objects.delete(close.id);
+  const notes=[], hits=[];
+  f.b.pilot.note=(what,detail)=>notes.push({what,...detail});
+  f.b.pilot.fightNow=async opts=>{
+   hits.push(opts.exactTargetId);
+   return {target_id:opts.exactTargetId,out_of_reach:true,reason:'test refusal',landed_hits:0};
+  };
+  assert.equal(await cooperativeAssist(f.b.pilot),false,'a proved far approach does not claim this request');
+  assert.equal(f.store().read('request','victim').last_attempt_at,undefined,'another helper can still act now');
+  f.b.c.room.objects.set(close.id,close);
+  assert.equal(await cooperativeAssist(f.b.pilot),true);
+  assert.deepEqual(hits,[close.id],'the reachable second target is considered on the same pass');
+  const result=notes.findLast(n=>n.what==='cooperative distraction result');
+  assert.equal(result?.reason,'test refusal');
+  assert.equal(result?.out_of_reach,true);
+
+  const request=f.store().read('request','victim');
+  delete request.last_attempt_at;
+  f.store().write('request','victim',request);
+  f.b.c.room.objects.delete(close.id);
+  f.b.s.world.approachSquare=()=>null;
+  assert.equal(await cooperativeAssist(f.b.pilot),true,'without a coarse approach, preserve the existing fine-grid fallback');
+  assert.deepEqual(hits,[close.id,40]);
+  console.log('PASS a proved distant Ocean helper skips the shared claim, considers another target, and records refusals');
+ }
+ {
   const f=fixture('confirmed');let options;
   for(const actor of [f.a,f.b])actor.s.world.room.num=552;
   f.b.pilot.policy={molluskCoverRecovery:true};
