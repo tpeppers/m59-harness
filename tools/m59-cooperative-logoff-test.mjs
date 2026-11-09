@@ -128,6 +128,36 @@ try{
   console.log('PASS an opted-in Ocean requester can capture the observed rock thrower, with identity, range and LOS guards');
  }
  {
+  const f=fixture('ocean-passive-support');
+  for(const actor of [f.a,f.b]){
+   actor.s.world.room.num=552;
+   actor.pilot.policy={molluskCoverRecovery:true};
+  }
+  f.a.pilot.mode='idle';
+  for(const mode of ['idle','survive']){
+   f.b.pilot.mode=mode;
+   assert.equal(await f.setup(),null,'a passive witness cannot be the sole distraction helper');
+   assert.equal(f.store().read('presence','helper').enabled,false);
+   assert.equal(cooperativeHelperReady(f.b.pilot,policy),false);
+   assert.equal(cooperativeHelperReady(f.b.pilot,policy,{during:true}),false);
+  }
+  f.b.pilot.mode='farm';
+  assert.deepEqual((await f.setup())?.helpers,['helper'],'the idle supporter can still ask an active farmer for rescue');
+  f.offline();
+  f.b.pilot.mode='idle';
+  f.b.pilot.fightNow=()=>assert.fail('the former helper now holds a passive post');
+  assert.equal(await cooperativeAssist(f.b.pilot),false);
+  assert.equal(f.store().read('presence','helper').enabled,false,'a change in admission eligibility is published immediately');
+  f.b.c.room.objects.delete(40);
+  const observedAt=Date.now()+1000;
+  for(let t=observedAt;t<=observedAt+15000;t+=1000)publishCooperativePresence(f.b.pilot,{now:t});
+  assert.equal(f.store().read('request','victim').receipts[40]?.kind,'gone');
+  await cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{now:()=>observedAt+15100,
+   wait:async()=>assert.fail('a verified passive observation should release login')});
+  assert.equal(f.store().read('request','victim').state,'returning');
+  console.log('PASS opted-in Ocean support can request rescue and report gone targets without offering distraction attacks');
+ }
+ {
   const f=fixture('defer');await f.setup();f.offline();let calls=0;
   f.b.pilot.fightNow=async opts=>(calls++,{target_id:opts.exactTargetId,landed_hits:0});
   f.b.s.combat={active:{}};assert.equal(await cooperativeAssist(f.b.pilot),false);f.b.s.combat=null;
@@ -141,9 +171,14 @@ try{
   console.log('PASS helpers defer during combat/danger/unfinished work; a submitted attack or miss never releases reconnect');
  }
  {
-  const f=fixture('confirmed');await f.setup();f.offline();let options;
+  const f=fixture('confirmed');let options;
+  for(const actor of [f.a,f.b])actor.s.world.room.num=552;
+  f.b.pilot.policy={molluskCoverRecovery:true};
+  await f.setup();f.offline();
   f.b.pilot.fightNow=async o=>(options=o,{target_id:o.exactTargetId,landed_hits:1});
   assert(await cooperativeAssist(f.b.pilot));assert.equal(options.rounds,1);assert.equal(options.loot,false);assert.equal(options.exactTargetId,40);
+  f.b.pilot.mode='idle';publishCooperativePresence(f.b.pilot);
+  assert.equal(f.store().read('presence','helper').enabled,false);
   await cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{wait:async()=>assert.fail('a real hit should release immediately')});
   assert.equal(f.store().read('request','victim').state,'returning','login failure/restart must still revalidate the hit');
   const restarted={name:'victim',fleetStateFile:f.a.s.fleetStateFile,cooperativeLogoffDirectory:f.a.s.cooperativeLogoffDirectory,cooperativeRecordEvent:capture};
@@ -153,7 +188,7 @@ try{
   f.b.c.vitals=()=>({health:{value:100,max:100}});f.b.s._cooperativePublishedAt=0;publishCooperativePresence(f.b.pilot);
   await cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{wait:async()=>assert.fail('fresh living helper should qualify again')});
   cooperativeAfterLogin(f.a.s);assert.equal(f.store().read('request','victim').state,'resumed');
-  console.log('PASS confirmed exact-target hits release login, survive restart, and are rechecked if the helper dies before login');
+  console.log('PASS confirmed exact-target hits release login after a helper becomes passive, survive restart, and recheck helper health');
  }
  {
   const f=fixture('scope');await f.setup();f.offline();let queued;

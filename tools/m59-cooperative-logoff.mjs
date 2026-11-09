@@ -16,6 +16,8 @@ const fold = x => String(x ?? '').trim().toLowerCase();
 const hash = x => createHash('sha256').update(x).digest('hex');
 const read = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch (e) { if(e.code==='ENOENT')return null; throw e; } };
 const fresh = (p, now) => p && p.at <= now && now-p.at < 5000 && p.live && p.health?.value > 0;
+const passiveOceanSupport = pilot => pilot.s.world?.room?.num === 552 &&
+  pilot.policy?.molluskCoverRecovery === true && ['idle', 'survive'].includes(pilot.mode);
 const pending = r => r && ['preparing','offline','returning'].includes(r.state);
 const position = p => p && !p.predicted && [p.x,p.y,p.row,p.col].every(Number.isFinite)
   ? {x:p.x,y:p.y,row:p.row,col:p.col} : null;
@@ -97,12 +99,13 @@ export function normalizeCooperativeLogoff(answer) {
 export function publishCooperativePresence(pilot,{now=Date.now()}={}) {
   if(!pilot._cooperativeLogoffConfig)return false;
   const s=pilot.s,c=s.client,store=cooperativeStore(s);if(!store)return false;
-  if(now-(s._cooperativePublishedAt??0)<500)return false;
+  // Station holders and passive Ocean support still publish their observations.
+  const enabled=!passiveOceanSupport(pilot)&&!pilot.needleHere?.(s.world?.room?.num);
+  if(now-(s._cooperativePublishedAt??0)<500&&s._cooperativePublishedEnabled===enabled)return false;
   const p={at:now,agent:s.name,pid:process.pid,character:c?.me?.name??s.credentials?.character,
     live:!!s.live&&c?.combatReady===true,body:c?.selfId,room:s.world?.room?.num,room_object:c?.room?.id,
-    // A needle keeper in its needle's room is never a helper: a distraction walks it off its station.
-    health:c?.vitals?.()?.health??null,enabled:!pilot.needleHere?.(s.world?.room?.num)};
-  store.write('presence',s.name,p);s._cooperativePublishedAt=now;
+    health:c?.vitals?.()?.health??null,enabled};
+  store.write('presence',s.name,p);s._cooperativePublishedAt=now;s._cooperativePublishedEnabled=enabled;
   // Presence is published by the watchdog every 500ms whatever the keeper is doing, including
   // fighting, so the gone observation rides on it: a helper busy in combat still reports.
   try{observeCooperativeTargets(pilot,{now,store});}catch(e){pilot.note?.('cooperative target observation unavailable',{why:e.message});}
@@ -478,7 +481,7 @@ export function cooperativeAfterLogin(session) {
 export function cooperativeHelperReady(pilot,config,{now=Date.now(),during=false,requestId=null}={}) {
   const s=pilot.s,c=s.client,h=c?.vitals?.()?.health,v=c?.vitals?.()?.vigor;
   const movement=liveMoveOrder(s),ownApproach=during&&movement?.origin?.source==='keeper'&&movement.origin.name==='cooperative_distraction'&&movement.origin.run_id===requestId;
-  if(pilot.needleHere?.(s.world?.room?.num))return false;   // holding a needle slot (see publishCooperativePresence)
+  if(passiveOceanSupport(pilot)||pilot.needleHere?.(s.world?.room?.num))return false;
   if(!s.live||c?.combatReady!==true||!['farm','idle'].includes(pilot.mode)||pilot.stopping||pilot.inert||pilot.operatorSurvivalStandDown?.()||stationaryTradeActive(s)||s.combat?.active||s.job&&!s.job.done||
     movement&&!ownApproach||s._rite||pilot.checkFreeze?.()||pilot.keeperRecoveryTravel||s.keeperRecoveryTravel||
     isActiveRecoveryDecision(currentSurvivalDecision(s))||!(h?.max>0)||h.value/h.max<(during?pilot.safety?.().fleeAt??.9:config.helper_health)||
