@@ -5901,6 +5901,7 @@ class Session {
     // loop below reports one stable terminal result instead of walking the same boundary
     // again. Nothing here is persisted beyond this journey.
     const exhaustedHops = new Map();
+    let retriedDirectBodyBlock = false;
     // ONE DOOR PER JOURNEY. A room that needs its door opened needs it once; a second attempt
     // after the first failed is a five-second cycle spent on the same refusal, which is the
     // loop this whole change exists to end rather than to relocate.
@@ -6603,7 +6604,9 @@ class Session {
       // out to be in the gap between them, the fix is in the planner, not the legs.
       const walkBegan = Date.now();
       const leavingRoom = Number(this.world?.room?.num ?? NaN);
-      const leavingRoomId = this.client?.room?.id ?? null;
+      const leavingClient = this.client;
+      const leavingBody = leavingClient?.selfId;
+      const leavingRoomId = leavingClient?.room?.id ?? null;
       // A published room can blink for one observation. Stop source-room movement on the
       // first identity change, but count a hop only after an authoritative BP_PLAYER refresh
       // (or the stable-read fallback used by the lifted offline fixture) confirms it.
@@ -6999,6 +7002,37 @@ class Session {
         // Prose such as "no floor" can describe one transient walk and must keep the ordinary
         // stumble/retry behaviour below.
         const candidatesExhausted = r.outcome === 'exit_candidates_exhausted';
+        if (!retriedDirectBodyBlock && candidatesExhausted && r.blocked_by_bodies === true &&
+            r.tried?.length && exit.kind === 'edge' && leavingRoom === 544 && nextHop.to === 552 && toRoomNum === 552 &&
+            origin?.source === 'keeper' && ['hunt_relocation', 'station_return', 'station_approach'].includes(origin.name)) {
+          // A crowd at a nearby direct return edge can clear before a long detour would leave
+          // the room. Retry once with a fresh room view, using the ordinary crossing checks.
+          const canRetry = () => {
+            const me = this.client?.self;
+            const health = this.client?.vitals?.()?.health;
+            return leavingRoomId != null && leavingBody != null && this.client === leavingClient &&
+              leavingClient.selfId === leavingBody && leavingClient.room?.id === leavingRoomId &&
+              this.world?.room?.num === leavingRoom && me && !me.predicted && health?.value > 0 &&
+              health.value === health.max && this.damagedAt < walkBegan - 2500 &&
+              r.tried.every(t => t.stage === 'edge' && t.why === 'object_blocked' &&
+                t.crossing_packet_sent === false && t.stand_on &&
+                Math.max(Math.abs(me.row - t.stand_on.row), Math.abs(me.col - t.stand_on.col)) <= 2);
+          };
+          if (stumbles < maxStumbles && typeof this.confirmPosition === 'function' && canRetry()) {
+            retriedDirectBodyBlock = true;
+            const confirmed = await this.confirmPosition({ timeoutMs: 1200 }).catch(() => null);
+            if (this.movementWasCancelled(movementGeneration, controlToken)) return this.cancelledMovement({ log });
+            if (this.client !== leavingClient || leavingClient.selfId !== leavingBody)
+              return { arrived: false, log, reason: 'body changed while checking the occupied return edge' };
+            if (this.world?.room?.num !== leavingRoom || leavingClient.room?.id !== leavingRoomId) continue;
+            if (confirmed && !confirmed.predicted && canRetry()) {
+              stumbles++;
+              totalStumbles++;
+              log.push({ outcome: 'retry_occupied_return_edge', room: leavingRoom, to: nextHop.to });
+              continue;
+            }
+          }
+        }
         if (candidatesExhausted && nextHop.to != null && !exhaustedHops.has(nextHopKey)) {
           exhaustedHops.set(nextHopKey, {
             from: here.num, to: Number(nextHop.to), to_name: nextHop.to_name,

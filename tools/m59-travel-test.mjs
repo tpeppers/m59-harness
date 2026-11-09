@@ -654,6 +654,42 @@ for (const strict of [false, true]) {
 }
 
 
+// Janice's direct 544 -> 552 return was sent through Marion after a body held
+// three nearby variants of the same edge. Exercise the real route loop.
+{
+  for (const scenario of ['clears', 'stays', 'damage', 'sent', 'stale', 'cancelled', 'body changed', 'survival', 'other room']) {
+    const s = fakeSession({ rooms: [scenario === 'other room' ? 562 : 544, 552] });
+    const origin = { source: 'keeper', name: scenario === 'survival' ? 'survival_exit' : 'hunt_relocation' };
+    const tried = [{ row: 1, col: 23 }, { row: 1, col: 24 }, { row: 2, col: 23 }].map(stand_on => ({
+      stand_on, stage: 'edge', crossing_packet_sent: scenario === 'sent', why: 'object_blocked',
+    }));
+    s.client.self = { row: 1, col: 23, x: 1504, y: 96 };
+    s.client.selfId = 12;
+    s.client.vitals = () => ({ health: { value: 123, max: 123 } });
+    s.damagedAt = 0;
+    s.confirmPosition = async ({ timeoutMs }) => {
+      assert.equal(timeoutMs, 1200);
+      if (scenario === 'damage') s.damagedAt = Date.now();
+      if (scenario === 'cancelled') s.movementGeneration++;
+      if (scenario === 'body changed') s.client.selfId++;
+      return scenario === 'stale' ? null : s.client.self;
+    };
+    s.movementWasCancelled = generation => generation !== s.movementGeneration;
+    let batches = 0;
+    s.leaveViaAny = async () => {
+      if (++batches === 2 && scenario === 'clears') { s.at++; return { left: true }; }
+      return { left: false, blocked_by_bodies: true, outcome: 'exit_candidates_exhausted', reason: 'object_blocked', tried };
+    };
+    const r = await travel.call(s, 552, { origin });
+    const expected = ['clears', 'stays'].includes(scenario) ? 2 : 1;
+    ok(`occupied direct return (${scenario}) uses ${expected} normal exit batches`,
+      batches === expected && r.arrived === (scenario === 'clears'));
+    if (scenario === 'clears') ok('the freed direct hop is never banned', !r.log.some(e => e.blocked_hop));
+    if (scenario === 'stays') ok('a persistent body block falls through to the normal route logic',
+      r.blocked_hops?.includes('544>552'));
+  }
+}
+
 // ---------------------------------------------------------------------------
 console.log('THE ARRIVAL GUARD: ask whether we are there before reporting that we are not');
 {
