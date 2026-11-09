@@ -386,12 +386,13 @@ export class PassErrandPart {
     });
     try {
       const { s, hold } = this;
-      const me = s.client?.self;
-      // A quiet recovery stop in 544 is the last safe place before the Ocean.
-      // Keep the healing session's one logout available for the next fight.
+      const me = s.client?.self, room = s.world?.room?.num;
+      // Keep the recovery logout in reserve on the last approach and on the
+      // Deep Woods leg when the suspended journey is bound for the Ocean.
+      const oceanApproach = room === 544 || (room === 534 && journey?.to === 552);
       const preserveRecoveryLogoff = this.mode === 'farm' && this.policy.farmStrategy === 'great-ocean-marion' &&
-        this.policy.assignedRoom === 552 && s.world?.room?.num === 544 && hp === 1 &&
-        hold.room === 544 && hold.proven === true && !!me && !me.predicted && me.row === hold.row && me.col === hold.col &&
+        this.policy.assignedRoom === 552 && oceanApproach && hp === 1 &&
+        hold.room === room && hold.proven === true && !!me && !me.predicted && me.row === hold.row && me.col === hold.col &&
         !s.combat?.active && !this.playerThreatPresent() &&
         Date.now() - Math.max(s.damagedAt ?? 0, s.lastCombatLine?.at ?? 0) >= 6000;
       const left = await this.leaveHold('rested to the ceiling — back on the road', { force: true, preserveRecoveryLogoff });
