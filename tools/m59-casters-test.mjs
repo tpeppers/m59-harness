@@ -70,6 +70,59 @@ const hostile = names => names.map((n, i) => ({ id: 100 + i, nameRsc: n, flags: 
   const { k, travels } = keeper();
   ok('no caster: nothing to leave for', (await k.leaveForCasters({ hostiles: hostile(['peet-seeeep avar warrior']) })) === false && !travels.length);
 }
+
+console.log('healthy Great Ocean farmers can retain proved cover from a rock throw');
+{
+  const { loadMap, CHECKED_MAP_FILE } = await import('./m59-map.mjs');
+  const { sharedRoomGeometry } = await import('./m59-roo.mjs');
+  const { validateStrategy } = await import('./m59-strategy-schema.mjs');
+  const room = loadMap(CHECKED_MAP_FILE).rooms[552];
+  const geometry = sharedRoomGeometry(room);
+  const blocked = { row: 45, col: 65 };
+  const mollusk = (at = blocked) => ({ ...hostile(['mollusk creature'])[0], ...at });
+  const coastal = (args = {}) => {
+    const { hp = 112, at = { row: 45, col: 55 }, bodies = [mollusk()],
+      geo = geometry, damageAt = 0, enabled = true } = args;
+    const f = keeper({ hp, max: 121, hold: { ...at, room: 552 } });
+    const { k } = f;
+    Object.assign(k.s.world, { room, geometry: geo });
+    Object.assign(k.s.client, { self: at, room: { security: geometry.security,
+      objects: new Map(bodies.map(o => [o.id, o])) } });
+    k.policy.molluskCoverRecovery = enabled;
+    k.mode = 'farm';
+    k.s.damagedAt = damageAt;
+    return f;
+  };
+  const stay = async (label, f) => ok(label,
+    !(await f.k.leaveForCasters()) && f.travels.length === 0 && !!f.k.hold && !f.k._casterExitAt);
+  const leave = async (label, f) => ok(label,
+    (await f.k.leaveForCasters()) && f.travels[0]?.opts.casterExit === true && f.k.hold === null);
+  await stay('at the ten-square boundary, both geometry views block the rock throw', coastal());
+  await stay('outside ten squares, a possible line of sight is out of rock range',
+    coastal({ at: { row: 27, col: 1 }, bodies: [mollusk({ row: 27, col: 12 })] }));
+  await leave('at ten squares a rock may reach us when either server LOS view allows it',
+    coastal({ bodies: [mollusk({ row: 45, col: 45 })] }));
+  await leave('a true caster anywhere retains the original escape', coastal({ bodies: [mollusk(),
+    { ...hostile(['orc wizard'])[0], id: 101, row: 45, col: 66 }] }));
+  await leave('low current health retains the original escape', coastal({ hp: 90 }));
+  await leave('recent damage retains the original escape', coastal({ damageAt: Date.now() }));
+  await leave('missing geometry retains the original escape', coastal({ geo: null }));
+  await leave('an unconfirmed player position retains the original escape',
+    coastal({ at: { row: 45, col: 55, predicted: true } }));
+  await leave('an unknown caster position retains the original escape',
+    coastal({ bodies: [mollusk({ row: null, col: 65 })] }));
+  await leave('an unresolved hostile type does not prove cover from the entire scene', coastal({ bodies: [mollusk(),
+    { ...hostile(['unresolved hostile'])[0], id: 101, row: 45, col: 66 }] }));
+  await leave('the unchanged default evacuates even from locally blocked rocks', coastal({ enabled: false }));
+  const outside = coastal();
+  outside.k.s.world.room = { ...room, num: 562 };
+  await leave('the opt-in cannot change the rule outside 552', outside);
+  const spec = validateStrategy({ name: 'great-ocean', molluskCoverRecovery: true });
+  ok('the strategy opts in with a boolean, without changing protected recovery thresholds',
+    spec.ok && spec.strategy.desired.molluskCoverRecovery === true &&
+    !validateStrategy({ name: 'great-ocean', molluskCoverRecovery: 'true' }).ok &&
+    !validateStrategy({ name: 'great-ocean', restBelow: 0.2 }).ok);
+}
 {
   const { readToolSource } = await import('./autopilot/source.mjs');
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
@@ -79,7 +132,7 @@ const hostile = names => names.map((n, i) => ({ id: 100 + i, nameRsc: n, flags: 
   // confinement unless the room is banned or one of ours died to a player there within the PvP hold.
   ok('and the confinement gate lets the caster exit through, as a survival exit',
      /isSurvivalExit\(\{ origin: opts\?\.origin, casterExit: opts\?\.casterExit \}\)/.test(src)
-     && /&& !approachRoom && !survivalExitLeg\) \{/.test(src));
+     && /&& !approachRoom && !survivalExitLeg\b/.test(src));
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

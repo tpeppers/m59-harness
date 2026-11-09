@@ -2445,6 +2445,7 @@ export class Autopilot {
       secondWindFarming: 'off',
       // Relay-optimized farming uses free recovery before buying the rest of the vigor with food.
       relayBeforeRest: false,
+      molluskCoverRecovery: false,
       // CHASE ON FOOT (m59-chase.mjs): rank quarry by steps on foot and walk the planner's route to a quarry round a ledge.
       // OFF until a farm strategy asks (`chaseOnFoot`), for the same staged rollout. Off is origin/main's behaviour exactly.
       chaseOnFoot: false,

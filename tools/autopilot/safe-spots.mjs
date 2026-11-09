@@ -28,7 +28,7 @@ import { recordTactic } from '../m59-tactics.mjs';
 import { sameRoomIslandBridgePlan } from '../m59-world.mjs';
 import { claimExclusiveSpot, claimSpot, farmVigorWorkReady, healAllowOf, pct, releaseSpot, rememberSpotClaimPartner, REST_VIGOR_CAP, SPAWN_FILE, scriptedWalkDefersVigorRest, spotOccupancy, TRAVEL_FORWARD_BIAS, UNREACHABLE_SPOT_MS, vigorOf, vigorPct } from '../m59-autopilot.mjs';
 import { roomIsNoCombat, survivalOffOf } from '../m59-hazards.mjs';
-import { castersAmong, casterExit, isCasterClass } from '../m59-casters.mjs';
+import { castersAmong, casterExit, isCasterClass, mollusksBlockedAt } from '../m59-casters.mjs';
 import { creatureByName, loadSpawns } from '../m59-spawns.mjs';
 
 export class SafeSpotsPart {
@@ -573,13 +573,32 @@ export class SafeSpotsPart {
   // nearest reachable exit (a room in the confinement first, then one whose spawn list has no caster), with no logoff,
   // and the ordinary ladder shelters it on the far side. The exit is allowed outside the confinement: this is survival,
   // and a room that is casting at the body is not a place the confinement can have meant. Tried at most once a minute.
-  castersHere(hostiles = null) {
+  casterScene(hostiles = null) {
     const c = this.s?.client;
     const list = hostiles ?? [...(c?.room?.objects?.values?.() ?? [])].filter(o =>
       o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER));
     let spawns = null; try { spawns = loadSpawns(SPAWN_FILE); } catch {}
-    const classOf = name => (spawns ? creatureByName(spawns, name)?.cls ?? null : null);
-    return castersAmong(list.map(o => ({ id: o.id, name: c.rsc?.get?.(o.nameRsc) || o.name || '' })), classOf);
+    let complete = true;
+    const classOf = name => {
+      const cls = spawns ? creatureByName(spawns, name)?.cls ?? null : null;
+      if (!cls) complete = false;
+      return cls;
+    };
+    const casters = castersAmong(list.map(o => ({ id: o.id, name: c.rsc?.get?.(o.nameRsc) || o.name || '',
+      row: o.row, col: o.col, predicted: o.predicted })), classOf);
+    return { casters, complete };
+  }
+
+  canRecoverBehindMolluskCover(casters) {
+    const s = this.s, c = s.client, geo = s.world?.geometry, at = c?.self;
+    const hp = c?.vitals?.()?.health;
+    const floor = Math.max(0.9, this.policy.restBelow ?? 0.6, this.policy.fleeBelow ?? 0);
+    const hold = this.hold;
+    if (!(hp?.max > 0 && hp.value / hp.max >= floor) || this.recoverUntilWhole || !hold || hold.failures
+        || hold.room !== 552 || hold.row !== at?.row || hold.col !== at?.col
+        || !Number.isFinite(s.damagedAt) || Date.now() - s.damagedAt < 5000 || !Number.isInteger(geo?.security)
+        || c.room?.security !== geo.security) return false;
+    return mollusksBlockedAt(geo, at, casters) && !!this.currentRecoveryWall();
   }
   async leaveForCasters({ hostiles = null, v = null } = {}) {
     if (this.operatorSurvivalStandDown?.()) return false;
@@ -591,11 +610,16 @@ export class SafeSpotsPart {
     const full = hp?.max > 0 && hp.value >= hp.max;
     const resting = (!!this.hold && !full) || (hp?.max > 0 && hp.value / hp.max < (this.policy?.restBelow ?? 0.6));
     if (!resting) return false;
-    const casters = this.castersHere(hostiles);
+    const here = Number(this.s.world?.room?.num);
+    const checkCover = here === 552 && this.mode === 'farm' && this.policy?.molluskCoverRecovery === true;
+    const { casters, complete } = this.casterScene(checkCover ? null : hostiles);
     if (!casters.length) return false;
+    if (checkCover && complete) {
+      // An unavailable cover check leaves the ordinary caster response in charge.
+      try { if (this.canRecoverBehindMolluskCover(casters)) return false; } catch {}
+    }
     if (Date.now() - (this._casterExitAt ?? 0) < 60_000) return false;
     this._casterExitAt = Date.now();
-    const here = Number(this.s.world?.room?.num);
     let exits = [];
     try { exits = this.s.world?.exits?.() ?? []; } catch {}
     let spawns = null; try { spawns = loadSpawns(SPAWN_FILE); } catch {}
@@ -603,7 +627,8 @@ export class SafeSpotsPart {
     const exit = casterExit(exits, { here, from: this.s.client?.self, confine: this.policy?.confineRooms ?? null, roomHasCaster });
     this.note('a caster is in the room: no spot here holds, leaving', {
       casters: casters.map(x => x.name), room: here, health: hp?.value ?? null, to: exit?.to ?? null,
-      why: 'monsters cast during the chase with no range or sight check (monster.kod MonsterCanCastSpell)' });
+      why: checkCover ? 'current health and threats did not establish a safe hold against the casters'
+        : 'monsters cast during the chase with no range or sight check (monster.kod MonsterCanCastSpell)' });
     if (!exit) { this.note('no reachable exit to leave the casters by', { room: here }); return false; }
     if (this.hold) this.releaseHold?.('a caster is in the room');
     const r = await this.travel(Number(exit.to), { origin: keeperOrigin('caster_exit'), casterExit: true, recoveryDetour: true, maxHops: 2 })

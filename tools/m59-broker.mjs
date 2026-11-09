@@ -12765,6 +12765,8 @@ const TOOLS = [
       travel_hunt: { description: 'HUNT ON THE ROAD (m59-travel-hunt.mjs): true | false | { reach, maxThreats, maxPerJourney, ' +
         'cooldownS, skipRooms, origins }. On the keeper own work journeys, fight in-band monsters within reach, then walk on; ' +
         'never on another issuer order, never below the flee line. Default off' },
+      mollusk_cover_recovery: { type: 'boolean', description: 'In 552 only, allow a healthy farmer to keep a verified wall ' +
+        'when every visible caster is a mollusk and its rock throw cannot reach the wall. Default off' },
       cook_food: { description: 'COOK FROM THE ROAD (m59-cook-food.mjs): true | false | { first, reserveCasts }. Cast create food ' +
         'from carried elderberry and herbs before eating carried food while below the vigor ceiling. Default off' },
       second_wind_farming: { description: 'SECOND WIND FARMING (m59-second-wind.mjs): "off" (default), "auto", "on"/true, "off"/false, or ' +
@@ -13875,6 +13877,8 @@ const TOOLS = [
         try { p.policy.travelHunt = normalizeTravelHunt(a.travel_hunt); }
         catch (e) { return { started: false, reason: `travel_hunt refused: ${e.message}`, note: 'nothing was changed' }; }
       }
+      if (a.mollusk_cover_recovery !== undefined)
+        p.policy.molluskCoverRecovery = a.mollusk_cover_recovery === true;
       if (a.cook_food !== undefined) {
         try { p.policy.cookFood = normalizeCookFood(a.cook_food); }
         catch (e) { return { started: false, reason: `cook_food refused: ${e.message}`, note: 'nothing was changed' }; }

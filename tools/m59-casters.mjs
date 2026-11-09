@@ -5,6 +5,7 @@
 // calls MonsterCastSpell exactly when the monster cannot get to its target -- which is what a safe spot arranges -- and
 // MonsterCanCastSpell checks only AI_NOFIGHT: no range, no line of sight. The avar shaman (avshaman.kod) also raises its
 // attack range to 5 and keeps 6-12 squares off, and its spells are Hold, Mana Bomb, Sandstorm, Shatter and Earthquake.
+// A mollusk's override throws a rock only within ten squares and with line of sight (mollusk.kod:228-238).
 //
 // Prod 2026-10-27, Lew (t20), room 2133 r57c7: relogged at 52/90 onto a "proven" spot with avar warriors adjacent and a
 // shaman and a chieftain in the room, 43/90 thirty seconds later; the one-logoff rule held him there. Operator, the same
@@ -12,6 +13,8 @@
 //
 // The classes are every monster whose kod overrides MonsterCastSpell (towns/ and the battler tree, M59_ROOT kod).
 // Pure.
+
+import { lineOfSight } from './m59-safespots.mjs';
 export const CASTER_CLASSES = Object.freeze(new Set([
   'AvarShaman', 'AvarChieftain', 'DarkAngel', 'OrcWizard', 'Ent', 'EvilEnt', 'Ghost', 'Yeti',
   'MolluskMonster', 'Iceperson', 'Xeochicatl',
@@ -26,6 +29,24 @@ export const isCasterClass = cls => CASTER_CLASSES.has(String(cls ?? ''));
  */
 export function castersAmong(monsters = [], classOf = () => null) {
   return monsters.filter(m => isCasterClass(classOf(m?.name)));
+}
+
+/** Prove that every observed caster here is a mollusk whose rock cannot reach this square. */
+export function mollusksBlockedAt(geo, at, casters) {
+  const squares = geo?.rows * geo?.cols;
+  if (!geo?.collisionReady || typeof geo.inBounds !== 'function' || typeof geo.canMove !== 'function'
+      || geo.grid?.length !== squares || geo.monsterGrid?.length !== squares)
+    return false;
+  const knownSquare = p => !p?.predicted && Number.isSafeInteger(p?.row) && Number.isSafeInteger(p?.col)
+    && geo.inBounds(p.row, p.col);
+  if (!knownSquare(at) || !casters.length) return false;
+  return casters.every(c => {
+    if (c.name?.toLowerCase() !== 'mollusk creature' || !knownSquare(c)) return false;
+    if ((at.row - c.row) ** 2 + (at.col - c.col) ** 2 > 100) return true;
+    // GetLOS is a server setting. Require both grids to block the attacker-to-player line.
+    return !lineOfSight(geo, c.row, c.col, at.row, at.col)
+      && !lineOfSight(geo, c.row, c.col, at.row, at.col, { fine: true });
+  });
 }
 
 /**

@@ -265,6 +265,9 @@ export const STRATEGY_FIELDS = Object.freeze([
   // walk on. Never on anybody else's order, never below the flee line, never opening a fight below the engage line. WHAT
   // to fight, so `work`; the survival ladder is untouched. Operator 2026-11-07: "clear monsters they come across".
   { path: 'travelHunt', keys: ['travelHunt'], faculty: 'work', arg: 'travel_hunt', normalize: v => normalizeTravelHunt(v) },
+  // At a held wall in 552, prove whether a mollusk can reach us with its rock throw.
+  { path: 'molluskCoverRecovery', keys: ['molluskCoverRecovery'], faculty: 'work', arg: 'mollusk_cover_recovery',
+    normalize: bool('molluskCoverRecovery') },
   // THE GUILD RENT (m59-tithe.mjs): a daily amount, or { dailyAmount }. Paid to Frular (700) from verified town-sale
   // proceeds only, at most that much a day per character (guildTitheFromSale). The broker's guild_tithe, from a strategy.
   // Operator 2026-11-07, the Farol farmers: "set them to tithe for the guild rent".
