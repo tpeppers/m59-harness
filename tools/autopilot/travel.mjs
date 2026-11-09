@@ -1013,8 +1013,11 @@ export class TravelPart {
     // healthy watchdog (which stands down for its driver) records a wedge.
     // Recover only at this same owner's next routing attempt, never by
     // interrupting its active job, admission wait or cast from the tick loop.
+    const directOceanCasterExit = opts?.provedOceanCasterExit === true && opts?.casterExit === true &&
+      capturedTravelOrigin?.source === 'keeper' && capturedTravelOrigin.name === 'caster_exit' &&
+      this.s.world?.room?.num === 552 && Number(room) === 562 && survivalExitLeg;
     const trafficOwner=originLabel(capturedTravelOrigin??moveOrigin(null));
-    const trafficAdvice=trafficBlinkAdvice(this.trafficJam,{place:this.wedgePlace?.(),to:room,owner:trafficOwner});
+    const trafficAdvice=directOceanCasterExit ? null : trafficBlinkAdvice(this.trafficJam,{place:this.wedgePlace?.(),to:room,owner:trafficOwner});
     if(trafficAdvice){
       const blinked=await this.wedgeBlink(trafficAdvice).catch(e=>({moved:false,why:e.message}));
       if(this.s.movementWasCancelled?.(movementGeneration))return {arrived:false,cancelled:true,reason:'travel cancelled during traffic recovery'};
@@ -1025,11 +1028,13 @@ export class TravelPart {
         this.note('blinked past repeated body traffic',{to:Number(room),attempts:trafficAdvice.repeats,from:{room:trafficAdvice.room,row:trafficAdvice.row,col:trafficAdvice.col},landed:blinked.to});
       }
     }
-    const wedge = await this.answerWedge(Number(room)).catch(e => {
+    // The short east route was already proved from this body. An ordinary wedge
+    // detour here delayed Lew's first recovery move for nearly thirteen seconds.
+    const wedge = directOceanCasterExit ? null : await this.answerWedge(Number(room)).catch(e => {
       this.note('wedge check failed', { why: e.message }); return null;
     });
     if(wedge?.cancelled||this.s.movementWasCancelled?.(movementGeneration))return {arrived:false,cancelled:true,reason:'travel cancelled during wedge recovery'};
-    const askedByWatchdog = !!(this.crowdExit && Date.now() - this.crowdExit.at < 60_000
+    const askedByWatchdog = !directOceanCasterExit && !!(this.crowdExit && Date.now() - this.crowdExit.at < 60_000
                                && Number(this.crowdExit.room) === Number(this.s.world?.room?.num));
     if (askedByWatchdog) this.crowdExit = null;
     if (wedge?.refused || askedByWatchdog) {

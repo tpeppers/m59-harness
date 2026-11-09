@@ -120,6 +120,50 @@ const crossedNorth = packets => packets.some(p => p.y < 64);
 // Under the north door at r2c13 (kod 880,160): the agent's control walks this to the crossing when unconfined.
 const DOOR = [880, 160];
 
+test('Lew’s ranged exposure selects the short caster exit only with live proof', { skip }, async () => {
+  for (const situation of ['recent', 'stale', 'predicted', 'wrong body', 'melee only']) {
+    const confineRooms = [552, 544, 534, 200, 201, 202, 205];
+    const { s, c } = walker(552, 4656, 557, confineRooms);
+    c.combatReady = true;
+    c.self.predicted = situation === 'predicted';
+    c.vitals = () => ({ health: { value: 59, max: 121 } });
+    const bodies = situation === 'melee only' ? [[13291, 7, 72]] : [[13178, 13, 71], [13102, 14, 70], [13317, 17, 69]];
+    const casters = bodies.map(([id, row, col]) => ({ id, row, col, x: col * 64 + 32, y: row * 64 + 32,
+      name: 'mollusk creature', nameRsc: 8, flags: 9 }));
+    c.rsc.set(8, 'mollusk creature');
+    for (const caster of casters) c.room.objects.set(caster.id, caster);
+    s.lastFleetDamage = { client: c, bodyId: situation === 'wrong body' ? 2 : 1, roomId: c.room.id,
+      at: Date.now() - (situation === 'stale' ? 6000 : 50) };
+    const moves = [];
+    const k = Object.assign(Object.create(Autopilot.prototype), { s, mode: 'farm',
+      policy: { assignedRoom: 552, molluskCoverRecovery: true, confineRooms },
+      operatorSurvivalStandDown: () => false, casterScene: () => ({ casters, complete: true }), note() {},
+      async travel(to, opts) { moves.push([to, opts]); return { arrived: true }; } });
+    assert.equal(await k.leaveForCasters(), true);
+    const [[to, opts]] = moves;
+    assert.equal(to, situation === 'recent' ? 562 : 544, situation);
+    assert.equal(opts.provedOceanCasterExit, situation === 'recent' ? true : undefined, situation);
+    assert.equal(opts.maxHops, situation === 'recent' ? 1 : 2, situation);
+  }
+});
+
+test('a proved Ocean caster exit bypasses departure wedge recovery but an ordinary one checks it', { skip }, async () => {
+  for (const proved of [false, true]) {
+    const confineRooms = [552, 544, 534];
+    const { s } = walker(552, 4656, 557, confineRooms);
+    let wedgeChecks = 0, reachedNormalGuard = false;
+    const k = Object.assign(Object.create(Autopilot.prototype), { s, mode: 'farm',
+      policy: { assignedRoom: 552, molluskCoverRecovery: true, confineRooms }, note() {},
+      async answerWedge() { wedgeChecks++; return { cancelled: true }; },
+      async restBeforeSettingOut() { reachedNormalGuard = true; s.movementGeneration++; } });
+    const out = await k.travel(562, { origin: { source: 'keeper', name: 'caster_exit' }, casterExit: true,
+      provedOceanCasterExit: proved, deskRide: false, maxHops: 1 });
+    assert.equal(out.cancelled, true);
+    assert.equal(wedgeChecks, proved ? 0 : 1);
+    assert.equal(reachedNormalGuard, proved);
+  }
+});
+
 test('Kermit’s spent-session recovery uses the proved shorter Ocean edge when permitted', { skip }, async () => {
   for (const situation of ['clear', 'unverified', 'occupied', 'predicted', 'banned', 'recent PvP']) {
     const confineRooms = [552, 544, 534, 200, 201, 202, 205];

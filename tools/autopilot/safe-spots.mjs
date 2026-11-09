@@ -14,10 +14,12 @@
 //   continueSurvivalDecision, continueSurvivalDecisionStep, leaveRoomForRecovery, blinkPastSurvivalJam,
 //   takeRecoverySpot, watchRecoveryApproach, takeSafeSpotObserved
 import { noteHealingRecovery, spentSessionExit } from '../m59-healing-session.mjs';
+import { oceanRockThreats } from '../m59-cooperative-logoff.mjs';
 import { keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import { affordableHeal, castRecoveryHeal } from '../m59-recovery-heal.mjs';
 import { REFUGE_NO_PROGRESS_REASON, REFUGE_PROGRESS_MS, isStalledRefugeRetry, observeRefugeProgress, recoveryOccupiedSquares, recoveryRefugeReach, recoveryUnderPressure } from '../m59-recovery-refuge.mjs';
+import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
 import { activeRoutes, anchorFor } from '../m59-routes.mjs';
 import { coarseCombatReachFrom } from '../m59-safespots.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -32,6 +34,26 @@ import { claimExclusiveSpot, claimSpot, farmVigorWorkReady, healAllowOf, pct, re
 import { roomIsNoCombat, survivalOffOf } from '../m59-hazards.mjs';
 import { castersAmong, casterExit, isCasterClass, mollusksBlockedAt } from '../m59-casters.mjs';
 import { creatureByName, loadSpawns } from '../m59-spawns.mjs';
+
+function shorterOceanRecoveryExit(pilot, exits, fallback) {
+  const { s, policy } = pilot;
+  const client = s.client, from = client?.self, geo = s.world?.geometry;
+  if (fallback?.to !== 544 || !Number.isFinite(fallback.steps_away) || pilot.mode !== 'farm' ||
+      !pilot.oceanRangedRecoveryEnabled() || policy.assignedRoom !== 552 || !from || from.predicted ||
+      !client.room?.objects || !Number.isInteger(geo?.security) || client.room.security !== geo.security) return null;
+  // Kermit's recovery took the 61-step southern approach. The eastern edge
+  // was 18 steps away and can use the existing one-hop survival exception.
+  const east = exits.find(e => e?.kind === 'edge' && e.to === 562 && e.reachable === true && e.verified === true &&
+    e.stand_on && e.edge_target && Number.isFinite(e.steps_away) && e.steps_away * 2 <= fallback.steps_away);
+  if (!east || !survivalEdgeVerdict({ to: east.to, policy,
+    pvpRooms: recentPvpDeathRooms({ withinMs: pvpWindowMs(policy) }) }).allowed) return null;
+  const { col, row } = east.stand_on;
+  const reach = recoveryRefugeReach(geo, from, client.room.objects, client.selfId, client.playersOnline)(col, row);
+  if (!reach.reachable || !Number.isFinite(reach.steps) || reach.steps * 2 > fallback.steps_away) return null;
+  pilot.note('using the shorter proved Ocean recovery exit', { room: 552, to: east.to, steps: reach.steps,
+    original_to: fallback.to, original_steps: fallback.steps_away });
+  return east;
+}
 
 export class SafeSpotsPart {
   // @part 1
@@ -554,27 +576,8 @@ export class SafeSpotsPart {
     this._spentExitTried={room,at:Date.now()};
     let exits=[];try{exits=s.world?.exits?.()??[];}catch{exits=[];}
     const confine=Array.isArray(this.policy?.confineRooms)&&this.policy.confineRooms.length?this.policy.confineRooms:null;
-    let exit=spentSessionExit(exits,{here:room,confine});
-    const client=s.client, from=client?.self, geo=s.world?.geometry;
-    if (exit?.to === 544 && Number.isFinite(exit.steps_away) && this.mode === 'farm' &&
-        this.oceanRangedRecoveryEnabled() && this.policy.assignedRoom === 552 &&
-        from && !from.predicted && client.room?.objects && Number.isInteger(geo?.security) &&
-        client.room.security === geo.security) {
-      // Kermit's spent-session exit sent him 61 steps across the Ocean. The eastern
-      // edge was reachable in 18, and the one-hop survival exception already permits it.
-      const east=exits.find(e => e?.kind === 'edge' && e.to === 562 && e.reachable === true && e.verified === true &&
-        e.stand_on && e.edge_target && Number.isFinite(e.steps_away) && e.steps_away * 2 <= exit.steps_away);
-      if (east && survivalEdgeVerdict({ to: east.to, policy: this.policy,
-        pvpRooms: recentPvpDeathRooms({ withinMs: pvpWindowMs(this.policy) }) }).allowed) {
-        const { col, row }=east.stand_on;
-        const reach=recoveryRefugeReach(geo,from,client.room.objects,client.selfId,client.playersOnline)(col,row);
-        if (reach.reachable && Number.isFinite(reach.steps) && reach.steps * 2 <= exit.steps_away) {
-          this.note('using the shorter proved Ocean recovery exit', { room, to: east.to, steps: reach.steps,
-            original_to: exit.to, original_steps: exit.steps_away });
-          exit=east;
-        }
-      }
-    }
+    const fallback=spentSessionExit(exits,{here:room,confine});
+    const exit=shorterOceanRecoveryExit(this,exits,fallback) ?? fallback;
     const hp=s.client?.vitals?.()?.health;
     if(!exit) {
       const why=confine?'no reachable exit into the confinement':'no reachable exit';
@@ -703,14 +706,25 @@ export class SafeSpotsPart {
     try { exits = this.s.world?.exits?.() ?? []; } catch {}
     let spawns = null; try { spawns = loadSpawns(SPAWN_FILE); } catch {}
     const roomHasCaster = n => (spawns?.rooms?.[n] ?? []).some(x => isCasterClass(x?.cls ?? creatureByName(spawns, x?.name ?? x)?.cls));
-    const exit = casterExit(exits, { here, from: this.s.client?.self, confine: this.policy?.confineRooms ?? null, roomHasCaster });
+    const s = this.s, client = s.client;
+    const fallback = casterExit(exits, { here, from: client?.self, confine: this.policy?.confineRooms ?? null, roomHasCaster });
+    const damage = s.lastFleetDamage, age = Date.now() - (damage?.at ?? 0);
+    const liveHealth = client?.vitals?.()?.health;
+    const east = checkCover && complete && liveHealth?.value > 0 && liveHealth.value / liveHealth.max < (this.policy.restBelow ?? 0.6) &&
+      client.room?.objects && damage?.client === client && damage.bodyId === client.selfId && damage.roomId === client.room.id &&
+      age >= 0 && age < 5000 && !continuingProvenRefugeLeg(s) &&
+      oceanRockThreats(this, [...client.room.objects.values()], { outsideMelee: true }).length
+      ? shorterOceanRecoveryExit(this, exits, fallback) : null;
+    const exit = east ?? fallback;
     this.note('a caster is in the room: no spot here holds, leaving', {
       casters: casters.map(x => x.name), room: here, health: hp?.value ?? null, to: exit?.to ?? null,
       why: checkCover ? 'current health and threats did not establish a safe hold against the casters'
         : 'monsters cast during the chase with no range or sight check (monster.kod MonsterCanCastSpell)' });
     if (!exit) { this.note('no reachable exit to leave the casters by', { room: here }); return false; }
     if (this.hold) this.releaseHold?.('a caster is in the room');
-    const r = await this.travel(Number(exit.to), { origin: keeperOrigin('caster_exit'), casterExit: true, recoveryDetour: true, maxHops: 2 })
+    const r = await this.travel(Number(exit.to), { origin: keeperOrigin('caster_exit'), casterExit: true,
+      recoveryDetour: true, maxHops: east ? 1 : 2,
+      ...(east ? { provedOceanCasterExit: true, deskRide: false, allowRescue: false } : {}) })
       .catch(e => ({ arrived: false, reason: e.message }));
     if (!r?.arrived) this.note('could not leave the casters', { to: exit.to, why: r?.reason ?? r?.why ?? null });
     return !!r?.arrived || !!r?.cancelled;
