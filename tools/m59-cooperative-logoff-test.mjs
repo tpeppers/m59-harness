@@ -164,10 +164,19 @@ try{
     pass:()=>Autopilot.prototype.passFleeAndRest.call(pilot,{s,c,room,v:c.vitals(),hp:hp/100}) };
   };
   const mixed=await setup('early-ocean-mixed');
+  const { pilot: mixedPilot, c: mixedClient, s: mixedSession } = mixed.a;
+  mixedPilot.inReachOfUs=()=>[mixed.melee,mixed.melee];
+  const distant={...mixed.rock,id:11850,row:56,col:33,x:2135,y:3627};
+  mixedClient.room.objects.set(distant.id,distant);
+  const ask=mixedSession._askStrategies;
+  let mixedContext;
+  mixedSession._askStrategies=(hook,ctx)=>{mixedContext=ctx;return ask(hook,ctx);};
   await configureCooperativeLogoff(mixed.b.pilot,'helper');
   await mixed.pass();
   assert.deepEqual(mixed.counts(),{exits:0,rejoins:1});
-  assert.deepEqual(mixed.store().read('request',mixed.a.s.name).targets.map(t=>t.id),[mixed.melee.id]);
+  const mixedIds=[mixed.melee.id,mixed.rock.id];
+  assert.deepEqual(mixedContext.monsters.map(t=>t.id),mixedIds);
+  assert.deepEqual(mixed.store().read('request',mixed.a.s.name).targets.map(t=>t.id),mixedIds);
   const ranged=await setup('early-ocean-ranged');
   ranged.a.c.room.objects.delete(ranged.melee.id);
   await configureCooperativeLogoff(ranged.b.pilot,'helper');
@@ -182,6 +191,9 @@ try{
    ['proved-wall',f=>{f.a.pilot.currentRecoveryWall=()=>true;}],
    ['budget-spent',f=>noteLogoff(f.a.s.name)],
    ['only-melee',f=>f.a.c.room.objects.delete(f.rock.id)],
+   ['over-target-cap',f=>{
+    for(let id=100;id<115;id++)f.a.c.room.objects.set(id,{...f.rock,id});
+   }],
    ['async-pose-changed',f=>{f.a.s._askStrategies=async()=>{f.a.c.self.predicted=true;return {strategy:'fixture-private',answer:policy};};}],
   ]) {
    const f=await setup('early-ocean-'+label);

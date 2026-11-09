@@ -165,12 +165,15 @@ export function observeCooperativeTargets(pilot,{now=Date.now(),store=cooperativ
   for(const key of [...seen.keys()])if(!live.has(key))seen.delete(key);
   return wrote;
 }
-export async function configureCooperativeLogoff(pilot,phase) {
+export async function configureCooperativeLogoff(pilot,phase,{ includeOceanRanged = false } = {}) {
   const s=pilot.s;if(typeof s._askStrategies!=='function')return null;
   const c=s.client,objects=[...(c?.room?.objects?.values?.()??[])];
   const fleetmates=objects.filter(o=>o.id!==c?.selfId&&(o.flags&OF.PLAYER)&&party.isFleetmate(c.rsc?.get(o.nameRsc)));
   let monsters=(pilot.inReachOfUs?.()??[]).filter(o=>(o.flags&OF.ATTACKABLE)&&!(o.flags&OF.PLAYER));
-  if (phase === 'request' && monsters.length === 0) monsters = oceanRockThreats(pilot, objects);
+  if (phase === 'request' && includeOceanRanged) {
+    const ranged = oceanRockThreats(pilot, objects, { outsideMelee: true });
+    monsters = [...new Map([...monsters, ...ranged].map(body => [body.id, body])).values()];
+  } else if (phase === 'request' && monsters.length === 0) monsters = oceanRockThreats(pilot, objects);
   const ctx={phase,agent:s.name,room:s.world?.room?.num,at_safe_spot:!!pilot.currentRecoveryWall?.(),
     fleetmates:fleetmates.map(o=>({id:o.id,character:c.rsc.get(o.nameRsc)})),monsters:monsters.map(o=>({id:o.id,name:c.rsc.get(o.nameRsc)}))};
   const got=await s._askStrategies('cooperativeLogoff',ctx);

@@ -137,14 +137,14 @@ export class CooperativePart {
     const decision = chooseSurvivalDecision(s, { strategy: 'logoff_open', reason: why,
       reason_code: 'ocean_ranged_escape', status: 'pending' });
     try {
-      return await this.fleetLogoff(why, { afterRecovery, guard: liveThreat });
+      return await this.fleetLogoff(why, { afterRecovery, guard: liveThreat, includeOceanRanged: true });
     } finally {
       if (currentSurvivalDecision(s)?.id === decision.id)
         finishSurvivalDecision(s, decision.id, 'refused', 'no cooperative rescue admitted before caster exit');
     }
   }
 
-  async fleetLogoff(why, { afterRecovery = false, guard = null } = {}) {
+  async fleetLogoff(why, { afterRecovery = false, guard = null, includeOceanRanged = false } = {}) {
     // A NEEDLE KEEPER DOES NOT LOG OFF FOR A DISTRACTION (live 2026-11-06: Camilla went NOT IN GAME at 23:30:44Z and
     // 23:42:08Z, "rejoin: cooperative logoff: wait for distraction", from a threat-0 archer station). Its square is one no
     // monster in reach can see; it stays in the game and the rest of the ladder decides.
@@ -166,7 +166,7 @@ export class CooperativePart {
     };
     const guarded = afterRecovery || guard !== null;
     if(guarded && !eligible())return false;
-    const offered=await configureCooperativeLogoff(this,'request');
+    const offered=await configureCooperativeLogoff(this,'request',{ includeOceanRanged });
     const request=offered&&(!guarded||eligible())&&requestCooperativeLogoff(this,offered);
     if(!request)return false;
     if(guarded)this.suspendJourney(why);
@@ -220,6 +220,22 @@ export class CooperativePart {
   async playDead(why) {
     if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
     if(this.operatorSurvivalStandDown())return false;
+    const s = this.s, c = s.client, health = c?.vitals?.()?.health;
+    if (this.mode === 'farm' && this.oceanRangedRecoveryEnabled() && health?.max > 0 && health.value === health.max) {
+      const decision = currentSurvivalDecision(s);
+      const failedApproach = decision?.status === 'pending' && decision.reason === why &&
+        ['approach_interrupted', 'fallback_shelter', 'sheltered_replacement'].includes(decision.reason_code);
+      if (failedApproach) {
+        const hit = s.lastFleetDamage, age = Date.now() - hit?.at;
+        const recent = hit?.client === c && hit.bodyId === c.selfId && hit.roomId === c.room?.id &&
+          age >= 0 && age < LOGOFF_UNDER_ATTACK_MS;
+        // A failed approach is not an attack. Leave the pending decision for the dispatcher to retire and fall through.
+        if (!recent) {
+          this.note('Ocean path failure did not spend a logoff at full health', { why, health: health.value });
+          return false;
+        }
+      }
+    }
     // ONE LOGOFF PER HEALING SESSION (m59-healing-session.mjs). Operator, 2026-10-27: "it should only ever do the play-dead
     // log-to-lose-aggro code once per healing session on a single safe spot until healed full". Any cause. After the one
     // logoff, the body keeps its spot and heals: a second logoff here (a poison tick re-armed it on every tick) only adds
@@ -267,7 +283,7 @@ export class CooperativePart {
       this._oneLogoffSaid=false;
     }
     this.suspendJourney(why);
-    const s=this.s,atWall=this.adoptRecoveryWall();
+    const atWall=this.adoptRecoveryWall();
     // THE OPEN FREEZE IS REFUSED AGAINST MONSTERS. Operator, 2026-09-18: "the open freeze
     // should be removed as a tactic or only ever done in PvP, it will not save you from
     // monsters."

@@ -25,7 +25,7 @@
 
 import { Autopilot } from './m59-autopilot.mjs';
 import { OF } from './m59-parse.mjs';
-import { currentSurvivalDecision } from './m59-survival-decision.mjs';
+import { chooseSurvivalDecision, currentSurvivalDecision } from './m59-survival-decision.mjs';
 
 let passed = 0, failed = 0;
 const ok = (what, cond, extra = '') => {
@@ -146,6 +146,51 @@ console.log('\nplayers and PvP are untouched');
   const pvp = keeper({ hp: 75, max: 75 });
   pvp.s.combat = { active: { pvp: true }, tick: async () => {} };
   ok('active PvP combat short-circuits as before', (await pvp.playDead('pvp')) === true && pvp.loggedOff === 0);
+}
+
+console.log('\nfull-health Great Ocean path failures preserve the emergency logoff');
+{
+  const fixture = ({ hp = 122, room = 552, why = 'ran out of steps', atWall = false } = {}) => {
+    const k = keeper({ hp, max: 122, atWall });
+    const s = k.s, c = s.client;
+    k.mode = 'farm';
+    k.policy.molluskCoverRecovery = true;
+    s.world.room.num = room;
+    c.room.id = 1416;
+    k.currentRecoveryWall = () => atWall;
+    k.fleetLogoff = async () => { k.loggedOff++; return true; };
+    const d = chooseSurvivalDecision(s, { strategy: atWall ? 'logoff_safe' : 'logoff_open', reason: why,
+      reason_code: atWall ? 'sheltered_replacement' : 'approach_interrupted', source: 'travel' });
+    return { k, s, c, d, why };
+  };
+
+  for (const why of ['a creature is blocking the walk — clear_path', 'ran out of steps']) {
+    const { k, s, d } = fixture({ why });
+    const handled = await k.continueSurvivalDecisionStep();
+    ok(`full-health ${why} spends no logoff and falls through`, !handled && k.loggedOff === 0 &&
+      d.outcome === 'refused' && currentSurvivalDecision(s) === null);
+  }
+
+  const wall = fixture({ atWall: true });
+  ok('a quiet full-health path replacement at a wall also falls through',
+    !await wall.k.continueSurvivalDecisionStep() && wall.k.loggedOff === 0 && currentSurvivalDecision(wall.s) === null);
+
+  const stale = fixture();
+  stale.s.damagedAt = Date.now();
+  stale.s.lastFleetDamage = { at: stale.s.damagedAt, client: stale.c, bodyId: stale.c.selfId, roomId: 1383 };
+  ok('damage in another room cannot authorize the full-health logoff',
+    !await stale.k.playDead(stale.why) && stale.k.loggedOff === 0);
+
+  const hit = fixture();
+  hit.s.lastFleetDamage = { at: Date.now() - SEC, client: hit.c, bodyId: hit.c.selfId, roomId: hit.c.room.id };
+  ok('fresh damage to this body in this room still leaves the rescue eligible',
+    await hit.k.playDead(hit.why) && hit.k.loggedOff === 1);
+
+  for (const options of [{ hp: 55 }, { room: 544 }]) {
+    const f = fixture(options);
+    ok('hurt farmers and other rooms retain their ordinary logoff admission',
+      await f.k.playDead(f.why) && f.k.loggedOff === 1);
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
