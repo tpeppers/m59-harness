@@ -46,6 +46,7 @@ import { readToolSource } from './autopilot/source.mjs';
 // something other than a player starts abandoning journeys.
 
 import { Autopilot, HANDLED, CONTINUE, PASS_STAGES } from './m59-autopilot.mjs';
+import { chooseSurvivalDecision } from './m59-survival-decision.mjs';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -107,6 +108,85 @@ const ctxFor = k => {
            hp: v.health.max ? v.health.value / v.health.max : null };
 };
 const said = (k, re) => k.notes.some(n => re.test(n.what) || re.test(JSON.stringify(n.detail ?? {})));
+
+console.log('\nautomatic caster recovery stops once it has achieved its purpose on the farm');
+function casterRecoveryFixture(options = {}) {
+  const k = keeper({ room:552, health:120, max:120, vigor:150,
+    policy:{ assignedRoom:552, molluskCoverRecovery:true }, ...options });
+  const s = k.s, c = s.client;
+  k.mode = 'farm';
+  k.fightFloor = () => 140;
+  k.currentRecoveryWall = () => ({ ok:true, row:5, col:25 });
+  k.playerThreatPresent = () => false;
+  k.casterScene = () => ({ complete:true, casters:[{ name:'mollusk creature' }] });
+  k.molluskRecoveryCoverAt = () => true;
+  c.room.id = 552;
+  c.state = 'game';
+  c.combatReady = true;
+  s.damagedAt = Date.now() - 6000;
+  s.movementGeneration = 1;
+  k.suspendedJourney = { to:544, at:Date.now(), attempts:1, deaths_at:0,
+    origin:{ source:'keeper', name:'caster_exit' } };
+  let confirmations = 0;
+  s.confirmPosition = async () => { confirmations++; return c.self; };
+  return { k, s, c, confirmations:() => confirmations };
+}
+{
+  const f = casterRecoveryFixture();
+  const r = await f.k.resumeSuspendedJourney(ctxFor(f.k));
+  ok('confirmed whole at a covered wall: ends its own exit and returns to farm',
+    r === CONTINUE && !f.k.suspendedJourney && !f.k.travelled.length && f.confirmations() === 1
+      && said(f.k, /caster recovery finished/));
+}
+for (const [reason, change] of [
+  ['operator journey', f => { f.k.suspendedJourney.origin.source = 'operator'; }],
+  ['another keeper objective', f => { f.k.suspendedJourney.origin.name = 'hunt_relocation'; }],
+  ['different assigned room', f => { f.k.policy.assignedRoom = 544; }],
+  ['different current room', f => { f.s.world.room.num = 544; }],
+  ['option disabled', f => { f.k.policy.molluskCoverRecovery = false; }],
+  ['recent damage', f => { f.s.damagedAt = Date.now(); }],
+  ['player threat', f => { f.k.playerThreatPresent = () => true; }],
+  ['unconfirmed pose', f => { f.c.self.predicted = true; }],
+  ['open ground', f => { f.k.currentRecoveryWall = () => null; }],
+  ['reachable caster', f => { f.k.molluskRecoveryCoverAt = () => false; }],
+  ['unknown threats', f => { f.k.casterScene = () => ({ complete:false, casters:[] }); }],
+  ['external lease', f => { f.k.facultyHeld = field => field === 'work'; }],
+  ['active recovery', f => { chooseSurvivalDecision(f.s, { strategy:'nearest_refuge', reason:'emergency' }); }],
+  ['confirmation timeout', f => { f.s.confirmPosition = async () => null; }],
+  ['damage during confirmation', f => { f.s.confirmPosition = async () => { f.s.damagedAt = Date.now(); return f.c.self; }; }],
+]) {
+  const f = casterRecoveryFixture();
+  change(f);
+  await f.k.resumeSuspendedJourney(ctxFor(f.k));
+  ok(reason + ': leaves the existing travel handling in charge', !said(f.k, /caster recovery finished/));
+}
+{
+  const f = casterRecoveryFixture({ health:100 });
+  await f.k.resumeSuspendedJourney(ctxFor(f.k));
+  ok('hurt farmer: keeps the exit pending for the existing safety ladder',
+    f.k.suspendedJourney?.to === 544 && !f.confirmations());
+}
+{
+  const f = casterRecoveryFixture({ vigor:139 });
+  await f.k.resumeSuspendedJourney(ctxFor(f.k));
+  ok('insufficient fighting vigor: no automatic retirement of the exit',
+    !said(f.k, /caster recovery finished/) && !f.confirmations());
+}
+{
+  const f = casterRecoveryFixture();
+  const replacement = { ...f.k.suspendedJourney, to:534, origin:{ source:'operator', name:'travel' } };
+  f.s.confirmPosition = async () => { f.k.suspendedJourney = replacement; return f.c.self; };
+  const r = await f.k.resumeSuspendedJourney(ctxFor(f.k));
+  ok('a newer journey arriving during confirmation owns the next pass',
+    r === CONTINUE && f.k.suspendedJourney === replacement && !f.k.travelled.length);
+}
+{
+  const f = casterRecoveryFixture(), journey = f.k.suspendedJourney;
+  f.s.confirmPosition = async () => { f.s.movementGeneration++; return f.c.self; };
+  const r = await f.k.resumeSuspendedJourney(ctxFor(f.k));
+  ok('a changed movement generation leaves recovery pending without starting its old walker',
+    r === CONTINUE && f.k.suspendedJourney === journey && !f.k.travelled.length);
+}
 
 // ---------------------------------------------------------------------------
 console.log('\nthe objective is stored at all');

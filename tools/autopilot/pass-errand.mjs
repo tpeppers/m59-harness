@@ -8,14 +8,15 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 6 methods: passErrand, restVigorCeiling, releaseRestedHold, resumeDeclined,
-//   resumeSuspendedJourney, cancelJourney
+// 7 methods: passErrand, restVigorCeiling, releaseRestedHold, resumeDeclined,
+//   casterRecoveryFulfilled, resumeSuspendedJourney, cancelJourney
 import { poisonedNow } from '../m59-poison.mjs';
 import { traceDecision } from '../m59-keeper-trace.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
-import { keeperOrigin, moveOrigin } from '../m59-move-origin.mjs';
+import { keeperOrigin, liveMoveOrder, moveOrigin } from '../m59-move-origin.mjs';
 import { opensFightFromWall } from '../m59-policydiff.mjs';
 import * as skills from '../m59-skills.mjs';
+import { currentSurvivalDecision } from '../m59-survival-decision.mjs';
 import { scriptedDeviationResumeCandidate, scriptedTrafficResumeReady } from '../m59-traffic-resume.mjs';
 import { roadHuntResume } from '../m59-travel-hunt.mjs';
 import { CONTINUE, HANDLED, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, RESUME_FLAT_SAMPLES, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorPct } from '../m59-autopilot.mjs';
@@ -393,6 +394,31 @@ export class PassErrandPart {
     return CONTINUE;
   }
 
+  async casterRecoveryFulfilled(journey) {
+    const { s } = this, c = s.client, roomId = c?.room?.id;
+    const generation = s.movementGeneration;
+    const recovered = () => {
+      const vitals = c?.vitals?.(), health = vitals?.health;
+      return this.mode === 'farm' && this.policy.molluskCoverRecovery === true &&
+        Number(this.policy.assignedRoom) === 552 && s.world?.room?.num === 552 &&
+        s.client === c && c?.room?.id === roomId && c?.state === 'game' && c.combatReady &&
+        c.self && !c.self.predicted && health?.max > 0 && health.value >= health.max &&
+        Number.isFinite(vitals.vigor?.value) && vitals.vigor.value >= this.fightFloor() &&
+        Number.isFinite(s.damagedAt) && Date.now() - s.damagedAt >= 5000 &&
+        !(c.ailments?.() ?? []).length && !s.combat?.active && !s._rite && !this.playerThreatPresent() &&
+        !this.stopping && !this.inert && !this.recoverUntilWhole && !this.wantsForwardShelter &&
+        !(this.frozenUntil > Date.now()) && !currentSurvivalDecision(s) &&
+        !this.busyStatus() && !liveMoveOrder(s) &&
+        !['work', 'movement', 'survival', 'recovery', 'combat'].some(f => this.facultyHeld(f));
+    };
+    if (!recovered() || !this.currentRecoveryWall() || typeof s.confirmPosition !== 'function') return false;
+    const confirmed = await s.confirmPosition({ timeoutMs: 1500 }).catch(() => null);
+    if (!confirmed || this.suspendedJourney !== journey || s.movementGeneration !== generation ||
+        !recovered() || !this.currentRecoveryWall()) return false;
+    const { casters, complete } = this.casterScene();
+    return complete && (!casters.length || this.molluskRecoveryCoverAt(casters));
+  }
+
   async resumeSuspendedJourney(ctx) {
     // Asked FIRST, and unconditionally: a held character that is whole should be moving
     // whether or not it has an objective to resume. Releasing costs nothing when there is
@@ -444,6 +470,15 @@ export class PassErrandPart {
 
     if ((this.tally?.deaths ?? 0) !== j.deaths_at)
       return drop('died since it was suspended — the road is not worth a second body');
+    // This automatic exit existed solely to recover. Once confirmed whole at a
+    // covered wall in the assigned farm, its purpose has already been fulfilled.
+    if (j.origin?.source === 'keeper' && j.origin.name === 'caster_exit') {
+      const { client, movementGeneration } = this.s;
+      const fulfilled = await this.casterRecoveryFulfilled(j);
+      if (this.suspendedJourney !== j || this.s.client !== client ||
+          this.s.movementGeneration !== movementGeneration) return CONTINUE;
+      if (fulfilled) return drop('the caster recovery finished at a confirmed covered wall in the assigned farm');
+    }
     // THESE TWO ARE RUNAWAY BACKSTOPS, NOT THE ABANDON POLICY. The rule is that a journey
     // is only given up when a PLAYER is on us; everything else pauses at a wall and carries
     // on. A tight cap here would quietly become a second abandon rule and undo that — so it
