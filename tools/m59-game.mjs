@@ -7026,7 +7026,6 @@ class Session {
               return { arrived: false, log, reason: 'body changed while checking the occupied return edge' };
             if (this.world?.room?.num !== leavingRoom || leavingClient.room?.id !== leavingRoomId) continue;
             if (confirmed && !confirmed.predicted && canRetry()) {
-              stumbles++;
               totalStumbles++;
               log.push({ outcome: 'retry_occupied_return_edge', room: leavingRoom, to: nextHop.to });
               continue;

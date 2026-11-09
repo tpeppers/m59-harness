@@ -657,8 +657,13 @@ for (const strict of [false, true]) {
 // Janice's direct 544 -> 552 return was sent through Marion after a body held
 // three nearby variants of the same edge. Exercise the real route loop.
 {
-  for (const scenario of ['clears', 'stays', 'damage', 'sent', 'stale', 'cancelled', 'body changed', 'survival', 'other room']) {
-    const s = fakeSession({ rooms: [scenario === 'other room' ? 562 : 544, 552] });
+  for (const scenario of ['clears', 'stays', 'damage', 'sent', 'stale', 'cancelled', 'body changed', 'survival', 'other room', 'fallback budget']) {
+    const canDetour = scenario === 'fallback budget';
+    const s = fakeSession({ rooms: canDetour ? [544, 552, 534] : [scenario === 'other room' ? 562 : 544, 552],
+      detour: canDetour ? 534 : null });
+    if (canDetour) s.world.exits = () => (s.at === 0 ? [552, 534] : [552]).map(to => ({
+      to, kind: 'edge', stand_on: { row: 1, col: 23 },
+    }));
     const origin = { source: 'keeper', name: scenario === 'survival' ? 'survival_exit' : 'hunt_relocation' };
     const tried = [{ row: 1, col: 23 }, { row: 1, col: 24 }, { row: 2, col: 23 }].map(stand_on => ({
       stand_on, stage: 'edge', crossing_packet_sent: scenario === 'sent', why: 'object_blocked',
@@ -676,14 +681,18 @@ for (const strict of [false, true]) {
     };
     s.movementWasCancelled = generation => generation !== s.movementGeneration;
     let batches = 0;
-    s.leaveViaAny = async () => {
+    s.leaveViaAny = async ([exit]) => {
+      if (canDetour && (exit.to === 534 || s.at === 2)) {
+        s.at = exit.to === 534 ? 2 : 1;
+        return { left: true };
+      }
       if (++batches === 2 && scenario === 'clears') { s.at++; return { left: true }; }
       return { left: false, blocked_by_bodies: true, outcome: 'exit_candidates_exhausted', reason: 'object_blocked', tried };
     };
-    const r = await travel.call(s, 552, { origin });
-    const expected = ['clears', 'stays'].includes(scenario) ? 2 : 1;
+    const r = await travel.call(s, 552, { origin, maxStumbles: canDetour ? 1 : 6 });
+    const expected = ['clears', 'stays', 'fallback budget'].includes(scenario) ? 2 : 1;
     ok(`occupied direct return (${scenario}) uses ${expected} normal exit batches`,
-      batches === expected && r.arrived === (scenario === 'clears'));
+      batches === expected && r.arrived === (scenario === 'clears' || canDetour));
     if (scenario === 'clears') ok('the freed direct hop is never banned', !r.log.some(e => e.blocked_hop));
     if (scenario === 'stays') ok('a persistent body block falls through to the normal route logic',
       r.blocked_hops?.includes('544>552'));
