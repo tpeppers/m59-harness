@@ -12,9 +12,14 @@ export function publishFleetHealth(s,{directory=process.env.M59_FLEET_HEALTH_DIR
  // reader that wants only health never looks at it, and a session without a CombatMode publishes none.
  let combat=null;try{combat=s.combat?.publicSheet?.()??null;}catch{combat=null;}
  let relayFarm=null;try{relayFarm=s.relayFarmEvidence?.(vitals)??null;}catch{relayFarm=null;}
- const version=JSON.stringify([identity,c.selfId,s.world.room.num,health.value,health.max,combat,relayFarm]);
+ const damage=s.lastFleetDamage;
+ const inOcean=s.world.room.num===552;
+ const damagedAt=inOcean&&damage?.client===c&&damage.bodyId===c.selfId&&damage.roomId===c.room?.id?damage.at:null;
+ // Icons are observed-only. A visible player enchantment proves coverage, while an empty list leaves it unknown.
+ const magicShield=inOcean&&c.enchantments?.().some(e=>e.type===1&&fold(e.name??c.rsc?.get(e.nameRsc))==='magic shield');
+ const version=JSON.stringify([identity,c.selfId,s.world.room.num,health.value,health.max,combat,relayFarm,damagedAt,magicShield]);
  if(version===s._healthPublishedVersion&&now-(s._healthPublishedAt??0)<500)return false;
- const report={at:now,pid:process.pid,character:c.me.name,endpoint:{host:fold(credentials.host),port:Number(credentials.port)},body_id:c.selfId,room:s.world.room.num,health:{value:health.value,max:health.max},...(combat?{combat}:{}),...(relayFarm?{relay_farm:relayFarm}:{})};
+ const report={at:now,pid:process.pid,character:c.me.name,endpoint:{host:fold(credentials.host),port:Number(credentials.port)},body_id:c.selfId,room:s.world.room.num,health:{value:health.value,max:health.max},...(combat?{combat}:{}),...(relayFarm?{relay_farm:relayFarm}:{}),...(damagedAt?{damaged_at:damagedAt}:{}),...(magicShield?{magic_shield:true}:{})};
  try{mkdirSync(directory,{recursive:true});const file=join(directory,key(identity)+'.json'),tmp=file+'.'+process.pid+'.tmp';writeFileSync(tmp,JSON.stringify(report));renameSync(tmp,file);s._healthPublishedAt=now;s._healthPublishedVersion=version;return true;}catch{return false;}
 }
 export function readFleetHealth(identity,{directory=process.env.M59_FLEET_HEALTH_DIR??defaultDir,now=Date.now(),maxAgeMs=5000,room,bodyId}={}){

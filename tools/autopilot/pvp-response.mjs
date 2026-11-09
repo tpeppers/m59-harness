@@ -435,7 +435,7 @@ export class PvpResponsePart {
    * it belongs in a local policy rather than in a committed default.
    */
   async defendAgainstPlayers() {
-    if (this.policy.defendAgainstPlayers !== true) return null;
+    if (this.policy.neverAttack === true || this.policy.defendAgainstPlayers !== true) return null;
     const c = this.s?.client, me = c?.self;
     if (!me || !c?.room) return null;
 

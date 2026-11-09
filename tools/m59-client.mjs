@@ -415,6 +415,7 @@ export class M59Client {
     this.events.push(ev);
     if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
     this.onEvent?.(ev);
+    try { this.onFarmBuffEvent?.(ev); } catch { /* telemetry must never interrupt packet processing */ }
     for (const w of this.waiters.splice(0)) w.check();
     return ev;
   }

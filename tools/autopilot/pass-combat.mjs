@@ -73,7 +73,8 @@ export class PassCombatPart {
     // parent is suspended deadlocks unarmed travellers on conjuring/policy loops,
     // even though the same journey deliberately allows walking unarmed when active.
     // Later flee/rest/ownership/resume gates still decide whether it may set off.
-    if (this.suspendedJourney && this.travelGuard(this.suspendedJourney.guard).arm !== true || scriptedWalkDefersArming(this)) {
+    if (this.policy?.neverAttack === true ||
+        this.suspendedJourney && this.travelGuard(this.suspendedJourney.guard).arm !== true || scriptedWalkDefersArming(this)) {
       this.clearRefusal('UNARMED_NO_DONOR');
       this.clearRefusal('UNARMED_CANNOT_CAST');
       if (['MANA_FOR_CREATE_WEAPON', 'VIGOR_FOR_CREATE_WEAPON'].includes(this.waitingOn?.code))
@@ -636,6 +637,7 @@ export class PassCombatPart {
   // no flag test, no expiry, and entries the keeper wrote about itself. That is a fleet
   // deciding on its own to attack a named human being on a shared server.
   async engagePlayerTarget() {
+    if (this.policy?.neverAttack === true) return false;
     const c = this.s.client;
     if (!c) return false;
     const v = c.vitals?.();
@@ -728,6 +730,7 @@ export class PassCombatPart {
   }
 
   async respondToConflict() {
+    if (this.policy?.neverAttack === true) return false;
     const c = this.s.client;
     if (!c) return false;
 
@@ -862,6 +865,7 @@ export class PassCombatPart {
   // a lever — because equip:true would wield the best weapon in the pack and swing it instead of
   // the touch. `equipBest` vetoes it too; this keeps the fight from even asking.
   fightNow(opts) {
+    if (this.policy?.neverAttack === true) return Promise.resolve({ ok: false, reason: 'never_attack' });
     const o = (this.touchTrainingHere() && opts?.equip === undefined) ? { ...opts, equip: false } : opts;
     return skills.fight(this.s, o);
   }
@@ -889,6 +893,10 @@ export class PassCombatPart {
   }
 
   async passFightBack(ctx) {
+    if (this.policy?.neverAttack === true) {
+      this.fightBackDue = null;
+      return CONTINUE;
+    }
     const { s, c, room, v, hp } = ctx;
     const edict = this.fightBackAfterMs();
     // A BLOCKED DUE IS NOT THE DAMAGE EDICT AND MUST NOT BE GATED ON IT. `fight_back_after_s: 0`

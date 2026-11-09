@@ -8,6 +8,7 @@
 // somebody who was already enchanted. Guessing there wastes reagents silently.
 
 import { Autopilot } from './m59-autopilot.mjs';
+import { publishFleetHealth } from './m59-fleet-health.mjs';
 import { Session } from './m59-game.mjs';
 import { OF } from './m59-parse.mjs';
 import * as party from './m59-party.mjs';
@@ -24,6 +25,7 @@ const BOOKS = mkdtempSync(join(tmpdir(), 'm59-buff-'));
 process.env.M59_GRUDGE_FILE = join(BOOKS, 'grudges.json');
 process.env.M59_WAR_FILE = join(BOOKS, 'war.json');
 process.env.M59_PVP_HOLD_DIR = join(BOOKS, 'holds');
+process.env.M59_FLEET_HEALTH_DIR = join(BOOKS, 'health');
 party.setRosterSource(() => new Set(['Ally']));
 
 let passed = 0, failed = 0;
@@ -264,6 +266,92 @@ console.log('\nmagic shield (Kraanan level 3): its whole duration is promised, a
   apOk.lastBuffAt = 0;
   await apOk.buffAllies();
   ok('and not cast again on the same ally inside its window', apOk.s.client.casts === 1);
+}
+
+console.log('\nopted-in Great Ocean Magic Shield responds to fresh damage on the same ally');
+{
+  let port = 5800;
+  const fixture = ({ spells = [['magic shield', 13]], room = 552, optedIn = true, paid = true } = {}) => {
+    const ap = makeAp({ pack: [...FULL, ['red mushroom', 5]], spells, paid });
+    ap.mode = 'farm';
+    ap.policy.molluskCoverRecovery = optedIn;
+    ap.s.world = { room: { num: room } };
+    ap.s.credentials = { host: 'ocean.test', port: ++port };
+    const ally = { world: { room: { num: 552 } }, credentials: ap.s.credentials, hitBook: () => null };
+    let health = 120, effects = [];
+    ally.client = {
+      combatReady: true, state: 'game', selfId: 90, self: {}, me: { name: 'Ally' }, room: { id: 5520 },
+      enchantments: () => effects, vitals: () => ({ health: { value: health, max: 120 } }),
+    };
+    const at = Date.now();
+    const observe = (hp, at) => {
+      health = hp;
+      Session.prototype.noteHealth.call(ally, { value: hp, max: 120, at });
+    };
+    observe(120, at - 100);
+    const report = ({ damageAt, publishedAt = Date.now(), bodyId = 90, shielded = false } = {}) => {
+      if (damageAt != null) observe(113, damageAt);
+      ally.client.selfId = bodyId;
+      effects = shielded ? [{ type: 1, name: 'Magic Shield' }] : [];
+      publishFleetHealth(ally, { now: publishedAt });
+    };
+    return { ap, ally, report, at };
+  };
+  const hit = fixture({ spells: [...BOTH, ['magic shield', 13]] });
+  hit.report({ damageAt: hit.at });
+  await hit.ap.buffAllies();
+  ok('fresh health loss gives Magic Shield priority over the routine buffs', hit.ap.receipts[0]?.spell === 'magic shield');
+
+  const quiet = fixture({ spells: [...BOTH, ['magic shield', 13]] });
+  quiet.report();
+  await quiet.ap.buffAllies();
+  quiet.ap.lastBuffAt = 0;
+  await quiet.ap.buffAllies();
+  ok('quiet allies still receive Strength and Bless in their usual order',
+     quiet.ap.receipts.map(r => r.spell).join(',') === 'super strength,bless');
+
+  for (const [label, report] of [
+    ['missing report', null], ['quiet ally', {}],
+    ['stale health report', { damageAt: -6_000, publishedAt: -5_500 }],
+    ['old damage in a fresh report', { damageAt: -6_000 }],
+    ['already shielded', { damageAt: 0, shielded: true }],
+    ['wrong body', { damageAt: 0, bodyId: 91 }],
+  ]) {
+    const { ap, report: publish, at } = fixture();
+    if (report) publish({ ...report, damageAt: report.damageAt == null ? undefined : at + report.damageAt,
+      publishedAt: report.publishedAt == null ? undefined : at + report.publishedAt });
+    await ap.buffAllies();
+    ok(`no reactive cast with ${label}`, ap.s.client.casts === 0);
+  }
+
+  const moved = fixture();
+  moved.report({ damageAt: moved.at });
+  moved.ally.client.room.id++;
+  moved.report();
+  await moved.ap.buffAllies();
+  ok('damage from a different room identity cannot trigger a cast', moved.ap.s.client.casts === 0);
+
+  const coveredWhileQueued = fixture();
+  coveredWhileQueued.report({ damageAt: coveredWhileQueued.at });
+  coveredWhileQueued.ap.s.pacer.submit = async (kind, send) => {
+    if (kind === 'cast') coveredWhileQueued.report({ shielded: true });
+    return send();
+  };
+  await coveredWhileQueued.ap.buffAllies();
+  ok('a shield added while the cast was queued withholds the packet', coveredWhileQueued.ap.s.client.casts === 0);
+
+  const already = fixture({ paid: false });
+  already.report({ damageAt: already.at });
+  already.ap.s.client.waitFor = async () => ({ events: [{ text: 'Ally is already affected by that magic.' }] });
+  await already.ap.buffAllies();
+  ok('an already-in-effect receipt backs off the same target', already.ap.receipts[0]?.outcome === 'already' &&
+     already.ap._buffedAt.get('90:4000:magic shield')?.retryAt >= already.at + 30_000);
+
+  for (const [label, options] of [['outside 552', { room: 553 }], ['without opt-in', { optedIn: false }]]) {
+    const { ap } = fixture(options);
+    await ap.buffAllies();
+    ok(`routine Magic Shield remains available ${label}`, ap.s.client.casts === 1);
+  }
 }
 
 console.log('\nally buff facing and queued packet guards');

@@ -14,6 +14,7 @@ import { allyVerdict } from '../m59-ally.mjs';
 import { classifyCast } from '../m59-castoutcomes.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
 import { liveMoveOrder } from '../m59-move-origin.mjs';
+import { readFleetHealth } from '../m59-fleet-health.mjs';
 import { castsAbove, folRoomsOf } from '../m59-chalice.mjs';
 import { buyHereWants, choosePractice, deskReserve, isReagent, normalizePractice, offeredServices, pickCreatureTarget, touchedCreatures } from '../m59-deskpractice.mjs';
 import { OF, affordances, buyLines } from '../m59-parse.mjs';
@@ -461,6 +462,8 @@ export class DeskPracticePart {
     const s = this.s, c = s.need();
     const gap = Number(cfg.gap_ms) > 0 ? Number(cfg.gap_ms) : 20_000;
     if (this.lastBuffAt && Date.now() - this.lastBuffAt < gap) return;
+    const room = s.world?.room?.num;
+    const oceanDefense = this.mode === 'farm' && room === 552 && this.policy.molluskCoverRecovery === true;
     const roomId = c.room.id, life = s.lifeBoundary, movement = s.movementGeneration;
     const available = () => s.client === c && c.room.id === roomId && s.lifeBoundary === life &&
       s.movementGeneration === movement && !this.inert && !this.suspendedJourney &&
@@ -495,6 +498,13 @@ export class DeskPracticePart {
       .map(x => String(x).toLowerCase());
     this._buffedAt ||= new Map();          // target/spell -> last attempt and earliest retry
     const now = Date.now();
+    const needsShield = (target, at = Date.now()) => {
+      if (!s.credentials?.host || basisOf.get(target.id) !== 'fleetmate') return false;
+      const report = readFleetHealth({ ...s.credentials, character: c.rsc.get(target.nameRsc) },
+        { room, bodyId: target.id, now: at });
+      return report && report.magic_shield !== true && report.health.value < report.health.max &&
+        Number.isFinite(report.damaged_at) && report.damaged_at <= report.at && at - report.damaged_at <= 5_000;
+    };
     const mana = c.vitals()?.mana;
     const have = n => this.reagentExact(n);
     const declineReserve = name => {
@@ -507,6 +517,7 @@ export class DeskPracticePart {
 
     for (const buff of Autopilot.BUFFS) {
       if (!wanted.includes(buff.name)) continue;
+      const reactive = oceanDefense && buff.name === 'magic shield';
       const spell = (c.spells || [])
         .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === buff.name);
       if (!spell) continue;                                     // not a caster of this one
@@ -546,19 +557,23 @@ export class DeskPracticePart {
         const key = `${target.id}:${target.nameRsc}:${buff.name}`;
         const previous = this._buffedAt.get(key);
         if (previous?.retryAt > now) continue;
+        if (reactive && !needsShield(target, now)) continue;
         const last = previous?.at ?? 0;
         // A large room can make strength come due again before we ever reach bless.
         // Use the oldest attempt across both spells and allies, with spell order breaking ties.
-        if (!next || last < next.last) next = { target, key, buff, spell, last, holdMs };
+        if (!next || (reactive && !next.reactive) || (reactive === next.reactive && last < next.last)) {
+          next = { target, key, buff, spell, last, holdMs, reactive };
+        }
       }
     }
     if (!next) return;
 
-    const { target, key, buff, spell, holdMs } = next;
+    const { target, key, buff, spell, holdMs, reactive } = next;
     const { id, nameRsc, flags } = target;
     const readyTarget = () => {
       const live = c.room.objects.get(id);
-      return available() && live?.id === id && live.nameRsc === nameRsc && live.flags === flags ? live : null;
+      return available() && live?.id === id && live.nameRsc === nameRsc && live.flags === flags &&
+        (!reactive || needsShield(live)) ? live : null;
     };
     let before, since;
     const paid = () => before.every(({ name, cost, count }) => count - have(name) >= cost);
@@ -609,6 +624,7 @@ export class DeskPracticePart {
     const said = ev.events?.filter(e => e.text).map(e => e.text) ?? [];
     const outcome = classifyCast(said);
     if (outcome || !paid()) {
+      if (reactive && outcome?.in_effect) this._buffedAt.set(key, { at: now, retryAt: Date.now() + Math.max(gap, 30_000) });
       this.recordCast(buff.name, { ok: false, target: c.rsc.get(target.nameRsc),
         why: outcome?.why ?? 'no complete reagent payment observed', outcome: outcome?.outcome, said: said.slice(0, 2) });
       return;

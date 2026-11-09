@@ -12767,6 +12767,7 @@ const TOOLS = [
         'never on another issuer order, never below the flee line. Default off' },
       mollusk_cover_recovery: { type: 'boolean', description: 'In 552 only, allow a healthy farmer to keep a verified wall ' +
         'when every visible caster is a mollusk and its rock throw cannot reach the wall. Default off' },
+      never_attack: { type: 'boolean', description: 'Disallow physical attacks and known offensive casts or items for this character in every room. Keeps support and survival available. Default off' },
       cook_food: { description: 'COOK FROM THE ROAD (m59-cook-food.mjs): true | false | { first, reserveCasts }. Cast create food ' +
         'from carried elderberry and herbs before eating carried food while below the vigor ceiling. Default off' },
       second_wind_farming: { description: 'SECOND WIND FARMING (m59-second-wind.mjs): "off" (default), "auto", "on"/true, "off"/false, or ' +
@@ -13879,6 +13880,7 @@ const TOOLS = [
       }
       if (a.mollusk_cover_recovery !== undefined)
         p.policy.molluskCoverRecovery = a.mollusk_cover_recovery === true;
+      if (a.never_attack !== undefined) p.policy.neverAttack = a.never_attack === true;
       if (a.cook_food !== undefined) {
         try { p.policy.cookFood = normalizeCookFood(a.cook_food); }
         catch (e) { return { started: false, reason: `cook_food refused: ${e.message}`, note: 'nothing was changed' }; }

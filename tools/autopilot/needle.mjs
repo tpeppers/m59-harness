@@ -549,7 +549,8 @@ export class NeedlePart {
       return HANDLED;
     }
     this.farmStrategyHook?.('beforeSwing', { target: name, target_id: target.id, room: room?.num ?? null });
-    await this.farmBuffAsk?.('before_swing', { target: name }).catch(() => null);
+    const buff = await this.farmBuffAsk?.('before_swing', { target: name }).catch(() => null);
+    if (buff?.no_engage || buff?.went || buff?.logoff) return HANDLED;
     if (this.touchTrainingHere?.()) await this.maintainTouchSpell(`before swinging at ${name}`).catch(() => null);
     const safe = this.safety();
     this.doing = role === 'striker' ? 'striking at the needle' : 'shooting at the needle';

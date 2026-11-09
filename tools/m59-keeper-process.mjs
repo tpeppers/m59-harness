@@ -421,7 +421,10 @@ catch (error) {
 
 // ---------------------------------------------------------------- session
 
-const session = new Session(agent, { communicationStateFile: fleetPath });
+const session = new Session(agent, {
+  communicationStateFile: fleetPath,
+  neverAttackOrdered: () => policy.neverAttack === true,
+});
 const attachmentView = () => keeperAttachment ? { agent,
   client_pid: keeperAttachment.client_pid, attach_port: keeperAttachment.port,
   gate_control: keeperAttachment.gate_control, player: session.client?.selfId ?? keeperAttachment.player } : null;

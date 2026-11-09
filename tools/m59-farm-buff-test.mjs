@@ -9,9 +9,12 @@ import { readToolSource } from './autopilot/source.mjs';
 // substrate/strategies/; this file pins only the seam: what the question carries, the closed set of answers
 // and what each one does, that silence and nonsense do nothing, and the call sites.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { OF } from './m59-parse.mjs';
 import { Autopilot } from './m59-autopilot.mjs';
+import { M59Client } from './m59-client.mjs';
 import { HOOKS } from './m59-strategies.mjs';
 
 let n = 0;
@@ -91,6 +94,101 @@ await ok('logoff: offline for for_ms (clamped 1-60 s), then back; the pass is ov
   assert.equal(big.reconnects[0].opts.offlineMs, 60_000);
 });
 
+await ok('Ocean farmBuff receives equipment, karma, actual damage and the current ranged refuge verdict', async () => {
+  const { ap, asked } = keeper({ hold: { room: 552, row: 20, col: 20 } });
+  ap.mode = 'farm';
+  ap.s.world.room.num = 552;
+  ap.s.client.statsById = new Map([['karma', { value: -25 }]]);
+  ap.s.client.equipment = () => ({ known: true, equipped: [{ id: 7, name: 'mace' }] });
+  ap.policy.molluskCoverRecovery = true;
+  ap.s.damagedAt = Date.now();
+  ap.currentRecoveryWall = () => ({ ok: true, row: 20, col: 20 });
+  await ap.farmBuffAsk('before_swing');
+  const ctx = asked[0].ctx;
+  assert.equal(ctx.armed, true);
+  assert.equal(ctx.karma, -25);
+  assert.equal(ctx.at_ranged_safe_spot, true);
+  assert.equal(ctx.safe_spot_has_ranged_cover, true);
+  assert.equal(ctx.recent_damage, true);
+  assert.equal(ctx.never_attack, false);
+  ap.policy.neverAttack = true;
+  ap.s.client.self.row++;
+  ap.recoveryRangedCoverAt = () => false;
+  assert.equal(ap.farmBuffContext('pass').never_attack, true);
+  assert.equal(ap.farmBuffContext('pass').at_ranged_safe_spot, false);
+  assert.equal(ap.farmBuffContext('pass').safe_spot_has_ranged_cover, false);
+});
+
+await ok('Ocean timed logoff consumes only the shared unspent healing allowance', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'm59-farm-buff-'));
+  const previous = process.env.M59_HEALING_DIR;
+  process.env.M59_HEALING_DIR = dir;
+  try {
+    const k = keeper({ answer: { logoff: { for_ms: 3000 } } });
+    k.ap.s.world.room.num = 552;
+    const admitted = await k.ap.farmBuffAsk('before_pull');
+    assert.equal(admitted.logoff?.ok, true);
+    assert.equal(admitted.no_engage, true, 'a successful reconnect ends the pull too');
+    assert.equal(k.reconnects[0].opts.offlineMs, 3000);
+    assert.equal(await k.ap.farmBuffPass(), false);
+    assert.equal(k.reconnects.length, 1);
+    assert.equal((await k.ap.farmBuffAsk('before_swing')).no_engage, true);
+  } finally {
+    if (previous == null) delete process.env.M59_HEALING_DIR;
+    else process.env.M59_HEALING_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+await ok('each own health push during confirmed Karahol Hold is a reviewable hit under the exact strategy', async () => {
+  const { ap } = keeper({ answer: { cast: "Kara'hol's curse" } });
+  const c = ap.s.client, rows = [], enchantments = new Map();
+  c.enchantments = () => [...enchantments.values()];
+  Object.assign(c, { maxEvents: 500, waiters: [], events: [] });
+  ap.s.world.room.num = 552;
+  ap.policy.farmStrategy = 'great-ocean-marion';
+  ap.ledgerEvent = (kind, row) => rows.push({ kind, ...row });
+  const emit = (kind, fields) => M59Client.prototype.emit.call(c, kind, fields);
+  const add = (id, name) => {
+    const added = { id, name };
+    enchantments.set(id, added);
+    emit('enchantment', { added });
+  };
+  const remove = id => {
+    const removed = enchantments.get(id);
+    enchantments.delete(id);
+    emit('enchantment', { removed });
+  };
+  const hp = value => emit('stat', { name: 'health', value, max: 70 });
+  await ap.farmBuffAsk('before_swing');
+  add(10, "Kara'hol's curse");
+  add(20, 'Hold');
+  hp(69);
+  assert.equal(rows.length, 0, 'an unrelated Hold during the curse is unconfirmed');
+  remove(20);
+  add(20, 'Hold');
+  emit('message', { text: 'Your body freezes as total exhaustion grips your limbs.' });
+  remove(10);
+  hp(62);
+  hp(63);
+  hp(60);
+  remove(20);
+  hp(51);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map(r => r.hp_lost), [7, 3]);
+  for (const row of rows) {
+    assert.equal(row.kind, 'karahol_hold_damage');
+    assert.equal(row.review_required, true);
+    assert.equal(row.strategy, 'karahols-curse');
+    assert.equal(row.farm_strategy, 'great-ocean-marion');
+    assert.equal(row.source, "Kara'hol's curse");
+    assert.equal(row.room, 552);
+    assert.equal(row.agent, 't7');
+  }
+  assert.equal(ap.tally.karahol_hold_damage_events, 2);
+  assert.equal(ap.tally.karahol_hold_damage_hp, 10);
+});
+
 await ok('no_engage refuses the pull before walking out; go_to_safe_spot only when off it', async () => {
   const pull = AUTOPILOT.slice(AUTOPILOT.indexOf('  async pull(want) {'));
   const ask = pull.indexOf("const fb = await this.farmBuffAsk('before_pull'");
@@ -107,6 +205,7 @@ await ok('the call sites, and the session can stay offline', () => {
   const buffCall=flee.indexOf('if (await this.farmBuffPass().catch(() => false)) return HANDLED;');
   assert.ok(buffCall>=0&&buffCall<flee.indexOf('// 2. In danger.'),'buff hook still precedes ordinary danger decisions, after protected recovery');
   assert.ok(AUTOPILOT.includes("await this.farmBuffAsk('before_swing', { target: engageName }).catch(() => null);"));
+  assert.ok(AUTOPILOT.includes("const buff = await this.farmBuffAsk('before_swing', { target: engageName }).catch(() => null);\n      if (buff?.no_engage || buff?.went || buff?.logoff) return HANDLED;"));
   assert.ok(AUTOPILOT.includes('const r = await this.s.rejoin(why, { offlineMs }).then('));
   assert.ok(GAME.includes("async rejoinConnection(why = 'unspecified', { offlineMs = 0 } = {}) {"));
   assert.ok(GAME.includes('Math.max(800, Math.min(60_000, Number(offlineMs) || 0))'));

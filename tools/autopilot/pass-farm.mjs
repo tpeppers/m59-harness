@@ -79,6 +79,7 @@ export class PassFarmPart {
 
   async passFarm(ctx) {
     const { s, c, room, v, hp } = ctx;
+    const farming = this.mode === 'farm' && this.policy?.neverAttack !== true;
     // Before any work is chosen: is there an unfinished journey to pick back up? Ahead of
     // the `work` claim check on purpose — resuming restores a decision that was ALREADY
     // made and interrupted, it does not make a new directional one, so it is not the
@@ -131,7 +132,7 @@ export class PassFarmPart {
     // own settings should be indistinguishable from one with no bot attached.
     //
     // Noted once per holder so the ownership is legible without a line every eight seconds.
-    if (this.mode === 'farm') {
+    if (farming) {
       const owner = this.facultyOwner('work');
       if (this.notedWorkOwner !== owner) {
         this.notedWorkOwner = owner;
@@ -142,8 +143,8 @@ export class PassFarmPart {
                 'Underworld, which are decided far above this branch' });
       }
     }
-    if (this.mode !== 'farm' && await this.eatToFloor(ctx) === 'ate') return HANDLED;
-    if (this.mode === 'farm') {
+    if (!farming && await this.eatToFloor(ctx) === 'ate') return HANDLED;
+    if (farming) {
       // EAT FIRST — BEFORE THE ROOM, THE PREY, THE PACK OR THE WALL.
       //
       // provision() used to sit far below this, under the prey lookup, and every path that
@@ -1737,7 +1738,8 @@ export class PassFarmPart {
       // reason on the status, and the character swings bare.
       this.farmStrategyHook('beforeSwing', { target: engageName, target_id: claimedSwing ?? null,
                                              room: room?.num ?? null });
-      await this.farmBuffAsk('before_swing', { target: engageName }).catch(() => null);
+      const buff = await this.farmBuffAsk('before_swing', { target: engageName }).catch(() => null);
+      if (buff?.no_engage || buff?.went || buff?.logoff) return HANDLED;
       if (this.touchTrainingHere())
         await this.maintainTouchSpell(`before swinging at ${engageName}`)
           .catch(e => { const st = this.touchState(); if (st) st.blockedReason = e.message; });

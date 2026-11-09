@@ -834,7 +834,7 @@ export class WedgePart {
     const s=this.s,c=s.client,me=c?.self;
     // A body we will not swing at is asked about first, and only when it is ALL that is in reach.
     if (await this.lureSparedBlocker({near,v}).catch(()=>false)) return true;
-    if (this.policy?.tradeInPlaceWhenWedged===false || !me || this.hold || this.holdWorks()
+    if (this.policy?.neverAttack===true || this.policy?.tradeInPlaceWhenWedged===false || !me || this.hold || this.holdWorks()
         || !this.armedForSure() || !this.wedgedInPlace()) return false;
     if (this.crowded({forFighting:true}) && this.policy?.tradeInPlaceWhenCrowded===false) {
       this.noteCrowdRefusal('clearing a blocker');return false;
@@ -1067,7 +1067,7 @@ export class WedgePart {
     event('start',{origin,blocked_square:blocked,refuge:plan.spot});
     this.tally.spared_lures=(this.tally.spared_lures||0)+1;
     let provoked=null;
-    if (mode==='provoke' && !this.watch?.attack) {
+    if (mode==='provoke' && this.policy?.neverAttack!==true && !this.watch?.attack) {
       this.doing='provoking a spared blocker';
       grantProvoke(s,target.id);
       try {

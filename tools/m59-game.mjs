@@ -1,6 +1,7 @@
 import {cooperativeBeforeLogin,cooperativeAfterLogin,markCooperativeOffline} from './m59-cooperative-logoff.mjs';
 import {observeStationaryMutation} from './m59-stationary-trade.mjs';
 import {guardRegionPacket} from './m59-movement-region.mjs';
+import {guardNeverAttackPacket} from './m59-never-attack.mjs';
 import{healReadiness}from'./m59-recovery-heal.mjs';
 // m59-game.mjs — Session class and its dependencies, extracted from m59-broker.mjs.
 //
@@ -1541,8 +1542,9 @@ export function gateCapFilter(cands = [], inventory = [], nameOf = o => o?.name 
 }
 
 class Session {
-  constructor(name, { communicationStateFile = null } = {}) {
+  constructor(name, { communicationStateFile = null, neverAttackOrdered = null } = {}) {
     this.name = name;
+    this.neverAttackOrdered = neverAttackOrdered;
     this.fleetStateFile = communicationStateFile;
     this.lootPolicyStore = communicationStateFile ? new LootPolicyStore(communicationStateFile) : null;
     this.communications = communicationStateFile ? new CommunicationsArchive({ stateFile: communicationStateFile, agent: name }) : null;
@@ -1770,7 +1772,7 @@ class Session {
   // A LOGIN IS NOT A HIT EITHER. `lastHealth` is cleared on join, so the first reading
   // after a login establishes the baseline rather than being compared against whatever the
   // character had before it died.
-  noteHealth(ev) {
+  noteHealth(ev, client = this.client) {
     const now = ev.at ?? Date.now();
     const value = ev.value, max = ev.max;
     if (typeof value !== 'number') return;
@@ -1795,6 +1797,9 @@ class Session {
     // stamp and re-asks its own question, because what counts as "hurt enough" belongs to
     // the keeper's policy and not to a packet handler.
     this.damagedAt = now;
+    if (value > 0 && client === this.client && this.world?.room?.num === 552 && !client?.poisoned?.()) {
+      this.lastFleetDamage = { at: now, client, bodyId: client?.selfId, roomId: client?.room?.id };
+    }
     // ANY HEALTH LOST BREAKS A TRANCE (player.kod:5765), so an automatic hold is over: holding the
     // body still past this point would protect nothing and stop the survival ladder moving it.
     this.pacer?.endAutoTrance?.('hit');
@@ -2769,7 +2774,8 @@ class Session {
       // OFF THE STREAM, NOT OFF THE KEEPER. This is the one measurement that keeps
       // working while the keeper is inside a multi-minute travel await or held inert by
       // an errand — which is where 23 of the last 50 deaths happened. See m59-hits.mjs.
-      if (ev.kind === 'stat' && ev.name === 'health') { this.noteHealth(ev); if(this.client===c)publishFleetHealth(this); }
+      if (ev.kind === 'stat' && ev.name === 'health') { this.noteHealth(ev, c); if(this.client===c)publishFleetHealth(this); }
+      if (ev.kind === 'enchantment' && this.client === c && this.world?.room?.num === 552) publishFleetHealth(this);
       if (ev.kind === 'stat' && ev.name === 'vigor' && this.client === c && this.relayFarmVigorEnabled?.() &&
           Date.now() - (this._healthPublishedAt ?? 0) >= 1500) publishFleetHealth(this);
       if(this.client===c&&c.combatReady&&(ev.kind==='stat'&&ev.name==='health'||ev.kind==='inventory'||ev.kind==='spells'))void this.activeSelfHealTick?.(ev.kind==='stat'?'health_push':ev.kind+'_ready')?.catch(error=>c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_ERROR',reason:String(error.message).slice(0,300)}));
@@ -2780,6 +2786,7 @@ class Session {
       // pass. Observe the authoritative room event while it is still here. The
       // observer records only; the current movement owner remains the only escape.
       if (ev.kind === 'room-entered' && this.client === c) {
+        this.lastFleetDamage = null;
         try {
           const room = this.world?.room;
           const previous = this.travelObservedRoom;
@@ -2833,7 +2840,13 @@ class Session {
       c.loginHoldReleased = this.pacer.holdStatus();
       this.pacer.releaseCastHold();
     }
-    c.beforeGameMutation = (op, parts) => { bodyAuthority(this).guard(); observeStationaryMutation(this, op); guardRegionPacket(this, autopilotIfAny(this.name)?.policy?.movementRegion, op, parts); };
+    c.beforeGameMutation = (op, parts) => {
+      bodyAuthority(this).guard();
+      const policy = autopilotIfAny(this.name)?.policy;
+      guardNeverAttackPacket(c, this.neverAttackOrdered?.() === true || policy?.neverAttack === true, op, parts);
+      observeStationaryMutation(this, op);
+      guardRegionPacket(this, policy?.movementRegion, op, parts);
+    };
     // EVERY CAST WITH A TRANCE IS WAITED OUT, whichever of the harness's cast sites sent it
     // (noteCastSent), and no move sent while one charges can be a run (M59Client.moveTo).
     c.onCastSent = info => this.noteCastSent(info);

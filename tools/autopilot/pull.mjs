@@ -17,6 +17,7 @@ import { closeIfHealed, mayLogoff, noteLogoff } from '../m59-healing-session.mjs
 import { chaseCapable, chasePiece, walkPlan } from '../m59-chase.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
+import { isKaraholCurse, watchKaraholHold } from '../m59-karahol-hold.mjs';
 import { equipYield, reconcile } from '../m59-loadout.mjs';
 import { isTerminalMovementReason } from '../m59-movement.mjs';
 import { OF } from '../m59-parse.mjs';
@@ -232,8 +233,9 @@ export class PullPart {
   // Asked with `phase`: 'pass' (every pass, ahead of the survival ladder's own rungs), 'before_pull' (on
   // the wall, before walking out) and 'before_swing' (the first swing of a fight at the wall).
   //   ctx = { phase, now, agent, character, room, farm_strategy, health, mana, enchantments: [names],
-  //           held, in_reach (unspared bodies in melee reach), safe_spot: {col,row} | null,
-  //           at_safe_spot, eta_to_safe_spot_ms, pack: { item: count }, spells: [known names],
+  //           held, armed, karma, never_attack, recent_damage, in_reach (unspared melee reach),
+  //           safe_spot: {col,row} | null, at_safe_spot, at_ranged_safe_spot, safe_spot_has_ranged_cover,
+  //           eta_to_safe_spot_ms, pack: { item: count }, spells: [known names],
   //           heard: [{ at, text }] (the last two minutes of server messages), ...extra }
   //   answer = { cast?: '<known spell>' (at ourselves), go_to_safe_spot?: true, no_engage?: true,
   //              logoff?: { for_ms } (1-60 s offline, then back), why?: string } | null
@@ -255,11 +257,20 @@ export class PullPart {
     const spot = this.hold && this.hold.room === room ? { col: this.hold.col, row: this.hold.row } : null;
     const squares = spot && me ? Math.max(Math.abs(me.col - spot.col), Math.abs(me.row - spot.row)) : null;
     const atSpot = squares != null && squares < 1;
+    const checkRangedCover = this.oceanRangedRecoveryEnabled?.() === true;
+    const atRangedSafeSpot = checkRangedCover && atSpot && !!this.currentRecoveryWall();
+    const karma = c?.statsById?.get('karma')?.value;
     return { phase, now, agent: s?.name ?? null, character: this.who?.() ?? null, room,
       farm_strategy: this.policy?.farmStrategy ?? null, health: v.health ?? null, mana: v.mana ?? null,
       enchantments, held: enchantments.includes('hold'),
+      armed: this.wieldedWeaponId?.(c) != null, karma: Number.isFinite(karma) ? karma : null,
+      never_attack: this.policy?.neverAttack === true,
+      recent_damage: s?.damagedAt > 0 && s.damagedAt <= now && now - s.damagedAt < 5000,
       in_reach: (this.inReachOfUs?.() ?? []).filter(o => !this.sparedHere(o)).length,
       safe_spot: spot, at_safe_spot: atSpot,
+      at_ranged_safe_spot: atRangedSafeSpot,
+      safe_spot_has_ranged_cover: checkRangedCover && !!spot &&
+        (atSpot ? atRangedSafeSpot : this.recoveryRangedCoverAt(spot)),
       eta_to_safe_spot_ms: spot ? (atSpot ? 0 : squares * FARM_BUFF_MS_PER_SQUARE + FARM_BUFF_SETTLE_MS) : null,
       pack, spells, heard, ...extra };
   }
@@ -272,15 +283,24 @@ export class PullPart {
     if (!a || typeof a !== 'object') return null;
     const name = got.strategy ?? 'strategy', why = a.why == null ? phase : String(a.why);
     const out = { strategy: name, why, no_engage: a.no_engage === true };
-    if (a.cast) out.cast = await this.castSelfSpell(String(a.cast), `${name}: ${why}`).catch(e => ({ landed: false, why: e.message }));
+    if (a.cast) {
+      if (ctx.room === 552 && ctx.farm_strategy && got.strategy && isKaraholCurse(a.cast))
+        watchKaraholHold(this, { strategy: name, farmStrategy: ctx.farm_strategy });
+      out.cast = await this.castSelfSpell(String(a.cast), `${name}: ${why}`).catch(e => ({ landed: false, why: e.message }));
+    }
     if (a.go_to_safe_spot === true && ctx.safe_spot && !ctx.at_safe_spot && this.hold) {
       out.went = await skills.returnToSpot(this.s, this.hold, { maxSteps: 30 }).catch(e => ({ arrived: false, why: e.message }));
       this.movedAt = Date.now();
     }
     if (a.logoff && Number.isFinite(Number(a.logoff.for_ms))) {
       const ms = Math.max(1000, Math.min(60_000, Math.round(Number(a.logoff.for_ms))));
-      this.note('farm buff: logging off to wait it out', { strategy: name, for_ms: ms, why });
-      out.logoff = await this.reconnect(`${name}: ${why}`, { offlineMs: ms });
+      const ocean = ctx.room === 552;
+      if (ocean) out.no_engage = true;
+      if (!ocean || mayLogoff(ctx.agent)) {
+        if (ocean) noteLogoff(ctx.agent, { why: `${name}: ${why}`, room: ctx.room });
+        this.note('farm buff: logging off to wait it out', { strategy: name, for_ms: ms, why });
+        out.logoff = await this.reconnect(`${name}: ${why}`, { offlineMs: ms });
+      }
     }
     if (out.no_engage || out.cast || out.went || out.logoff)
       this.note('farm buff', { phase, strategy: name, why, cast: a.cast ?? null, landed: out.cast?.landed ?? null,

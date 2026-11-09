@@ -409,6 +409,10 @@ export class CombatMode {
     this.alarmRoomAt = new Map();
   }
 
+  attacksDisabled() {
+    return this.s.neverAttackOrdered?.() === true || this.keeper?.()?.policy?.neverAttack === true;
+  }
+
   status() {
     const o = this.active ?? this.last;
     const watch = this.watchStatus();
@@ -2679,6 +2683,7 @@ export class CombatMode {
 
   /** Start a sortie: 'going' (a flight owns the body), 'posted' (already in the map; fight on), or false. */
   beginSortie(d, threat, trigger) {
+    if (this.attacksDisabled()) return false;
     const s = this.s, here = s.world?.room?.num, now = this.now();
     if (this.sortie && this.sortie.room === d.room) return false;
     const sortie = { room: d.room, home: d.home, row: d.row ?? null, col: d.col ?? null, max_ms: d.max_ms ?? DEFAULT_SORTIE_MS,
@@ -2821,6 +2826,7 @@ export class CombatMode {
    * order: standing to is only worth the body if something will use the beat.
    */
   beginStandTo(d, enemy) {
+    if (this.attacksDisabled()) return false;
     const s = this.s, c = s.client, now = this.now();
     if (!s.live || !c?.self || !(s.world?.room?.num > 1) || c.vitals?.()?.health?.value === 0) return false;
     if (this.pvpEligibility?.() === false || !s.joints?.handles?.('pvp.assist')) return false;
@@ -2903,6 +2909,10 @@ export class CombatMode {
       return;
     }
     if (fled) { this.raiseWarAlarm(evidence.character, 'attacked', s.world.room.num); return; }
+    if (this.attacksDisabled()) {
+      this.raiseWarAlarm(evidence.character, 'attacked', s.world.room.num);
+      return;
+    }
     // A PLAYER THE SERVER WILL NOT LET US HIT HERE is not somebody return fire can answer. The
     // body is NOT taken: the keeper's ordinary ladder (flee below the line, rest when safe) is
     // the survival that applies, exactly as for anything else hurting us that we will not fight.
@@ -3223,6 +3233,8 @@ export class CombatMode {
     }
     // Validate completely before replacing the current order.
     const order = normalizeCombatOrder(input), s = this.s;
+    if (this.attacksDisabled())
+      return { accepted: false, skipped: true, reason: 'never_attack is enabled' };
     if (this.active?.pvp) return { ...this.status(), accepted: false, skipped: true,
       reason: 'PvP survival owns the body; use explicit combat stop to release it' };
     if (input.command_id && this.cancelled.has(input.command_id))
@@ -3364,6 +3376,9 @@ export class CombatMode {
     const pause = (phase, reason) => { w.phase = phase; w.reason = reason; };
     try {
       if (w.expiresAt != null && this.now() >= w.expiresAt) { this.clearWatch(); return; }
+      if (this.attacksDisabled()) {
+        pause('paused', 'never_attack is enabled'); return;
+      }
       if (!s.live || !c?.self || c.lastRxAt > 0 && this.now() - c.lastRxAt > 45000) {
         pause('offline', 'waiting for a live connection'); return;
       }
@@ -3735,6 +3750,8 @@ export class CombatMode {
   }
 
   async tick() {
+    if (this.active && !this.active.flight && this.attacksDisabled())
+      this.stop('never_attack is enabled');
     this.evaluateWatch();
     const o = this.active;
     if (!o) { this.armTimer(); return; }

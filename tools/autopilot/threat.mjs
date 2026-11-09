@@ -625,7 +625,7 @@ export class ThreatPart {
   }
 
   fightBackCheck(w, hp, now, lost) {
-    if (!w) return null;
+    if (!w || this.policy?.neverAttack === true) return null;
     // THE EPISODE. A blow is health going down with something attackable in reach; falling
     // off a ledge or a poison tick with nothing near is not an attack and starts nothing.
     if (lost > 0 && (this.inReachOfUs?.() ?? []).length) {
@@ -712,7 +712,7 @@ export class ThreatPart {
   // safety rules. A second path would drift from the first, which is how this file grew two
   // height rules and four copies of the fall physics.
   clearPathCheck(w, hp, now) {
-    if (!w) return null;
+    if (!w || this.policy?.neverAttack === true) return null;
     if (!this.travelAllows('clear_path')) return null;
     // A BLOCKED JOURNEY STOPS SAYING "travelling" LONG BEFORE IT STOPS BEING ONE, AND THIS GATE
     // WAS READING THE WORD RATHER THAN THE COMMITMENT.
@@ -851,7 +851,7 @@ export class ThreatPart {
   // reuses it), so `if (this.inert) return null` -- right for an errand -- would make this dead code on the only roads it
   // is for. A hold that is NOT a journey (an errand) still refuses, inside the decision.
   travelHuntCheck(w, hp, now = Date.now()) {
-    if (!w) return null;
+    if (!w || this.policy?.neverAttack === true) return null;
     const cfg = travelHuntSettings(this.policy?.travelHunt);
     if (!cfg) return null;
     // travel_guard {clear_path: false} switches every road swing off; this is one.
