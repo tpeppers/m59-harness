@@ -2,9 +2,12 @@
 // permits health regeneration after reconnect, without leaving the refuge.
 import {safeSpots,hasAnyFooting} from './m59-safespots.mjs';
 export function knownRefugeCell(geo,pose){
+ return refugeCell(geo,pose,false);
+}
+function refugeCell(geo,pose,allowRim){
  if(!geo?.collisionReady||pose?.predicted||![pose?.x,pose?.y,pose?.row,pose?.col].every(Number.isFinite)||
    Math.floor(pose.x/64)!==pose.col||Math.floor(pose.y/64)!==pose.row)return null;
- if(!hasAnyFooting(geo,pose.row,pose.col)||!safeSpots(geo,{limit:Infinity}).some(w=>!w.rim&&w.row===pose.row&&w.col===pose.col))return null;
+ if(!hasAnyFooting(geo,pose.row,pose.col)||!safeSpots(geo,{limit:Infinity}).some(w=>(allowRim||!w.rim)&&w.row===pose.row&&w.col===pose.col))return null;
  const x=(pose.x-64)*16,y=(pose.y-64)*16,leaf=geo.leafAtClient(x,y);
  if(!leaf?.sector||!Number.isFinite(geo.floorBaseAtClient(x,y,leaf)))return null;
  return {row:pose.row,col:pose.col};
@@ -29,18 +32,38 @@ export async function confirmRefugeCellArrival(geo,refuge,{read,finish,attempts=
  }
  return {arrived:false,pose,finished,reason:'refuge cell not observed'};
 }
-export async function turnAtProvedRefuge(s,{shouldCancel=null,beforeMutation=null}={}){
+export async function turnAtProvedRefuge(s,{shouldCancel=null,beforeMutation=null,stationaryWall=null}={}){
  const c=s?.client,generation=s?.movementGeneration,room=c?.room?.id;
- if(s?.combat?.active||c?.pvpGearActive)return {sent:false,reason:'PvP recovery retains activation control'};
  if(!c||s.live!==true||c.state!=='game'||!Number.isInteger(generation)||typeof s.confirmFinePosition!=='function')return {sent:false,reason:'refuge activation unavailable'};
- const pose=await s.confirmFinePosition({timeoutMs:1500}),refuge=knownRefugeCell(s.world?.geometry,pose);
+ const unavailable=()=>s.combat?.active||c.pvpGearActive||s._rite||s.pacer.holdStatus?.().active||
+  c.enchantments?.().some(e=>/^hold$/i.test(e.name?.trim()));
+ if(unavailable())return {sent:false,reason:'combat, a cast, or Hold owns activation'};
+ const pose=await s.confirmFinePosition({timeoutMs:1500});
+ const hasWall=()=>{
+  const wall=stationaryWall?.();
+  return wall?.ok===true&&wall.row===pose?.row&&wall.col===pose?.col;
+ };
+ // A stationary packet carries no position. Only a currently proved recovery
+ // wall may allow a rim here, while movement continues to use knownRefugeCell.
+ const refuge=refugeCell(s.world?.geometry,pose,hasWall());
  if(!refuge||!Number.isInteger(pose?.id)||pose.id<=0||pose.id!==c.self?.id)return {sent:false,reason:'refuge not confirmed'};
  const valid=()=>s.client===c&&c.state==='game'&&c.room?.id===room&&c.self?.id===pose.id&&
+  !unavailable()&&(!stationaryWall||hasWall())&&
   !s.movementWasCancelled?.(generation)&&!(typeof shouldCancel==='function'&&shouldCancel())&&
   Math.hypot((c.self?.x??Infinity)-pose.x,(c.self?.y??Infinity)-pose.y)<=1;
+ let degrees;
  const sent=await s.pacer.submit('turn',()=>{
   if(!valid()||(typeof beforeMutation==='function'&&beforeMutation('turn')===false))return false;
-  return c.face(Math.round(((c.self.degrees??0)+90)%360));
+  degrees=Math.round(((c.self.degrees??0)+90)%360);
+  return c.face(degrees);
  });
- return {sent:sent!==false,refuge,reason:'normal turn at confirmed cover; subsequent health gain remains observed'};
+ if(sent===false)return {sent:false,reason:'refuge activation cancelled before turn'};
+ if(stationaryWall){
+  // c.face predicts its own angle. Only a fresh native position read can
+  // distinguish an accepted turn from Hold or another native refusal.
+  const after=await s.confirmFinePosition({timeoutMs:1500});
+  const confirmed=!!after&&valid()&&after.id===pose.id&&after.x===pose.x&&after.y===pose.y&&c.self.degrees===degrees;
+  return {sent:true,confirmed,refuge,reason:confirmed?'stationary turn confirmed':'stationary turn not confirmed'};
+ }
+ return {sent:true,refuge,reason:'normal turn at confirmed cover; subsequent health gain remains observed'};
 }

@@ -36,6 +36,7 @@ function session({ known = true, accept = true } = {}) {
     },
     cancelOffer() {}, requestInventory() {},
     waitFor: async () => ({ events: [{ kind: 'countered' }] }),
+    eventsSince: () => [],
   };
   return { client: c, need: () => c, movementGeneration: 0, startJob: Session.prototype.startJob,
     runCommand: Session.prototype.runCommand,
@@ -118,4 +119,10 @@ assert.match((await sell({ ...order, to: 101 })).error, /merchant in this room/)
 one.job = { done: false, label: 'walking' };
 assert.match((await sell(order)).error, /busy: walking/);
 assert.equal(calls.length, 2, 'rejected requests never reach the trade');
+const changedPrice = session();
+const priceReceipt = await Session.prototype.sellOne.call(changedPrice, 99, { id: 4, amount: 3 }, true,
+  { expectedPrice: 10 });
+assert.equal(priceReceipt.sold, false);
+assert.match(priceReceipt.note, /quote changed/);
+assert.equal(changedPrice.client.inventory.find(item => item.id === 4).amount, 51);
 console.log('keeper sales handle equipment, duplicate loot, capped stacks, and inventory receipts');

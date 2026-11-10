@@ -20,6 +20,7 @@ import * as party from '../m59-party.mjs';
 import { purchaseKey } from '../m59-purchase-plan.mjs';
 import { isStalledRefugeRetry } from '../m59-recovery-refuge.mjs';
 import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
+import { turnAtProvedRefuge } from '../m59-refuge-activation.mjs';
 import * as skills from '../m59-skills.mjs';
 import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision, updateSurvivalDecision } from '../m59-survival-decision.mjs';
 import { CONTINUE, DEBUG_STATES, HANDLED, LOGOFF_REFRESH_MS, LOGOFF_UNDER_ATTACK_MS, REST_VIGOR_CAP, bearingIn, pct, purchaseEnabled, vigorOf } from '../m59-autopilot.mjs';
@@ -679,17 +680,14 @@ export class CooperativePart {
         // freezesWithoutGain tripped — two wasted logoffs at the health that could least
         // afford them.
         //
-        // verify:false on purpose. The verifying path sleeps 300ms and then round-trips
-        // room-contents, and comparing a position across up to 2.3 seconds of live combat
-        // is what once reported a turn had "moved us off the square" and cost Animal a
-        // proven spot he was standing on. We do not need the answer: REQ_TURN carries no
-        // coordinates, and the next observe() reads the position anyway.
-        const armed = await skills.turnInPlace(this.s, { verify: false })
-                                  .catch(e => ({ turned: false, why: e.message }));
-        if (armed.turned) this.turnedAt = Date.now();
+        // A native Hold can silently refuse the turn. Verify before stamping
+        // the timer as armed so the recovery decision retains the retry.
+        const armed = await turnAtProvedRefuge(s, { stationaryWall:()=>this.currentRecoveryWall(),
+          shouldCancel:()=>this.hold!==reclaimedHold || currentSurvivalDecision(s)!==d }).catch(e=>({confirmed:false,reason:e.message}));
+        if (armed.confirmed) this.turnedAt = Date.now();
         // Only this successful, stationary reconnect can supply the post-logoff low reading.
         // The proof is process-local and cannot survive a later reconnect or keeper handoff.
-        if (armed.turned && canProveRecovery && session?.logoffs === 1 && returned !== client &&
+        if (armed.confirmed && canProveRecovery && session?.logoffs === 1 && returned !== client &&
             s.live && s.client === returned && s.client.combatReady === true && s.client.ailments?.()?.length === 0 &&
             returned.selfId === bodyId && returned.self?.id === bodyId && returned.room?.id === roomId &&
             s.world?.room?.num === room && (s.lifeBoundary ?? 0) === life && s.movementGeneration === generation &&
@@ -704,17 +702,17 @@ export class CooperativePart {
 
         this.note('back on the safe spot', {
           where: { col: spot.col, row: spot.row }, proven: spot.proven,
-          turned: armed.turned, facing: armed.to ?? null,
-          plan: armed.turned
+          turned: armed.confirmed === true, facing: armed.confirmed ? returned.self.degrees : null,
+          plan: armed.confirmed
             ? 'health regeneration is armed and nothing can reach this square — rest to full here'
             : 'REST WILL PAY NOTHING until something sets the moved-since-entry flag',
-          why: armed.turned
+          why: armed.confirmed
             ? 'a reconnect clears PFLAG_MOVED_SINCE_ENTRY, and a turn is the only thing that ' +
               'sets it again without giving up the square the walls are protecting'
-            : 'the turn did not go through: ' + (armed.why || 'unknown') });
+            : 'the turn did not go through: ' + armed.reason });
         // A turn that did not go through leaves us unreachable and healing at zero, which
         // is not a state to sit in quietly. Say so, and let the rest branch try again.
-        if (!armed.turned) this.noProgress('back on the safe spot but could not turn to arm healing');
+        if (!armed.confirmed) this.noProgress('back on the safe spot but could not turn to arm healing');
         return true;
       }
       // We came back somewhere else. Say so rather than carry on believing in a

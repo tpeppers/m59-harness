@@ -21,6 +21,7 @@ import { OF } from '../m59-parse.mjs';
 import { affordableHeal, castRecoveryHeal } from '../m59-recovery-heal.mjs';
 import { REFUGE_NO_PROGRESS_REASON, REFUGE_PROGRESS_MS, isStalledRefugeRetry, observeRefugeProgress, recoveryOccupiedSquares, recoveryRefugeReach, recoveryUnderPressure } from '../m59-recovery-refuge.mjs';
 import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
+import { turnAtProvedRefuge } from '../m59-refuge-activation.mjs';
 import { activeRoutes, anchorFor } from '../m59-routes.mjs';
 import { coarseCombatReachFrom } from '../m59-safespots.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -526,18 +527,27 @@ export class SafeSpotsPart {
           {because:'recovery position changed'});return true;
       }
       this.doing='recovering';
-      if(d.phase==='turn_required') {
-        const turned=await skills.turnInPlace(s,{verify:false}).catch(e=>({turned:false,why:e.message}));
-        if(currentSurvivalDecision(s)?.id!==d.id)return true;
-        if(turned.turned) {
-          this.turnedAt=Date.now();updateSurvivalDecision(s,d.id,{phase:'reconnected_turn_and_heal'});
-        } else chooseSurvivalDecision(s,{strategy:'logoff_safe',reason:'turn did not arm healing',
-          reason_code:'turn_failed',mitigation:turned.why},{because:'stationary healing was not established',outcome:'failed'});
-        return true;
-      }
       const generation=s.movementGeneration,client=s.client;
       const cancelled=()=>currentSurvivalDecision(s)?.id!==d.id || s.client!==client
         || s.movementWasCancelled?.(generation) || !this.currentRecoveryWall();
+      const progress=this._recoveryHealthProgress;
+      if(progress?.id!==d.id || progress.hp!==v?.health?.value)
+        this._recoveryHealthProgress={id:d.id,hp:v?.health?.value,at:Date.now()};
+      // A healthy-vigor body may be quiet on the wall without an active native
+      // health timer. Re-arm once if the initial entry receipt was lost.
+      const stalled=d.strategy==='rest_safe' && !d.phase && v?.vigor?.value>=140 &&
+        Date.now()-this._recoveryHealthProgress.at>=15_000;
+      if(d.phase==='turn_required'||stalled) {
+        const turned=await turnAtProvedRefuge(s,{shouldCancel:cancelled,
+          stationaryWall:()=>this.currentRecoveryWall()}).catch(e=>({confirmed:false,reason:e.message}));
+        if(currentSurvivalDecision(s)?.id!==d.id)return true;
+        if(turned.confirmed) {
+          this.turnedAt=Date.now();updateSurvivalDecision(s,d.id,{phase:'reconnected_turn_and_heal'});
+        } else if(d.phase!=='turn_required'||d.phase_reason!==turned.reason) {
+          updateSurvivalDecision(s,d.id,{phase:'turn_required',phase_reason:turned.reason});
+        }
+        return true;
+      }
       // The active recovery path used to bypass healUp and wait on vigor alone.
       // Keep the same wall, movement generation and decision while casting one heal.
       if(hp!=null&&hp<0.99&&Date.now()-(this._recoveryHealAt??0)>=3000&&affordableHeal(client,{allow:healAllowOf(this)})){

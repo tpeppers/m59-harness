@@ -96,7 +96,8 @@ export async function tryFarmFoodCache(pilot, {
     return c.getFromContainer({ id, amount: 1 });
   }).catch(() => {});
   if (!sent) return false;
-  await c.waitFor({ since: seq, kinds: ['got', 'message'], timeoutMs: 1400 }).catch(() => {});
+  await c.waitFor({ since: seq, kinds: ['got', 'inventory'], timeoutMs: 1600,
+    match: () => heldCount(c, name) === before + 1 }).catch(() => {});
   if (s.client !== c || c.idGenerations !== generation || c.room?.id !== roomObject || c.selfId !== body ||
       heldCount(c, name) !== before + 1) return false;
   pilot.ledgerEvent('farm_food_cache_withdrawal', { room: ROOM, item: name, amount: 1 });

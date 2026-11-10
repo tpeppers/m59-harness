@@ -13,6 +13,7 @@
 import {cooperativePass} from '../m59-cooperative-combat.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { tryFarmFoodCache } from '../m59-farm-food-cache.mjs';
+import { tryFarmSaleCache } from '../m59-farm-sale-cache.mjs';
 import { publishGroupQuarry, spreadGroupQuarries } from '../m59-group-quarry.mjs';
 import { chaseCache, orderByAttackOrWalk, orderByWalk } from '../m59-chase.mjs';
 import { molluskRockThreatAt } from '../m59-casters.mjs';
@@ -240,6 +241,7 @@ export class PassFarmPart {
       const withdrewFood = await tryFarmFoodCache(this);
       const plan = STRATEGIES[this.policy.strategy] || STRATEGIES.baseline;
       if (await this.provision(plan, v) === 'ate' || withdrewFood) return HANDLED;
+      if (await tryFarmSaleCache(this).catch(() => false)) return HANDLED;
 
       // THE STRATEGY MAY SAY THIS FARM SHOULD NOT RUN (m59-strategy-gate.mjs): the body lacks what the file
       // `requires` (a troll crew without a magic weapon), or its kill-rate `floor` tripped. Then no quarry is

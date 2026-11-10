@@ -106,6 +106,7 @@ import { lapsedWeapon, dedicatedWeapon, alreadyDedicated } from './m59-weapon-ma
 import { planLootOnly, newLootOnlyMemory, isBodyArmor } from './m59-loot-filter.mjs';
 import { readDibs, dibsFile, dibsFilter } from './m59-dibs.mjs';
 import { boundFarmFoodPile, FARM_FOOD_CACHE_ROOM, isFarmFoodCacheItem, readFarmFoodCache } from './m59-farm-food-cache-record.mjs';
+import { boundFarmGearPiles, isFarmGearCacheItem, readFarmGearCache } from './m59-farm-gear-cache-record.mjs';
 import { killDropItems } from './m59-killdrop.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
@@ -5244,13 +5245,17 @@ class Session {
                           icon_rsc: o.iconRsc, unrevealed: skills.isUnrevealed(o) }))
       : null;
     const sweep = !ids?.length || !explicitIdsOverride;
-    const cacheProtected = (id, name) => sweep && this.world?.room?.num === FARM_FOOD_CACHE_ROOM &&
-      isFarmFoodCacheItem(name) && boundFarmFoodPile(this, c, readFarmFoodCache())?.id === id;
+    const cacheProtected = (id, name) => {
+      if (!sweep || this.world?.room?.num !== FARM_FOOD_CACHE_ROOM) return false;
+      if (isFarmFoodCacheItem(name) && boundFarmFoodPile(this, c, readFarmFoodCache())?.id === id) return true;
+      return isFarmGearCacheItem(name) && boundFarmGearPiles(this, c, readFarmGearCache()).some(o => o.id === id);
+    };
     const cacheSkipped = [];
     cands = cands.filter(o => {
       const name = c.rsc.get(o.nameRsc);
       if (!cacheProtected(o.id, name)) return true;
-      cacheSkipped.push({ id: o.id, item: name, why: 'reserved for counted farm food withdrawals' });
+      cacheSkipped.push({ id: o.id, item: name, why: isFarmFoodCacheItem(name)
+        ? 'reserved for counted farm food withdrawals' : 'reserved for exact farm gear withdrawals' });
       return false;
     });
 
@@ -5769,7 +5774,7 @@ class Session {
   // Offer one item to a merchant and either read the price or complete the sale.
   // Selling is the trade protocol, so this is offer -> wait for the money
   // counteroffer -> accept (or cancel, when we only wanted the quote).
-  async sellOne(merchantRef, item, confirm) {
+  async sellOne(merchantRef, item, confirm, { expectedPrice = null } = {}) {
     const c = this.need();
     const liveItem=(c.inventory||[]).find(o=>o.id===item.id);
     if(!liveItem)return {sold:false,offered_price:null,note:'item is no longer carried'};
@@ -5800,6 +5805,11 @@ class Session {
     }
     const held=await this.pacer.submit('trade', () => {
       const current=(c.inventory||[]).find(o=>o.id===item.id);
+      const currentPrice = (c.trade?.theirs || []).reduce((n, i) => n + (i.amount || 1), 0);
+      if (expectedPrice !== null && (price !== expectedPrice || currentPrice !== expectedPrice)) {
+        c.cancelOffer();
+        return 'merchant quote changed before acceptance';
+      }
       const reason=!current||c.rsc.get(current.nameRsc)!==intentItem.name
         ? 'item changed during the offer' : saleBlocked(this,intentItem);
       if(reason){c.cancelOffer();return reason;}

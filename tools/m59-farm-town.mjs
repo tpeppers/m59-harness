@@ -46,6 +46,10 @@
 import { itemNameKey } from './m59-items.mjs';
 
 export const FARM_TOWN_KINDS = Object.freeze(['food', 'weapons', 'armor', 'reagents']);
+// The Ocean fighters opt in with the existing no-town order. The stationary
+// service roles and fighters assigned to other rooms retain their own orders.
+export const usesOceanCourier = policy => policy?.assignedRoom === 552 &&
+  policy.townTrips === false && policy.neverAttack !== true;
 const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep', 'sellReserve', 'sellOverflow', 'hall', 'uncurse']);
 // The public door to the Barloque guild halls (the reagent coop enters the hall from here, m59-reagent-coop-runtime.mjs) and
 // Frular's room (the rent, m59-tithe.mjs FRULAR_ROOM). A farm town's `hall` road may leave the confinement for these three.

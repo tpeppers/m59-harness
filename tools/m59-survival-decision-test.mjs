@@ -21,11 +21,15 @@ let passed=0;
 async function test(name,run){await run();passed++;console.log('PASS '+name);}
 function fixture({row=8,col=16}={}) {
   const events=[],calls=[],health={value:30,max:50};
-  const c={state:'game',selfId:1,self:{id:1,row,col,degrees:0},room:{objects:new Map()},
-    vitals:()=>({health,vigor:{value:80}}),face:()=>calls.push('turn'),stats(){},rest(){},stand(){},waitFor:async()=>({})};
+  const c={state:'game',selfId:1,self:{id:1,row,col,degrees:0},room:{id:39,objects:new Map()},
+    vitals:()=>({health,vigor:{value:80}}),face:degrees=>{calls.push('turn');c.self.degrees=degrees;},
+    stats(){},rest(){},stand(){},waitFor:async()=>({})};
   const s=Object.assign(Object.create(Session.prototype),{name:null,client:c,movementGeneration:0,
     cancelledMovementTokens:new Set(),world:{room:map.rooms[39],geometry:geometryFor(map.rooms[39]),map},
-    need:()=>c,pacer:{submit:async(_lane,fn)=>fn()},
+    need:()=>c,pacer:{submit:async(_lane,fn)=>fn()},confirmFinePosition:async()=>{
+      const {row,col}=c.self;
+      Object.assign(c.self,{x:col*64+32,y:row*64+32});return {...c.self};
+    },
     // Hurt AND being hit: a logoff with nothing to stop is refused (m59-logoffgate-test.mjs).
     damagedAt:Date.now()});
   const k=Object.assign(Object.create(Autopilot.prototype),{s,policy:{},passes:1,tally:{},claims:new Map(),
@@ -121,11 +125,29 @@ await test('fresh damage overrides the already-healing exception at a safe wall'
 });
 await test('failed turn stays explicit and must be retried before resting',async()=>{
   const {k,s,c,calls}=fixture({row:7,col:16});
+  const face=c.face;
   c.face=()=>{throw Error('turn rejected');};await k.takeRecoverySpot('hurt');
   assert.equal(currentSurvivalDecision(s).phase,'turn_required');
   c.rest=()=>assert.fail('rested with the healing timer still unarmed');
-  c.face=()=>calls.push('turn');await k.continueSurvivalDecision();
+  c.face=face;await k.continueSurvivalDecision();
   assert.equal(currentSurvivalDecision(s).phase,'reconnected_turn_and_heal');
+});
+await test('quiet high-vigor recovery re-arms a proved Ocean rim after Hold clears',async()=>{
+  const {k,s,c,calls,health}=fixture({row:27,col:1});
+  s.world.room=map.rooms[552];s.world.geometry=geometryFor(s.world.room);c.room.id=552;
+  c.vitals=()=>({health,vigor:{value:198}});
+  let held=true;
+  c.enchantments=()=>held?[{name:'hold'}]:[];
+  c.rest=()=>assert.fail('rested before the native turn was confirmed');
+  const d=chooseSurvivalDecision(s,{strategy:'rest_safe',status:'recovering',reason:'rim recovery'});
+  k._recoveryHealthProgress={id:d.id,hp:health.value,at:Date.now()-16_000};
+  await k.continueSurvivalDecision();
+  assert.equal(d.phase,'turn_required');assert.deepEqual(calls,[]);
+  held=false;
+  await k.continueSurvivalDecision();
+  assert.equal(d.phase,'reconnected_turn_and_heal');assert.deepEqual(calls,['turn']);
+  assert.equal(currentSurvivalDecision(s),d,'the same recovery owns the retry');
+  assert.equal(c.self.row,27);assert.equal(c.self.col,1);
 });
 await test('a predicted position is not proof of current shelter',()=>{
   const {k,c}=fixture({row:7,col:16});c.self.predicted=true;

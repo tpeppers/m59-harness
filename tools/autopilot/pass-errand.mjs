@@ -11,6 +11,7 @@
 // Methods: passErrand, restVigorCeiling, releaseRestedHold, resumeDeclined,
 //   casterRecoveryFulfilled, resumeSuspendedJourney, retirePackBlockedJourney, cancelJourney
 import { poisonedNow } from '../m59-poison.mjs';
+import { usesOceanCourier } from '../m59-farm-town.mjs';
 import { traceDecision } from '../m59-keeper-trace.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
 import { keeperOrigin, liveMoveOrder, moveOrigin, originLabel } from '../m59-move-origin.mjs';
@@ -497,6 +498,14 @@ export class PassErrandPart {
       recordEvent(this.who(), 'travel_resume_dropped', { to: j.to, why, attempts: j.attempts });
       return CONTINUE;
     };
+
+    // A completed recovery can leave a stale economic parent. Preserve actual
+    // recovery and operator/FleetScript orders while retiring only routine town work.
+    if (usesOceanCourier(this.policy) && this.townTrip?.purpose !== 'operator' &&
+        j.origin?.source === 'keeper' &&
+        ['town_trip', 'sell_circuit', 'vault_run', 'purchase_funds', 'food_shopping',
+          'reagent_shopping', 'farm_supply_buy', 'stockpile_withdraw'].includes(j.origin.name))
+      return drop('the Ocean courier handles routine town trips');
 
     if ((this.tally?.deaths ?? 0) !== j.deaths_at)
       return drop('died since it was suspended — the road is not worth a second body');
