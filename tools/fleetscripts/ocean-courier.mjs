@@ -410,8 +410,8 @@ async function gearToStage(rpc, candidates) {
 async function stageSupplies(rpc, plan, fleet, { carriedOnly = false } = {}) {
   const bread = OCEAN_BREAD.name;
   const names = [...OCEAN_GEAR_NAMES, bread, 'elderberry'];
+  if (!carriedOnly && !names.some(item => plan.purchased[item])) return;
   const cargoRecord = readOceanGearCargo(fleet);
-  if (!carriedOnly && !names.some(item => plan.purchased[item]) && !cargoRecord?.items?.length) return;
   const body = await moveToWard(rpc);
   const [singer, current, carried] = await Promise.all([read(rpc, holder), scan(rpc, names), inventory(rpc)]);
   require(oceanWardReady(singer) && current.ok && current.ids_stale === false && carried.ids_stale === false &&

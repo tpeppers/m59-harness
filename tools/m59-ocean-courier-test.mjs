@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -155,11 +155,19 @@ test('an interrupted 534 return stages only the exact receipted dedicated axe an
   await steps.at(-1).fn({ call: rpc });
   assert.deepEqual(mutations.filter(([tool]) => tool === 'act'), [['act', { agent: 'hk2', verb: 'drop', target: axe.id }]]);
   assert.deepEqual(readOceanGearCargo('prod').items, []);
-  const { readFileSync } = await import('node:fs');
   assert.deepEqual(JSON.parse(readFileSync(files.M59_FARM_GEAR_CACHE_FILE, 'utf8')).items,
     [{ id: floorAxe.id, name: axe.name, row: 44, col: 56 }]);
   await steps.at(-1).fn({ call: rpc });
   assert.equal(mutations.filter(([tool]) => tool === 'act').length, 1);
+
+  const leather = { id: 515, name: 'leather armor', amount: 0, rarity: 0 };
+  const purchase = { id: leather.id, name: leather.name, source: 'Colhorr', receipt: { seller: 'Colhorr',
+    room: 201, item: leather.name, amount: 1, shillings: 640, generation: epoch, ids: [leather.id], at: now } };
+  recordOceanGearCargo('prod', server, { ...home, room: { num: 201 } }, purchase);
+  const newPack = { ...before, items: [other, leather] };
+  assert.deepEqual(selectOceanGearCargo(readOceanGearCargo('prod'), server, home, newPack), [purchase]);
+  assert.deepEqual(selectOceanGearCargo(readOceanGearCargo('prod'), server, home,
+    { ...newPack, items: [{ ...leather, id: 516 }] }), []);
 });
 
 test('interrupted bread delivery uses the carried surplus before buying and preserves four loaves', () => {
