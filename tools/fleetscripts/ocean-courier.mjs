@@ -6,7 +6,7 @@ import { fleetName, resolveControlUrl, stateFileFor } from '../m59-fleetpath.mjs
 import { addStashClaim, dibsFile } from '../m59-dibs.mjs';
 import { farmFoodCacheFile } from '../m59-farm-food-cache-record.mjs';
 import { farmGearCacheFile } from '../m59-farm-gear-cache-record.mjs';
-import { stashClaim } from '../m59-floor-cache.mjs';
+import { PICKUP_REACH, stashClaim } from '../m59-floor-cache.mjs';
 import { isActiveRecoveryDecision } from '../m59-survival-decision.mjs';
 import { OF } from '../m59-parse.mjs';
 import { ITEM_RARITY } from '../m59-items.mjs';
@@ -138,15 +138,23 @@ async function setCorridor(rpc, rooms) {
   require(result.keeper_push?.confirmed === true, 'courier confinement did not reach keeper');
 }
 
-async function moveToWard(rpc) {
+export async function moveToWard(rpc, { pickup = false } = {}) {
   const s = await waitForBody(rpc, room);
-  if (position(s.you, sale)) return s;
+  const inReach = body => pickup ? oceanDistance(body.you, sale) <= PICKUP_REACH
+    : oceanDistance(body.you, ward) <= 3;
+  if (inReach(s)) return s;
   const motion = await rpc('walk_to', { agent, ...sale, fine: true, exact_arrival: true, arrive_within: 12 }, 80000);
-  require(motion.arrived === true, motion.reason ?? 'courier could not reach the ward');
+  if (motion.arrived !== true) {
+    if (motion.reason === 'object_blocked' && motion.cancelled !== true) {
+      const after = await read(rpc, agent);
+      if (oceanCourierReady(after, room) && unchanged(s, after) && inReach(after)) return after;
+    }
+    throw Error(motion.reason ?? 'courier could not reach the ward');
+  }
   const until = Date.now() + 10000;
   do {
     const after = await read(rpc, agent);
-    if (oceanCourierReady(after, room) && unchanged(s, after) && position(after.you, sale)) return after;
+    if (oceanCourierReady(after, room) && unchanged(s, after) && inReach(after)) return after;
     await sleep(500);
   } while (Date.now() < until);
   throw Error('courier did not settle on the delivery square');
@@ -162,7 +170,7 @@ async function merchant(rpc, seller, expected) {
 }
 
 async function collectSale(rpc, fleet, plan) {
-  const snapshot = await moveToWard(rpc);
+  const snapshot = await moveToWard(rpc, { pickup: true });
   const [singer, floor] = await Promise.all([read(rpc, holder), scan(rpc, saleNames)]);
   require(oceanWardReady(singer), 'the cache holder moved or is nearing a save');
   const receipts = readOceanSaleDeposits(fleet);
@@ -172,7 +180,8 @@ async function collectSale(rpc, fleet, plan) {
     const [body, before, scene, currentSinger] = await Promise.all([
       read(rpc, agent), inventory(rpc), scan(rpc, item.name), read(rpc, holder),
     ]);
-    require(oceanCourierReady(body, room) && unchanged(snapshot, body) && position(body.you, sale),
+    require(oceanCourierReady(body, room) && unchanged(snapshot, body) && position(body.you, snapshot.you) &&
+      oceanDistance(body.you, item) <= PICKUP_REACH,
       'courier state changed while staging sale');
     if (!oceanWardReady(currentSinger) || before.ids_stale !== false || before.last_save_at !== snapshot.last_save_at ||
         scene.last_save_at !== snapshot.last_save_at || oceanUnitsFit(before, item.name) < item.amount ||
@@ -413,6 +422,7 @@ async function stageSupplies(rpc, plan, fleet, { carriedOnly = false } = {}) {
   if (!carriedOnly && !names.some(item => plan.purchased[item])) return;
   const cargoRecord = readOceanGearCargo(fleet);
   const body = await moveToWard(rpc);
+  const delivery = body.you;
   const [singer, current, carried] = await Promise.all([read(rpc, holder), scan(rpc, names), inventory(rpc)]);
   require(oceanWardReady(singer) && current.ok && current.ids_stale === false && carried.ids_stale === false &&
     [singer, current, carried].every(snapshot => snapshot.last_save_at === body.last_save_at),
@@ -456,7 +466,7 @@ async function stageSupplies(rpc, plan, fleet, { carriedOnly = false } = {}) {
   if (!payload.length) return { singer, stock: current, pack };
   for (const item of payload) {
     const latest = await read(rpc, agent);
-    require(oceanCourierReady(latest, room) && unchanged(body, latest) && position(latest.you, sale) &&
+    require(oceanCourierReady(latest, room) && unchanged(body, latest) && position(latest.you, delivery) &&
       latest.items?.some(row => row.id === item.id && matches(row, item.name) &&
         (item.name !== bread || row.amount >= item.amount && count(latest, bread) - item.amount >= OCEAN_BREAD.reserve)),
     'courier moved or exact ward cargo changed before drop');
@@ -468,7 +478,7 @@ async function stageSupplies(rpc, plan, fleet, { carriedOnly = false } = {}) {
   require(oceanWardReady(anchor) && refreshed.ok && refreshed.ids_stale === false && after.ids_stale === false &&
     [anchor, refreshed, after].every(snapshot => snapshot.last_save_at === body.last_save_at),
   'ambiguous ward drop epoch; inspect pack and floor before any repeat');
-  const newPiles = refreshed.items.filter(item => position(item, sale) && !current.items.some(old => old.id === item.id));
+  const newPiles = refreshed.items.filter(item => position(item, delivery) && !current.items.some(old => old.id === item.id));
   const verifiedGear = cargo.flatMap(dropped => {
     const appeared = newPiles.filter(item => matches(item, dropped.name));
     return appeared.length === 1 && !after.items.some(item => item.id === dropped.id) &&
@@ -490,7 +500,7 @@ async function stageSupplies(rpc, plan, fleet, { carriedOnly = false } = {}) {
   const foodDrop = provisions.find(item => item.name === bread);
   if (foodDrop) {
     const newFood = refreshed.items.filter(item => item.name === bread);
-    require(newFood.length === 1 && position(newFood[0], sale) && newFood[0].amount === foodDrop.amount,
+    require(newFood.length === 1 && position(newFood[0], delivery) && newFood[0].amount === foodDrop.amount,
       'exact staged food pile could not be confirmed');
     writeOceanCache(farmFoodCacheFile(fleet), oceanProvisionRecord({ host: plan.server, ward: anchor, items: newFood, kind: 'food' }));
   }

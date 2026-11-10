@@ -9,7 +9,7 @@ import {
   oceanProvisionRecord, oceanUnitsFit, readOceanGearCargo, readOceanSaleAuthorization, recordOceanGearCargo,
   renewOceanSaleClaims, selectOceanGearCargo, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
-import { oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
+import { moveToWard, oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
 const now = 100_000;
 const epoch = 90_000;
@@ -112,9 +112,9 @@ test('an interrupted 534 return stages only the exact receipted dedicated axe an
   const server = { host: 'prod.example', port: 5900 };
   const axe = { id: 18782, name: 'axe', amount: 0, rarity: 0 };
   const other = { ...axe, id: 400 };
-  const floorAxe = { ...axe, id: 19001, row: 44, col: 56, can: ['get'] };
+  const floorAxe = { ...axe, id: 19001, row: 44, col: 55, can: ['get'] };
   const home = { character: 'Zheng He', in_game: true, connected: true, ids_stale: false, room: { num: 552 },
-    pid: 10, connection_revision: 1, last_save_at: epoch, ids_as_of: now, you: { object_id: 25, row: 44, col: 56 },
+    pid: 10, connection_revision: 1, last_save_at: epoch, ids_as_of: now, you: { object_id: 25, row: 44, col: 55 },
     hp: { value: 23, max: 23 }, vigor: { value: 120 }, karma: { value: 15 }, room_wire: ward.room_wire,
     combat: { personal_threat: { level: 'quiet' } }, autopilot_status: { mode: 'survive', faculties: { work: 'keeper' },
       policy: { neverAttack: true, townTrips: false, confineRooms: [552, 544, 534, 535, 200, 202, 201] } } };
@@ -156,7 +156,7 @@ test('an interrupted 534 return stages only the exact receipted dedicated axe an
   assert.deepEqual(mutations.filter(([tool]) => tool === 'act'), [['act', { agent: 'hk2', verb: 'drop', target: axe.id }]]);
   assert.deepEqual(readOceanGearCargo('prod').items, []);
   assert.deepEqual(JSON.parse(readFileSync(files.M59_FARM_GEAR_CACHE_FILE, 'utf8')).items,
-    [{ id: floorAxe.id, name: axe.name, row: 44, col: 56 }]);
+    [{ id: floorAxe.id, name: axe.name, row: 44, col: 55 }]);
   await steps.at(-1).fn({ call: rpc });
   assert.equal(mutations.filter(([tool]) => tool === 'act').length, 1);
 
@@ -319,6 +319,35 @@ test('interrupted courier only returns on its own authorized corridor and quiet 
     .filter(step => step.do === 'walk').map(step => step.to), [544, 552]);
   assert.equal(oceanCourierReturnSteps({ ...s, room: { num: 533 } }), null);
   assert.equal(oceanCourierReturnSteps({ ...s, you: { ...holder, object_id: null } }), null);
+});
+
+test('sale pickup uses native reach and a blocked approach only settles on a safe current tile', async () => {
+  const body = { character: 'Zheng He', in_game: true, connected: true, ids_stale: false, room: { num: 552 },
+    pid: 10, connection_revision: 1, last_save_at: epoch, you: { object_id: 25, row: 45, col: 54 },
+    hp: { value: 23, max: 23 }, vigor: { value: 152 }, karma: { value: 10 },
+    combat: { personal_threat: { level: 'quiet' } }, autopilot_status: { mode: 'survive',
+      policy: { neverAttack: true, townTrips: false } } };
+  const standing = await moveToWard(async tool => {
+    assert.equal(tool, 'status');
+    return body;
+  }, { pickup: true });
+  assert.equal(standing, body);
+
+  const nearby = { ...body, you: { ...body.you, row: 44, col: 55 } };
+  const approach = (after, motion = { arrived: false, reason: 'object_blocked' }) => {
+    let moved = false;
+    return async tool => {
+      if (tool === 'status') return moved ? after : body;
+      assert.equal(tool, 'walk_to');
+      assert.equal(moved, false);
+      moved = true;
+      return motion;
+    };
+  };
+  assert.equal(await moveToWard(approach(nearby)), nearby);
+  await assert.rejects(moveToWard(approach(body)), /object_blocked/);
+  await assert.rejects(moveToWard(approach({ ...nearby, last_save_at: epoch + 1 })), /object_blocked/);
+  await assert.rejects(moveToWard(approach(nearby, { arrived: false, reason: 'object_blocked', cancelled: true })), /object_blocked/);
 });
 
 test('every conditional courier leg declares its possible rooms for FleetScript preflight', async () => {
