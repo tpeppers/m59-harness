@@ -12,6 +12,7 @@
 //   fightNow, passFightBack
 import * as grudge from '../m59-grudge.mjs';
 import { tryFarmGearCache } from '../m59-farm-gear-cache.mjs';
+import { tryFarmTradeGoodsSpace } from '../m59-farm-sale-cache.mjs';
 import { usesOceanCourier } from '../m59-farm-town.mjs';
 import { activeConflicts, clearConflict, declareConflict, recordTargetKill, targetsFor } from '../m59-intel.mjs';
 import { findPath } from '../m59-map.mjs';
@@ -515,6 +516,7 @@ export class PassCombatPart {
       const blocker = classified.blocker;
       let unblockedWhy = classified.declinedWhy;
       if (blocker === 'room') {
+        if (courierSupplied && await tryFarmTradeGoodsSpace(this).catch(() => false)) return HANDLED;
         // FIRST, MAKE THE ROOM IN PLACE (2026-11-05). Rizzo (t19) conjures his weapons and stood
         // at 97% bulk reading `unarmed -- 60 bulk free, needs 70 to hold one` while every journey
         // to a merchant was refused: a dead end with a pack full of things his own sale plan was

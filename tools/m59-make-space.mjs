@@ -168,7 +168,7 @@ async function readPack(s, c) {
 // DO IT. `planOf()` is the keeper's own sale plan (called fresh, after a pack read); `capacityOf()`
 // is `skills.carryCapacity(c)`. Every drop is by exact id and amount and verified by a re-read.
 export async function makeSpace(s, { bulk = null, weight = null, planOf, capacityOf, heldBack = () => new Set(),
-                                     maxDrops = 40, why = 'make_space' } = {}) {
+                                     maxDrops = 40, why = 'make_space', beforeDrop = null } = {}) {
   const c = s.need ? s.need() : s.client;
   const needed = makeSpaceTarget({ bulk, weight });
   const out = (o) => ({ needed, ...o });
@@ -197,7 +197,12 @@ export async function makeSpace(s, { bulk = null, weight = null, planOf, capacit
     if (!live || nameOfIn(c, live) !== p.row.name) { refused.push({ name: p.row.name, why: 'gone or changed since the plan' }); continue; }
     const had = live.amount > 0 ? live.amount : 1;
     const amount = Math.min(p.amount, had);
-    await s.pacer.submit('drop', () => c.drop([dropSpec(live, amount)])).catch(() => {});
+    let prevented = false;
+    await s.pacer.submit('drop', () => {
+      if (beforeDrop && !beforeDrop()) { prevented = true; return; }
+      return c.drop([dropSpec(live, amount)]);
+    }).catch(() => {});
+    if (prevented) break;
     await readPack(s, c);
     const still = (c.inventory || []).find(o => o.id === p.row.id);
     const gone = Math.max(0, had - (still ? (still.amount > 0 ? still.amount : 1) : 0));
