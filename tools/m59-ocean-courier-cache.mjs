@@ -3,7 +3,7 @@ import { closeSync, openSync, readFileSync, readSync, renameSync, statSync, writ
 import { dirname, join } from 'node:path';
 import { dibsFile, itemKey, liveClaims, normalizeBook } from './m59-dibs.mjs';
 import { ledgerDirForRoster, stateFileFor } from './m59-fleetpath.mjs';
-import { ITEM_RARITY, weighItem } from './m59-items.mjs';
+import { ITEM_RARITY, foodValue, weighItem } from './m59-items.mjs';
 
 export const OCEAN_COURIER = Object.freeze({
   room: 552, agent: 'hk2', name: 'Zheng He', holder: 't3', holderName: 'Statler',
@@ -45,11 +45,17 @@ export function oceanBreadPlan(floor, carried) {
 export function oceanCourierReserveFood(status) {
   const vigor = status?.vigor?.value;
   if (!Number.isFinite(vigor) || vigor < 80 || vigor >= 140 || status.ids_stale !== false) return null;
-  const protectedItems = new Set((status.autopilot_status?.policy?.protectedItems ?? []).map(oceanItemName));
-  const stock = (status.items ?? []).filter(item => positive(item.id) && positive(item.amount) &&
-    !protectedItems.has(oceanItemName(item.name)));
-  return stock.find(item => ['loaf of bread', 'meat pie'].includes(oceanItemName(item.name))) ??
+  const stock = courierRations(status, status.autopilot_status?.policy?.protectedItems);
+  return stock.find(item => [OCEAN_BREAD.name, 'meat pie'].includes(oceanItemName(item.name))) ??
     stock.find(item => oceanItemName(item.name) === 'inky-cap mushroom') ?? null;
+}
+
+function courierRations(pack, protectedItems = []) {
+  if (pack.ids_stale !== false) return [];
+  const protectedNames = new Set(protectedItems.map(oceanItemName));
+  const rationNames = [OCEAN_BREAD.name, 'meat pie', 'inky-cap mushroom'];
+  return (pack.items ?? []).filter(item => positive(item.id) && positive(item.amount) &&
+    rationNames.includes(oceanItemName(item.name)) && !protectedNames.has(oceanItemName(item.name)));
 }
 
 function tailRows(file) {
@@ -203,16 +209,31 @@ export function oceanUnitsFit(pack, name) {
     free.bulk / Math.max(1, unit.bulk))));
 }
 
-export function oceanBuyQuantity(pack, offer, supply, wanted) {
+export function oceanCourierRationHoldback(pack, wanted, protectedItems) {
+  const bread = OCEAN_SHOPS.Tova[0], herb = OCEAN_SHOPS.Morrigan[0];
+  if (pack.ids_stale !== false || !positive(wanted[bread.name]) ||
+      protectedItems?.some(item => oceanItemName(item) === bread.name)) return 0;
+  const loafVigor = foodValue(bread.name)?.nutrition;
+  if (!loafVigor) return 0;
+  const rationVigor = courierRations(pack, protectedItems).reduce((total, item) =>
+    total + item.amount * (foodValue(item.name)?.nutrition ?? 0), 0);
+  const missingLoaves = Math.ceil((2 * loafVigor - rationVigor) / loafVigor);
+  const herbMinimum = Math.min(wanted[herb.name] ?? 0, herb.batch / 2) * herb.price;
+  const available = oceanItemCount(pack, 'shilling') - OCEAN_COURIER.reserve - herbMinimum;
+  return bread.price * Math.max(0, Math.min(missingLoaves, wanted[bread.name],
+    oceanUnitsFit(pack, bread.name), Math.floor(available / bread.price)));
+}
+
+export function oceanBuyQuantity(pack, offer, supply, wanted, holdback = 0) {
   const price = Number(offer?.cost ?? offer?.price);
   if (!positive(offer?.id) || oceanItemName(offer.name) !== supply.name || !positive(price) ||
       price > supply.price || !positive(wanted)) return 0;
-  return oceanQuantityAtPrice(pack, supply, wanted, price);
+  return oceanQuantityAtPrice(pack, supply, wanted, price, holdback);
 }
 
-function oceanQuantityAtPrice(pack, supply, wanted, price) {
+function oceanQuantityAtPrice(pack, supply, wanted, price, holdback = 0) {
   return Math.max(0, Math.min(wanted, supply.limit, oceanUnitsFit(pack, supply.name),
-    Math.floor((oceanItemCount(pack, 'shilling') - OCEAN_COURIER.reserve) / price)));
+    Math.floor((oceanItemCount(pack, 'shilling') - OCEAN_COURIER.reserve - holdback) / price)));
 }
 
 export function oceanHasProvisionBatch(pack, wanted) {

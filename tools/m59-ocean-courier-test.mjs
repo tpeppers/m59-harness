@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { normalizeBook } from './m59-dibs.mjs';
 import {
-  OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanCourierReserveFood, oceanHasProvisionBatch, oceanItemCount,
+  OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanCourierRationHoldback, oceanCourierReserveFood,
+  oceanHasProvisionBatch, oceanItemCount,
   oceanProvisionRecord, oceanUnitsFit, readOceanGearCargo, readOceanSaleAuthorization, recordOceanGearCargo,
   renewOceanSaleClaims, selectOceanGearCargo, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
@@ -266,6 +267,37 @@ test('provision purchase respects price ceilings, capacity and walking purse', (
   assert.equal(oceanBuyQuantity({ ...pack, items: [{ name: 'shilling', amount: 519 }] }, listing, bread, 24), 0);
   assert.equal(oceanUnitsFit({ carry: { load: { exact: false }, room_for: { bulk: 100, weight: 100 } } },
     'red mushroom'), 0);
+});
+
+test('Morrigan keeps enough sale proceeds for two return rations and a partial herb order', () => {
+  const [herb, berry] = OCEAN_SHOPS.Morrigan;
+  const [bread] = OCEAN_SHOPS.Tova;
+  const stock = { ...pack, ids_stale: false };
+  const wanted = { herb: 160, elderberry: 32, [bread.name]: 24 };
+  const budget = oceanCourierRationHoldback(stock, wanted);
+  assert.equal(budget, 240);
+  assert.equal(oceanBuyQuantity(stock, { id: 1, name: herb.name, cost: 20 }, herb, wanted.herb, budget), 18);
+  const purse = amount => ({ ...stock, items: [{ name: 'shilling', amount }] });
+  assert.equal(oceanBuyQuantity(purse(640), { id: 2, name: berry.name, cost: 40 }, berry, wanted.elderberry, budget), 0);
+  assert.equal(oceanBuyQuantity(purse(640), { id: 3, name: bread.name, cost: 120 }, bread, wanted[bread.name]), 2);
+  assert.equal(oceanCourierRationHoldback(purse(760), wanted), 120);
+  assert.equal(oceanCourierRationHoldback(purse(639), wanted), 0);
+  assert.equal(oceanCourierRationHoldback(stock, { ...wanted, [bread.name]: 1 }), 120);
+  assert.equal(oceanCourierRationHoldback({ ...stock, ids_stale: true }, wanted), 0);
+});
+
+test('existing edible courier reserves reduce the bread budget', () => {
+  const bread = OCEAN_SHOPS.Tova[0].name;
+  const wanted = { herb: 160, [bread]: 24 };
+  const withRation = (name, amount) => ({ ...pack, ids_stale: false,
+    items: [...pack.items, { id: 8, name, amount }] });
+  assert.equal(oceanCourierRationHoldback(withRation(bread, 1), wanted), 120);
+  assert.equal(oceanCourierRationHoldback(withRation(bread, 2), wanted), 0);
+  assert.equal(oceanCourierRationHoldback(withRation('meat pie', 1), wanted), 120);
+  assert.equal(oceanCourierRationHoldback(withRation('Inky-cap mushroom', 1), wanted), 0);
+  assert.equal(oceanCourierRationHoldback(withRation('Inky-cap mushroom', 1), wanted, ['inky-cap mushroom']), 240);
+  assert.equal(oceanCourierRationHoldback(withRation('edible mushroom', 5), wanted), 240);
+  assert.equal(oceanCourierRationHoldback(withRation(bread, 1), wanted, ['Loaf of Bread']), 0);
 });
 
 test('skips the smith when the prior counter left only the walking purse', () => {
