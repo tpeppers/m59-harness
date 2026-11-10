@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { normalizeBook } from './m59-dibs.mjs';
 import {
-  OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanCourierReserveFood, oceanHasProvisionBatch,
+  OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanCourierReserveFood, oceanHasProvisionBatch, oceanItemCount,
   oceanProvisionRecord, oceanUnitsFit, readOceanGearCargo, readOceanSaleAuthorization, recordOceanGearCargo,
   renewOceanSaleClaims, selectOceanGearCargo, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
-import { moveToWard, oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
+import { collectSale, moveToWard, oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
 const now = 100_000;
 const epoch = 90_000;
@@ -289,6 +289,13 @@ test('prepares a quiet under-vigor courier with his own unprotected reserve food
   assert.equal(oceanCourierReserveFood({ ...status, ids_stale: true }), null);
   assert.equal(oceanCourierReserveFood({ ...status,
     autopilot_status: { policy: { protectedItems: ['Loaf of Bread'] } } }), null);
+  const inky = { id: 10, name: 'Inky-cap mushroom', amount: 1 };
+  assert.equal(oceanCourierReserveFood({ ...status, items: [inky, loaf] }), loaf);
+  const withoutBread = { ...status, items: [mushroom, inky] };
+  assert.equal(oceanCourierReserveFood(withoutBread), inky);
+  assert.equal(oceanItemCount(withoutBread, inky.name), 1);
+  assert.equal(oceanCourierReserveFood({ ...withoutBread,
+    autopilot_status: { policy: { protectedItems: ['inky-cap mushroom'] } } }), null);
 });
 
 test('provision records admit only exact kinds, room and holder', () => {
@@ -348,6 +355,32 @@ test('sale pickup uses native reach and a blocked approach only settles on a saf
   await assert.rejects(moveToWard(approach(body)), /object_blocked/);
   await assert.rejects(moveToWard(approach({ ...nearby, last_save_at: epoch + 1 })), /object_blocked/);
   await assert.rejects(moveToWard(approach(nearby, { arrived: false, reason: 'object_blocked', cancelled: true })), /object_blocked/);
+
+  let reached = false;
+  const far = { ...body, you: { ...body.you, col: 47 } };
+  const after = await moveToWard(async (tool, args) => {
+    if (tool === 'status') return reached ? body : far;
+    assert.equal(tool, 'walk_to');
+    assert.equal(args.arrive_within, 3 * 64);
+    reached = true;
+    return { arrived: true };
+  }, { pickup: true });
+  assert.equal(after, body);
+});
+
+test('an independently observed empty ward skips the courier approach', async () => {
+  const calls = [];
+  const plan = { sales: new Map() };
+  await collectSale(async (tool, args) => {
+    calls.push([tool, args.agent]);
+    if (tool === 'status') return { ...ward, next_save_expected_at: Date.now() + 60000,
+      autopilot_status: { faculties: { work: { owner: 'great-ocean:jala-singer' } } } };
+    if (tool === 'look') return { ...ward, connected: true, pid: 10, connection_revision: 1, objects: [] };
+    if (tool === 'floor_cache') return { ok: true, room: 552, near: holder, items: [] };
+    assert.fail(`unexpected call ${tool}`);
+  }, 'prod', plan);
+  assert.deepEqual(calls, [['status', 't3'], ['look', 'hk1'], ['floor_cache', 'hk1'], ['look', 'hk1']]);
+  assert.equal(plan.sales.size, 0);
 });
 
 test('every conditional courier leg declares its possible rooms for FleetScript preflight', async () => {
