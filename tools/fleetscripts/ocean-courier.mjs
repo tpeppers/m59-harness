@@ -20,6 +20,7 @@ import {
 
 const { agent, name, room, holder, holderName, ward, sale, reserve } = OCEAN_COURIER;
 const TOAD = 202, SMITH = 201;
+const medicAgent = 'hk1';
 const deskAgent = 'hk3', deskName = 'Raphael son of Mephistopheles';
 const AXE = 'axe';
 const courierScriptName = 'ocean-courier';
@@ -143,7 +144,10 @@ export async function moveToWard(rpc, { pickup = false } = {}) {
   const inReach = body => pickup ? oceanDistance(body.you, sale) <= PICKUP_REACH
     : oceanDistance(body.you, ward) <= 3;
   if (inReach(s)) return s;
-  const motion = await rpc('walk_to', { agent, ...sale, fine: true, exact_arrival: true, arrive_within: 12 }, 80000);
+  // Three squares of fine tolerance still leaves a margin inside the native
+  // seven-square Manhattan pickup range. The live tile is checked below.
+  const motion = await rpc('walk_to', { agent, ...sale, fine: true, exact_arrival: true,
+    arrive_within: pickup ? 3 * 64 : 12 }, 80000);
   if (motion.arrived !== true) {
     if (motion.reason === 'object_blocked' && motion.cancelled !== true) {
       const after = await read(rpc, agent);
@@ -169,13 +173,15 @@ async function merchant(rpc, seller, expected) {
   return rows[0].id;
 }
 
-async function collectSale(rpc, fleet, plan) {
-  const snapshot = await moveToWard(rpc, { pickup: true });
-  const [singer, floor] = await Promise.all([read(rpc, holder), scan(rpc, saleNames)]);
+export async function collectSale(rpc, fleet, plan) {
+  const [singer, floor] = await Promise.all([read(rpc, holder), oceanWardScan(rpc, medicAgent, saleNames)]);
   require(oceanWardReady(singer), 'the cache holder moved or is nearing a save');
+  if (!floor.ok || !floor.items.length) return;
   const receipts = readOceanSaleDeposits(fleet);
   const approved = (scene, ward) => selectOceanSalePiles(receipts, scene, ward, Date.now(), readOceanSaleAuthorization(fleet));
   const piles = approved(floor, singer);
+  if (!piles.length) return;
+  const snapshot = await moveToWard(rpc, { pickup: true });
   for (const item of piles) {
     const [body, before, scene, currentSinger] = await Promise.all([
       read(rpc, agent), inventory(rpc), scan(rpc, item.name), read(rpc, holder),
@@ -537,7 +543,7 @@ export const script = {
     const steps = [verify(async ({ call: rpc }) => {
       plan.server = await oceanCourierIdentity(fleet);
       let [body, healer, singer, stock, pack] = await Promise.all([
-        read(rpc, agent), read(rpc, 'hk1'), read(rpc, holder),
+        read(rpc, agent), read(rpc, medicAgent), read(rpc, holder),
         scan(rpc, ['axe', 'leather armor', 'loaf of bread', 'elderberry']), inventory(rpc),
       ]);
       require(oceanCourierReady(body, room, 140) && oceanWardReady(singer) && healer.in_game && stock.ok &&
