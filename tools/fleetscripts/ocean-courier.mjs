@@ -282,6 +282,15 @@ export function oceanDeskReady(s) {
     (!threat.last_personal_at || Date.now() - threat.last_personal_at >= 15000) && s.next_save_expected_at - Date.now() > 45_000;
 }
 
+export async function oceanReadyDeskSpare(rpc, fleet, generation) {
+  const desk = readDeskState(fleet);
+  if (!desk || !quietDesk(desk) || !Array.isArray(desk.state.deskSpare) ||
+      !desk.state.deskSpare.some(receipt => intakeMatches(receipt, generation))) return null;
+  const raphael = await read(rpc, deskAgent).catch(() => null);
+  return oceanDeskReady(raphael) && raphael.last_save_at === generation
+    ? oceanDeskSpareCandidate(desk, raphael) : null;
+}
+
 function pendingIntake(desk, raphael) {
   return desk.conf.deskSpareIntake?.some(entry => intakeMatches(entry, raphael.last_save_at) &&
     raphael.items?.some(item => item.id === entry.id && knownAxe(item)));
@@ -481,7 +490,8 @@ export const script = {
       await collectSale(rpc, fleet, plan);
       const minimum = Math.min(...Object.values(OCEAN_SHOPS).flat()
         .filter(supply => plan.wanted[supply.name] > 0).map(supply => supply.price));
-      plan.go = plan.sales.size > 0 || purse(pack) >= reserve + minimum;
+      const spare = plan.wanted[AXE] > 0 && await oceanReadyDeskSpare(rpc, fleet, body.last_save_at);
+      plan.go = plan.sales.size > 0 || !!spare || purse(pack) >= reserve + minimum;
       if (plan.go) await setCorridor(rpc, corridor);
       report('lap plan', { departing: plan.go, wanted: plan.wanted, sales: Object.fromEntries(plan.sales) });
       return true;

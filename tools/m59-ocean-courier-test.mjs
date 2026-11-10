@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  OCEAN_SHOPS, oceanBuyQuantity, oceanProvisionRecord, oceanUnitsFit, selectOceanSalePiles,
+  OCEAN_SHOPS, oceanBuyQuantity, oceanCourierReserveFood, oceanProvisionRecord, oceanUnitsFit, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
 import { oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
@@ -86,6 +86,18 @@ test('skips the smith when the prior counter left only the walking purse', () =>
   assert.equal(oceanCanVisitSmith(packWith(400), wanted), false);
   assert.equal(oceanCanVisitSmith(packWith(1040), wanted), true);
   assert.equal(oceanCanVisitSmith(packWith(1040), { axe: 1 }), false);
+});
+
+test('prepares a quiet under-vigor courier with his own unprotected reserve food', () => {
+  const loaf = { id: 8, name: 'loaf of bread', amount: 2 };
+  const mushroom = { id: 9, name: 'edible mushroom', amount: 10 };
+  const status = { vigor: { value: 129 }, ids_stale: false, items: [mushroom, loaf] };
+  assert.equal(oceanCourierReserveFood(status), loaf);
+  assert.equal(oceanCourierReserveFood({ ...status, vigor: { value: 140 } }), null);
+  assert.equal(oceanCourierReserveFood({ ...status, vigor: { value: 70 } }), null);
+  assert.equal(oceanCourierReserveFood({ ...status, ids_stale: true }), null);
+  assert.equal(oceanCourierReserveFood({ ...status,
+    autopilot_status: { policy: { protectedItems: ['Loaf of Bread'] } } }), null);
 });
 
 test('provision records admit only exact kinds, room and holder', () => {
