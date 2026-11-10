@@ -3,7 +3,7 @@ import { closeSync, openSync, readFileSync, readSync, renameSync, statSync, writ
 import { dirname, join } from 'node:path';
 import { dibsFile, itemKey, liveClaims, normalizeBook } from './m59-dibs.mjs';
 import { ledgerDirForRoster, stateFileFor } from './m59-fleetpath.mjs';
-import { weighItem } from './m59-items.mjs';
+import { ITEM_RARITY, weighItem } from './m59-items.mjs';
 
 export const OCEAN_COURIER = Object.freeze({
   room: 552, agent: 'hk2', name: 'Zheng He', holder: 't3', holderName: 'Statler',
@@ -25,6 +25,8 @@ const SALE_PICKUP_BUDGET = 10_000;
 const SALE_SCOPE = 'ocean-sale-cache';
 const SALE_CLAIM_OWNER = 'ocean-courier';
 const SALE_WARD_SCHEMA = 'm59-farm-sale-cache-ward/1';
+const GEAR_CARGO_SCHEMA = 'm59-ocean-gear-cargo/1';
+export const OCEAN_GEAR_NAMES = Object.freeze(['axe', 'leather armor']);
 const positive = value => Number.isSafeInteger(value) && value > 0;
 export const oceanItemName = name => String(name ?? '').trim().toLowerCase();
 export const oceanDistance = (a, b) => Math.abs(a?.row - b?.row) + Math.abs(a?.col - b?.col);
@@ -211,6 +213,62 @@ function oceanQuantityAtPrice(pack, supply, wanted, price) {
 export function oceanHasProvisionBatch(pack, wanted) {
   return Object.values(OCEAN_SHOPS).flat().some(supply => positive(wanted[supply.name]) &&
     oceanQuantityAtPrice(pack, supply, wanted[supply.name], supply.price) >= supply.batch);
+}
+
+export const oceanGearCargoFile = fleet => process.env.M59_OCEAN_GEAR_CARGO_FILE ||
+  join(dirname(dirname(stateFileFor(fleet))), 'scratch', `ocean-gear-cargo-${fleet}.json`);
+
+export function readOceanGearCargo(fleet) {
+  try { return JSON.parse(readFileSync(oceanGearCargoFile(fleet), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; return null; }
+}
+
+const bodyId = body => body?.you?.object_id ?? body?.you?.id;
+const gearCargoCurrent = (record, server, body) => record?.schema === GEAR_CARGO_SCHEMA &&
+  body?.character === OCEAN_COURIER.name && body.ids_stale === false && positive(bodyId(body)) &&
+  positive(body.last_save_at) && record.last_save_at === body.last_save_at && record.body_id === bodyId(body) &&
+  record.agent === OCEAN_COURIER.agent && typeof server?.host === 'string' && server.host && positive(Number(server.port)) &&
+  record.server?.host === server.host && record.server.port === Number(server.port) && Array.isArray(record.items);
+
+function provenGearCargo(item, save, carrier) {
+  const receipt = item?.receipt;
+  if (!positive(item?.id) || !OCEAN_GEAR_NAMES.includes(item.name) || receipt?.generation !== save) return false;
+  if (item.source === 'Colhorr') return receipt.seller === 'Colhorr' && receipt.room === 201 &&
+    receipt.item === item.name && receipt.amount === 1 && receipt.ids?.length === 1 && receipt.ids[0] === item.id &&
+    positive(receipt.shillings) && positive(receipt.at) && receipt.at > save;
+  return item.source === 'Raphael' && item.name === 'axe' && receipt.from === 'hk3' &&
+    receipt.to === OCEAN_COURIER.agent && receipt.name === item.name && receipt.id === item.id &&
+    positive(receipt.from_body) && receipt.to_body === carrier && positive(receipt.started) &&
+    receipt.started > save && positive(receipt.confirmed) && receipt.confirmed >= receipt.started;
+}
+
+export function recordOceanGearCargo(fleet, server, body, item) {
+  const record = { schema: GEAR_CARGO_SCHEMA, agent: OCEAN_COURIER.agent, body_id: bodyId(body),
+    server: { host: server?.host, port: Number(server?.port) }, last_save_at: body?.last_save_at, items: [] };
+  if (!gearCargoCurrent(record, server, body) || !provenGearCargo(item, record.last_save_at, record.body_id))
+    throw Error('gear cargo needs an exact receipt in Zheng’s current save epoch');
+  const prior = readOceanGearCargo(fleet);
+  if (gearCargoCurrent(prior, server, body)) record.items = prior.items.filter(entry =>
+    provenGearCargo(entry, record.last_save_at, record.body_id) && entry.id !== item.id);
+  record.items.push(item);
+  writeOceanCache(oceanGearCargoFile(fleet), record);
+}
+
+export function retireOceanGearCargo(fleet, server, body, ids) {
+  if (!ids.length) return;
+  const record = readOceanGearCargo(fleet);
+  if (!gearCargoCurrent(record, server, body)) return;
+  const items = record.items.filter(item => !ids.includes(item?.id));
+  if (items.length !== record.items.length) writeOceanCache(oceanGearCargoFile(fleet), { ...record, items });
+}
+
+export function selectOceanGearCargo(record, server, body, pack) {
+  if (!gearCargoCurrent(record, server, body) || pack?.ids_stale !== false || pack.last_save_at !== body.last_save_at ||
+      !positive(pack.ids_as_of) || pack.ids_as_of < body.last_save_at || !Array.isArray(pack.items)) return [];
+  return record.items.filter(item => provenGearCargo(item, record.last_save_at, record.body_id) && pack.items.some(row =>
+    row.id === item.id && oceanItemName(row.name) === item.name && Number.isInteger(row.rarity) &&
+    row.rarity >= ITEM_RARITY.NORMAL && row.rarity < ITEM_RARITY.UNIDENTIFIED && [null, undefined, 0, 1].includes(row.amount)))
+    .sort((a, b) => Number(b.source === 'Raphael') - Number(a.source === 'Raphael'));
 }
 
 export function oceanProvisionRecord({ host, ward, items, kind, now = Date.now() }) {

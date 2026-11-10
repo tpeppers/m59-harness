@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import { normalizeBook } from './m59-dibs.mjs';
 import {
   OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanCourierReserveFood, oceanHasProvisionBatch,
-  oceanProvisionRecord, oceanUnitsFit, readOceanSaleAuthorization, renewOceanSaleClaims, selectOceanSalePiles,
+  oceanProvisionRecord, oceanUnitsFit, readOceanGearCargo, readOceanSaleAuthorization, recordOceanGearCargo,
+  renewOceanSaleClaims, selectOceanGearCargo, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
 import { oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
@@ -30,6 +31,22 @@ const liveWardPin = time => ({ schema: 'm59-farm-sale-cache-ward/1', room: 552, 
 const saleAuthorization = (raw, time, pin = liveWardPin(time)) => ({ book: normalizeBook(raw), pin });
 const selectUnexpired = (rows, floor, singer) =>
   selectOceanSalePiles(rows, floor, singer, now, saleAuthorization(originalClaims, now, null));
+
+function courierTestFiles(t, names) {
+  const dir = mkdtempSync(join(tmpdir(), 'm59-ocean-courier-'));
+  const files = Object.fromEntries(names.map(name => [name, join(dir, `${name}.json`)]));
+  const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  t.after(() => {
+    for (const [name, file] of Object.entries(files)) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+      rmSync(file, { force: true });
+    }
+    rmdirSync(dir);
+  });
+  Object.assign(process.env, files);
+  return files;
+}
 
 test('a fully receipted sale stack survives an interrupted lap while exact Dibs are renewed', () => {
   const eightMinutesLater = donation.observed_at + 8 * minute;
@@ -77,18 +94,7 @@ test('sale grace rejects a stale ward, save change, or altered exact stack befor
 });
 
 test('reads the current ward and Dibs files and rechecks after an exact claim is revoked', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'm59-ocean-sale-'));
-  const files = { M59_DIBS_FILE: join(dir, 'dibs.json'), M59_FARM_SALE_CACHE_WARD_FILE: join(dir, 'ward.json') };
-  const saved = Object.fromEntries(Object.keys(files).map(key => [key, process.env[key]]));
-  t.after(() => {
-    for (const [key, file] of Object.entries(files)) {
-      if (saved[key] === undefined) delete process.env[key];
-      else process.env[key] = saved[key];
-      rmSync(file, { force: true });
-    }
-    rmdirSync(dir);
-  });
-  Object.assign(process.env, files);
+  const files = courierTestFiles(t, ['M59_DIBS_FILE', 'M59_FARM_SALE_CACHE_WARD_FILE']);
   const time = donation.observed_at + 8 * minute;
   const readAndSelect = () => selectOceanSalePiles([donation], scene, ward, time, readOceanSaleAuthorization('prod'));
   writeFileSync(files.M59_DIBS_FILE, JSON.stringify(originalClaims));
@@ -99,6 +105,61 @@ test('reads the current ward and Dibs files and rechecks after an exact claim is
   writeFileSync(files.M59_DIBS_FILE, '{');
   assert.equal(readOceanSaleAuthorization('prod'), null);
   assert.deepEqual(selectOceanSalePiles([donation], scene, ward, now), []);
+});
+
+test('an interrupted 534 return stages only the exact receipted dedicated axe and retires its cargo', async t => {
+  const files = courierTestFiles(t, ['M59_OCEAN_GEAR_CARGO_FILE', 'M59_FARM_GEAR_CACHE_FILE', 'M59_DIBS_FILE']);
+  const server = { host: 'prod.example', port: 5900 };
+  const axe = { id: 18782, name: 'axe', amount: 0, rarity: 0 };
+  const other = { ...axe, id: 400 };
+  const floorAxe = { ...axe, id: 19001, row: 44, col: 56, can: ['get'] };
+  const home = { character: 'Zheng He', in_game: true, connected: true, ids_stale: false, room: { num: 552 },
+    pid: 10, connection_revision: 1, last_save_at: epoch, ids_as_of: now, you: { object_id: 25, row: 44, col: 56 },
+    hp: { value: 23, max: 23 }, vigor: { value: 120 }, karma: { value: 15 }, room_wire: ward.room_wire,
+    combat: { personal_threat: { level: 'quiet' } }, autopilot_status: { mode: 'survive', faculties: { work: 'keeper' },
+      policy: { neverAttack: true, townTrips: false, confineRooms: [552, 544, 534, 535, 200, 202, 201] } } };
+  const cargo = { id: axe.id, name: axe.name, source: 'Raphael', receipt: { id: axe.id, name: axe.name,
+    from: 'hk3', to: 'hk2', generation: epoch, started: now - 1000, confirmed: now, from_body: 31, to_body: 25 } };
+  recordOceanGearCargo('prod', server, { ...home, room: { num: 202 } }, cargo);
+  const stored = readOceanGearCargo('prod');
+  const before = { ...home, items: [other, axe] };
+  assert.deepEqual(selectOceanGearCargo(stored, server, home, before), [cargo]);
+  assert.deepEqual(selectOceanGearCargo(stored, server, home, { ...before, items: [other] }), []);
+  assert.deepEqual(selectOceanGearCargo(stored, server, home, { ...before, ids_stale: true }), []);
+  assert.deepEqual(selectOceanGearCargo(stored, server, home, { ...before, last_save_at: epoch + 1 }), []);
+  assert.deepEqual(selectOceanGearCargo(stored, server, { ...home, you: { object_id: 26 } }, before), []);
+  assert.deepEqual(selectOceanGearCargo(stored, { ...server, port: 5901 }, home, before), []);
+  assert.throws(() => recordOceanGearCargo('prod', server, home, { ...cargo, receipt: { ...cargo.receipt, id: other.id } }));
+
+  let dropped = false;
+  const mutations = [];
+  const carried = () => ({ ...home, items: dropped ? [other] : [other, axe] });
+  const rpc = async (tool, args) => {
+    if (tool === 'status') return args.agent === 'hk2' ? carried()
+      : { ...ward, next_save_expected_at: Date.now() + 60_000,
+        autopilot_status: { faculties: { work: { owner: 'great-ocean:jala-singer' } } } };
+    if (tool === 'inventory') return carried();
+    if (tool === 'look') return { ...home, objects: dropped ? [floorAxe] : [] };
+    if (tool === 'floor_cache') return { ok: true, room: 552, near: { row: 43, col: 57 }, items: dropped ? [floorAxe] : [] };
+    if (tool === 'equipment') return { known: true, equipped: [{ id: other.id }] };
+    if (tool === 'look_at') {
+      assert.equal(args.target, axe.id);
+      return { id: axe.id, description: "This weapon is in flawless condition. This weapon has been dedicated to Kraanan's glory." };
+    }
+    mutations.push([tool, args]);
+    if (tool === 'autopilot') return { keeper_push: { confirmed: true } };
+    if (tool === 'act' && args.verb === 'drop' && args.target === axe.id) { dropped = true; return { ok: true }; }
+    assert.fail(`unexpected call ${tool}`);
+  };
+  const steps = oceanCourierReturnSteps({ ...before, room: { num: 534 } }, { fleet: 'prod', server });
+  await steps.at(-1).fn({ call: rpc });
+  assert.deepEqual(mutations.filter(([tool]) => tool === 'act'), [['act', { agent: 'hk2', verb: 'drop', target: axe.id }]]);
+  assert.deepEqual(readOceanGearCargo('prod').items, []);
+  const { readFileSync } = await import('node:fs');
+  assert.deepEqual(JSON.parse(readFileSync(files.M59_FARM_GEAR_CACHE_FILE, 'utf8')).items,
+    [{ id: floorAxe.id, name: axe.name, row: 44, col: 56 }]);
+  await steps.at(-1).fn({ call: rpc });
+  assert.equal(mutations.filter(([tool]) => tool === 'act').length, 1);
 });
 
 test('interrupted bread delivery uses the carried surplus before buying and preserves four loaves', () => {

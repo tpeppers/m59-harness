@@ -165,7 +165,7 @@ try {
   while (!stopping && !existsSync(stopPath)) {
     try {
       const carrier = await status(agent);
-      const recovery = oceanCourierReturnSteps(carrier);
+      const recovery = oceanCourierReturnSteps(carrier, { fleet, server });
       if (recovery) {
         const result = await run(recovery, 'ocean-courier return checkback', [agent]);
         if (!result?.ok) log('return deferred', { reason: result?.why ?? 'inspect the verified courier corridor' });
