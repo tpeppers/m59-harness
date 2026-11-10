@@ -31,6 +31,7 @@ import { publishAccepts, noteRefusal } from '../m59-floor-cache.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
 import { affordableHeal, castRecoveryHeal, healAllowed, healReadiness } from '../m59-recovery-heal.mjs';
+import { clientReagentReserve, reagentKey } from '../m59-reagent-reserve.mjs';
 import { lineOfSight } from '../m59-safespots.mjs';
 import { shalilleHealBlockedByKarma } from '../m59-spells.mjs';
 import { normalizeShare, planGift } from '../m59-sharing.mjs';
@@ -569,7 +570,16 @@ export class SocialPart {
       // is a refusal of another kind and drops nothing.
       if (!fit.fits) return refuse(`no room for trade goods: ${fit.why}`, fit.after != null ? 'capacity' : 'unweighed', fit.after ?? null);
     }
-    const unwanted = expected || tradeGoodsApply ? [] : offered.filter(n => !takes.some(w => n.includes(w)));
+    const roomNeeds = this.oceanBuffNeeds();
+    const localAmounts = new Map();
+    const unwanted = expected || tradeGoodsApply ? [] : (t.theirs || []).filter(i => {
+      const onTakeList = takes.some(w => String(i.name || '').toLowerCase().includes(w));
+      const kind = [...roomNeeds.keys()].find(k => skills.itemNameMatches(i.name, k));
+      if (!kind || !roomNeeds.get(kind).amount) return !onTakeList;
+      const total = (localAmounts.get(kind) ?? 0) + (Number(i.amount) || 1);
+      localAmounts.set(kind, total);
+      return !onTakeList && total > roomNeeds.get(kind).amount;
+    }).map(i => String(i.name || '').toLowerCase());
     if (unwanted.length)
       return refuse(`offered something not on the take list: ${[...new Set(unwanted)].join(', ')}`);
 
@@ -578,7 +588,12 @@ export class SocialPart {
     // indistinguishable from an accept that worked: nothing arrives and no count rises.
     const free = this.bulkFree();
     const floor = Number(cfg.min_bulk_free ?? 40);
-    if (free !== null && free < floor) await this.shedForDonation(free);
+    if (localAmounts.size) {
+      // A transient buff request can receive spare stock; it grants no authority to shed a stack.
+      const fit = tradeGoodsFit({ offered: t.theirs, cap: skills.carryCapacity(c), keepFree: 0 });
+      if (!fit.fits) return refuse(`no room for buff reagents: ${fit.why}`,
+        fit.after == null ? 'unweighed' : 'capacity', fit.after ?? null);
+    } else if (free !== null && free < floor) await this.shedForDonation(free);
 
     // The empty counteroffer is the whole mechanism: it gives nothing and it is what
     // unblocks the other side. Then accept.
@@ -605,7 +620,7 @@ export class SocialPart {
     if (!t || t.role !== 'recipient') return null;
     if (this.policy.acceptDonations) return this.acceptDonations();
     const needs = [...(this._needsNow?.keys?.() ?? [])].map(k => String(k).toLowerCase());
-    if (!needs.length) return null;
+    if (!needs.length && ![...this.oceanBuffNeeds().values()].some(({ amount }) => amount > 0)) return null;
     return this.acceptDonations({ enabled: true, reagents: needs, drop_for_space: [], _default: true });
   }
 
@@ -637,14 +652,25 @@ export class SocialPart {
     const walkOk = cfg.walk_for !== 'none' && cfg.radius > 0 && !this.facultyHeld('movement');
     const rooms = walkOk ? this.deliveryNeighbourhood(here, { radius_rooms: cfg.radius }) : new Map([[Number(here), 0]]);
     const me = this.name ?? this.s.name;
-    const demands = skills.interest.demandsNear(rooms, { except: me, farmingOnly: false, maxAgeMs: 120_000 });
-    if (!demands.length) return false;
-    const kinds = [...new Set(demands.flatMap(d => Object.keys(d.needs)))];
-    const have = Object.fromEntries(kinds.map(k => [k, this.countOfKind(k)]));
-    const keep = Object.fromEntries(kinds.map(k => [k, this.ownFloorFor(k) + (this._needsNow?.get?.(k) ?? 0)]));
+    const options = { except: me, farmingOnly: false, maxAgeMs: 120_000 };
+    const demands = skills.interest.demandsNear(rooms, options);
+    const localDemands = here === 552 ? skills.interest.demandsForRoom(here, { ...options, roomNeedsOnly: true }) : [];
+    if (!demands.length && !localDemands.length) return false;
+    const protectedNames = this.saleProtectedNames();
     this._shareBackoff ??= new Map();
-    const { gift } = planGift({ demands, have, keep, protectedNames: this.saleProtectedNames(), here,
-      cfg: walkOk ? cfg : { ...cfg, walk_for: 'none' }, backoff: this._shareBackoff, now });
+    const plan = (rows, local = false) => {
+      if (!rows.length) return null;
+      const kinds = [...new Set(rows.flatMap(d => Object.keys(d.needs)))];
+      const have = Object.fromEntries(kinds.map(k => [k, this.countOfKind(k)]));
+      const reserve = local ? clientReagentReserve(c, this.s.reserveWho, now).floors : null;
+      const ownBuffs = local ? this.oceanBuffNeeds(now) : null;
+      const keep = Object.fromEntries(kinds.map(k => [k, Math.max(
+        this.ownFloorFor(k) + (this._needsNow?.get?.(k) ?? 0), reserve?.get(reagentKey(k)) ?? 0,
+        ownBuffs?.get(k)?.target ?? 0)]));
+      return planGift({ demands: rows, have, keep, protectedNames, here,
+        cfg: walkOk && !local ? cfg : { ...cfg, walk_for: 'none' }, backoff: this._shareBackoff, now }).gift;
+    };
+    const gift = plan(demands) ?? plan(localDemands, true);
     if (!gift) return false;
     const claimed = Object.keys(gift.give).filter(k => claimGift(me, gift.needer, k));
     if (!claimed.length) return false;

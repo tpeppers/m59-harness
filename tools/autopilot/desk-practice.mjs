@@ -8,8 +8,8 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 10 methods: isRoomEnchantPost, maintainRoomEnchantPost, roomEnchantAllows, roomEnchant,
-//   practiceSafeSpot, practiceSessionDue, practiceAtDesk, buffAllies, practiceBuyHere, reagentExact
+// 11 methods: isRoomEnchantPost, maintainRoomEnchantPost, roomEnchantAllows, roomEnchant,
+//   practiceSafeSpot, practiceSessionDue, practiceAtDesk, oceanBuffNeeds, buffAllies, practiceBuyHere, reagentExact
 import { allyVerdict } from '../m59-ally.mjs';
 import { classifyCast } from '../m59-castoutcomes.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
@@ -18,6 +18,7 @@ import { readFleetHealth } from '../m59-fleet-health.mjs';
 import { castsAbove, folRoomsOf } from '../m59-chalice.mjs';
 import { buyHereWants, choosePractice, deskReserve, isReagent, normalizePractice, offeredServices, pickCreatureTarget, touchedCreatures } from '../m59-deskpractice.mjs';
 import { OF, affordances, buyLines } from '../m59-parse.mjs';
+import { clientReagentReserve, reagentKey } from '../m59-reagent-reserve.mjs';
 import * as skills from '../m59-skills.mjs';
 import { practiceOutcome, tranceMs } from '../m59-trance.mjs';
 import { Autopilot, REST_VIGOR_CAP } from '../m59-autopilot.mjs';
@@ -25,6 +26,9 @@ import { Autopilot, REST_VIGOR_CAP } from '../m59-autopilot.mjs';
 // How long a practice spell whose trance was BROKEN is set aside (at least refused_ms): long enough that a leak stops
 // draining reagents, short enough that one stray break does not end a night's drill.
 export const PRACTICE_BROKEN_ASIDE_MS = 10 * 60_000;
+const OCEAN_BUFF_NEED_MS = 90_000;
+const OCEAN_BUFF_BATCH = 2;
+const OCEAN_BUFF_SUPPLIES = new Set(['mushroom', 'red mushroom', 'orc tooth']);
 
 export class DeskPracticePart {
   // @part 1
@@ -460,6 +464,28 @@ export class DeskPracticePart {
     return true;
   }
 
+  oceanBuffNeeds(now = Date.now()) {
+    const entries = this._oceanBuffNeeds;
+    if (!entries?.size) return new Map();
+    if (this.mode !== 'farm' || this.s.world?.room?.num !== 552 || this.policy.molluskCoverRecovery !== true ||
+        !this.policy.buffAllies || this.policy.buffAllies.enabled === false) {
+      entries.clear();
+      return new Map();
+    }
+    const needs = new Map();
+    for (const [key, entry] of entries) {
+      if (entry.until <= now || entry.client !== this.s.client || entry.life !== this.s.lifeBoundary) {
+        entries.delete(key);
+        continue;
+      }
+      const prior = needs.get(entry.kind);
+      if (prior?.target > entry.target || (prior?.target === entry.target && prior.until >= entry.until)) continue;
+      needs.set(entry.kind, { target: entry.target, until: entry.until,
+        amount: Math.max(0, entry.target - this.reagentExact(entry.kind)) });
+    }
+    return needs;
+  }
+
   async buffAllies() {
     const cfg = this.policy.buffAllies;
     if (!cfg || cfg.enabled === false) return;
@@ -511,6 +537,28 @@ export class DeskPracticePart {
     };
     const mana = c.vitals()?.mana;
     const have = n => this.reagentExact(n);
+    const retryAt = (target, buff) => this._buffedAt.get(`${target.id}:${target.nameRsc}:${buff.name}`)?.retryAt ?? 0;
+    let reserve, stockChanged = false;
+    const askForStock = (buff, reactive) => {
+      if (!oceanDefense || !others.some(target => retryAt(target, buff) <= now &&
+          (!reactive || needsShield(target, now)))) return;
+      reserve ??= clientReagentReserve(c, s.reserveWho, now);
+      const short = buff.reagents.map(([name, cost]) => ({ name, cost, have: have(name),
+        floor: reserve.exempt.includes(buff.name) ? 0 : reserve.floors.get(reagentKey(name)) ?? 0 }))
+        .filter(({ cost, have, floor }) => have < floor + cost);
+      // Sapphires and other separately reserved supplies stay on their existing supply paths.
+      if (!short.length || short.some(({ name }) => !OCEAN_BUFF_SUPPLIES.has(name))) return;
+      const entries = this._oceanBuffNeeds ??= new Map();
+      for (const { name, cost, floor } of short) {
+        const key = `${buff.name}:${name}`;
+        const target = Math.ceil(floor + OCEAN_BUFF_BATCH * cost);
+        const prior = entries.get(key);
+        const current = prior?.client === c && prior.life === life && prior.until > now;
+        if (current && prior.target === target && prior.until - now > OCEAN_BUFF_NEED_MS / 2) continue;
+        entries.set(key, { kind: name, target, until: now + OCEAN_BUFF_NEED_MS, client: c, life });
+        stockChanged = true;
+      }
+    };
     const declineReserve = name => {
       const veto = s.lastReserveVeto;
       if (veto?.spell !== name) return this.declinedCast(name, 'reagent reserve');
@@ -542,6 +590,7 @@ export class DeskPracticePart {
         this.declinedCast(buff.name, 'out of reagents',
           { needs: buff.reagents.map(([n, k]) => `${k} ${n}`).join(', '),
             missing: short.map(([n, k]) => `${n} (have ${have(n)} of ${k})`) });
+        askForStock(buff, reactive);
         continue;
       }
 
@@ -549,7 +598,7 @@ export class DeskPracticePart {
       // keep its turn when another buff would spend protected working stock.
       let reserved = false;
       try { reserved = c.castVeto?.(spell.id) === true; } catch { /* the packet guard still checks */ }
-      if (reserved) { declineReserve(buff.name); continue; }
+      if (reserved) { declineReserve(buff.name); askForStock(buff, reactive); continue; }
 
       // The caster's own ability drives spell power (about half of it, spell.kod:2066),
       // which drives the duration. `c.abilities` is keyed by spell id and filled from the
@@ -569,6 +618,9 @@ export class DeskPracticePart {
           next = { target, key, buff, spell, last, holdMs, reactive };
         }
       }
+    }
+    if (stockChanged) {
+      try { this.declareInterest(); } catch { /* sharing advice must not block an available cast */ }
     }
     if (!next) return;
 

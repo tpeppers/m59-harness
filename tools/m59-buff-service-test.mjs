@@ -11,8 +11,10 @@ import { Autopilot } from './m59-autopilot.mjs';
 import { publishFleetHealth } from './m59-fleet-health.mjs';
 import { Session } from './m59-game.mjs';
 import { OF } from './m59-parse.mjs';
+import { makeCastVeto } from './m59-reagent-reserve.mjs';
+import { interest } from './m59-skills.mjs';
 import * as party from './m59-party.mjs';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -271,8 +273,9 @@ console.log('\nmagic shield (Kraanan level 3): its whole duration is promised, a
 console.log('\nopted-in Great Ocean Magic Shield responds to fresh damage on the same ally');
 {
   let port = 5800;
-  const fixture = ({ spells = [['magic shield', 13]], room = 552, optedIn = true, paid = true } = {}) => {
-    const ap = makeAp({ pack: [...FULL, ['red mushroom', 5]], spells, paid });
+  const fixture = ({ spells = [['magic shield', 13]], room = 552, optedIn = true, paid = true,
+                     pack = [...FULL, ['red mushroom', 5]], mana = 30 } = {}) => {
+    const ap = makeAp({ pack, spells, paid, mana });
     ap.mode = 'farm';
     ap.policy.molluskCoverRecovery = optedIn;
     ap.s.world = { room: { num: room } };
@@ -352,6 +355,56 @@ console.log('\nopted-in Great Ocean Magic Shield responds to fresh damage on the
     await ap.buffAllies();
     ok(`routine Magic Shield remains available ${label}`, ap.s.client.casts === 1);
   }
+
+  console.log('\nOcean buff stock shortages publish exact local requests');
+  process.env.M59_REAGENT_RESERVE_FILE = join(BOOKS, 'buff-reserve.json');
+  writeFileSync(process.env.M59_REAGENT_RESERVE_FILE, JSON.stringify({
+    default: { spells: { 'magic shield': 4, 'super strength': 2 }, items: { sapphire: 100_000 } },
+  }));
+  const reserveFixture = options => {
+    const k = fixture(options), { ap } = k, c = ap.s.client;
+    ap.name = `local-${ap.s.credentials.port}`;
+    ap.running = true;
+    ap.reagentCount = () => ({ herbs: 100, elderberry: 100 });
+    ap.loadout = () => null;
+    ap.s.reserveWho = { agent: ap.name, character: ap.name };
+    c.me = { name: ap.name };
+    c.castVeto = makeCastVeto(ap.s, c, { who: ap.s.reserveWho });
+    return k;
+  };
+  const demandFor = ap => interest.demandsForRoom(552, { roomNeedsOnly: true }).find(row => row.agent === ap.name)?.needs;
+  const shortShield = reserveFixture({ pack: [['red mushroom', 50], ['blue mushroom', 50]] });
+  shortShield.report({ damageAt: shortShield.at });
+  await shortShield.ap.buffAllies();
+  ok('fresh Shield shortfall asks for 8 reserved plus 4 plain mushrooms and no colored substitute',
+     JSON.stringify(demandFor(shortShield.ap)) === '{"mushroom":12}' && shortShield.ap.s.client.casts === 0);
+
+  const shortStrength = reserveFixture({ spells: [['super strength', 11]], pack: [['mushroom', 20], ['orc tooth', 2]] });
+  await shortStrength.ap.buffAllies();
+  ok('Strength holds its two teeth and requests two more for two working casts',
+     JSON.stringify(demandFor(shortStrength.ap)) === '{"orc tooth":2}' &&
+     shortStrength.ap.s.client.casts === 0 && shortStrength.ap.reagentExact('orc tooth') === 2);
+
+  const twoShort = reserveFixture({ spells: [['super strength', 11]], pack: [['mushroom', 4], ['orc tooth', 2]] });
+  await twoShort.ap.buffAllies();
+  const twoNeeds = demandFor(twoShort.ap);
+  ok('a native veto on the first ingredient still exposes both reserve-blocked ingredients',
+     twoNeeds?.mushroom === 4 && twoNeeds?.['orc tooth'] === 2);
+
+  const lockedBless = reserveFixture({ spells: [['bless', 12]], pack: [['sapphire', 2]] });
+  await lockedBless.ap.buffAllies();
+  ok('Bless locked by the sapphire reserve does not add an unusable local request', !demandFor(lockedBless.ap));
+  for (const [label, options] of [['no fresh damage', {}], ['low mana', { mana: 2 }],
+    ['outside 552', { room: 553 }], ['without opt-in', { optedIn: false }]]) {
+    const k = reserveFixture({ pack: [['red mushroom', 50]], ...options });
+    if (label !== 'no fresh damage') k.report({ damageAt: k.at });
+    await k.ap.buffAllies();
+    ok(`no new Shield request with ${label}`, !demandFor(k.ap));
+  }
+  shortShield.ap.s.world.room.num = 553;
+  shortShield.ap.declareInterest();
+  ok('an active Ocean request is removed when its caster leaves', !demandFor(shortShield.ap) &&
+     !interest.demandsForRoom(553, { roomNeedsOnly: true }).some(row => row.agent === shortShield.ap.name));
 }
 
 console.log('\nally buff facing and queued packet guards');

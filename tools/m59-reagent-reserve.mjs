@@ -127,6 +127,13 @@ export function floorsFor(reserve, known = []) {
   return floors;
 }
 
+/** The currently configured floors for this client, including its spell exemptions. */
+export function clientReagentReserve(c, who, now = Date.now()) {
+  const reserve = who ? resolveReserve(readReserve(reserveFile(who.fleet), now), who) : null;
+  const known = (c?.spells ?? []).map(sp => String(c.rsc?.get?.(sp.nameRsc) ?? sp.name ?? '').trim());
+  return { floors: floorsFor(reserve, known), exempt: reserve?.exempt ?? [] };
+}
+
 /** Units of `key` in a pack of { name, amount } rows (pack names folded exactly). */
 export function countReagent(pack, key) {
   return (pack ?? []).filter(r => reagentKey(r.name) === key).reduce((a, r) => a + (Number(r.amount) || 1), 0);

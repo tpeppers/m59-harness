@@ -1960,7 +1960,7 @@ export const interest = {
 
   // `service`: this character serves others from a post (a desk, a room caster), so a gift to it
   // is worth a short walk. See m59-sharing.mjs.
-  declare(agent, { wants = [], needs = new Map(), spare = new Map(), wantMatches = new Map(), room = null,
+  declare(agent, { wants = [], needs = new Map(), spare = new Map(), wantMatches = new Map(), room = null, roomNeeds = {},
                    character = null, farming = false, service = false, pack = null } = {}) {
     const rec = {
       wants: new Set(wants.map(w => String(w).toLowerCase())),
@@ -1971,6 +1971,7 @@ export const interest = {
       character: character == null ? null : String(character),
       farming: !!farming,
       service: !!service,
+      ...(Object.keys(roomNeeds).length ? { roomNeeds } : {}),
       // Pack fullness 0..1 when the declarer knows it (reagent autobalance courierGate). Absent, not 0, when unknown.
       ...(Number.isFinite(pack) ? { pack } : {}),
       at: Date.now(),
@@ -2004,6 +2005,7 @@ export const interest = {
         room: r.room == null ? null : Number(r.room),
         character: r.character == null ? null : String(r.character),
         farming: !!r.farming, service: !!r.service, at: Number(r.at),
+        ...(r.roomNeeds ? { roomNeeds: r.roomNeeds } : {}),
         ...(Number.isFinite(r.pack) ? { pack: r.pack } : {}),
       });
     }
@@ -2058,16 +2060,19 @@ export const interest = {
   // home. The neighbourhood is the unit that survives that.
   // `farmingOnly` keeps farm delivery to what it always meant (farmers out on a station); sharing
   // asks with it off, because the desk that ran dry is exactly the character that is NOT farming.
-  demandsNear(rooms, { except = null, maxAgeMs = 90_000, farmingOnly = true } = {}) {
+  demandsNear(rooms, { except = null, maxAgeMs = 90_000, farmingOnly = true, roomNeedsOnly = false } = {}) {
     const within = rooms instanceof Map ? rooms
       : new Map([...rooms].map(r => [Number(r), 0]));
     const now = Date.now();
+    const activeNeeds = rec => roomNeedsOnly
+      ? Object.entries(rec.roomNeeds ?? {}).filter(([, v]) => v?.until > now).map(([kind, v]) => [kind, v.amount])
+      : [...rec.needs];
     return [...this.records()]
       .filter(([agent, rec]) => agent !== except && (rec.farming || !farmingOnly) && rec.room != null &&
-        within.has(rec.room) && now - rec.at <= maxAgeMs)
+        within.has(rec.room) && (!roomNeedsOnly || within.get(rec.room) === 0) && now - rec.at <= maxAgeMs)
       .map(([agent, rec]) => ({ agent, character: rec.character, room: rec.room,
         hops: within.get(rec.room) ?? 0, service: !!rec.service, ...(Number.isFinite(rec.pack) ? { pack: rec.pack } : {}),
-        needs: Object.fromEntries([...rec.needs].map(([kind, amount]) =>
+        needs: Object.fromEntries(activeNeeds(rec).map(([kind, amount]) =>
           [String(kind).toLowerCase(), Math.max(0, Math.floor(Number(amount) || 0))])), at: rec.at }))
       .filter(rec => Object.values(rec.needs).some(amount => amount > 0))
       .sort((a, b) => a.hops - b.hops || b.at - a.at);

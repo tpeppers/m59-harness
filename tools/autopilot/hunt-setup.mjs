@@ -274,7 +274,10 @@ export class HuntSetupPart {
     const capNow = this.autobalanceCouriers?.() ? skills.carryCapacity(c) : null;
     const pack = capNow?.known && capNow.load && capNow.load.exact !== false
       ? Number(Math.max(capNow.load.weight / capNow.weight_max, capNow.load.bulk / capNow.bulk_max).toFixed(2)) : null;
+    const roomNeeds = Object.fromEntries([...this.oceanBuffNeeds()]
+      .filter(([, { amount }]) => amount > 0).map(([kind, { amount, until }]) => [kind, { amount, until }]));
     skills.interest.declare(this.name ?? this.s.name, { wants, needs, spare, wantMatches, pack,
+      roomNeeds,
       room: this.s.world?.room?.num ?? null, character: c.me?.name ?? null,
       farming: this.mode === 'farm' && this.running && !this.inert,
       // A SERVICE CHARACTER IS WORTH A WALK (m59-sharing.mjs): a chalice holder, a posted room
