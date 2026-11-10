@@ -30,6 +30,8 @@ const floors = { 'blue mushroom': 24, 'red mushroom': 96 };
 const scope = 'ocean-sale-cache';
 const maxPiles = 5;
 const maxSteps = 18;
+const fullPackMaxSteps = 28;
+const fullPackFree = 20;
 const retryMs = 30_000;
 const cacheLifeMs = 5 * 60_000;
 const attempts = new WeakMap();
@@ -103,6 +105,11 @@ function wardPiles(c) {
     within(o, FARM_SALE_CACHE_ANCHOR, 3));
 }
 
+function salePiles(c, name) {
+  return wardPiles(c).filter(o => same(o, FARM_SALE_CACHE_DROP) && nameOf(c, o) === name &&
+    Number.isSafeInteger(o.amount) && o.amount > 0);
+}
+
 function reservedForFleet(records, name) {
   let demand = 0;
   for (const row of records.values()) for (const [wanted, amount] of row.needs ?? [])
@@ -157,10 +164,15 @@ export async function tryFarmSaleCache(pilot, {
   }
   if (now() - state.at < retryMs) return false;
   const atDrop = same(c.self, FARM_SALE_CACHE_DROP);
+  let approachSteps = maxSteps;
   if (!atDrop) {
-    if (Math.hypot(c.self.row - FARM_SALE_CACHE_DROP.row, c.self.col - FARM_SALE_CACHE_DROP.col) > maxSteps) return false;
-    const cap = carryCapacity(c);
-    if (!cap.room_for || (cap.room_for.bulk >= 240 && cap.room_for.weight >= 190)) return false;
+    const free = carryCapacity(c).room_for;
+    if (!free || (free.bulk >= 240 && free.weight >= 190)) return false;
+    if (Math.min(free.bulk, free.weight) <= fullPackFree) approachSteps = fullPackMaxSteps;
+    // A diagonal is one movement step. The larger axis is a lower bound on
+    // the path length, even where the straight-line distance exceeds the cap.
+    if (Math.max(Math.abs(c.self.row - FARM_SALE_CACHE_DROP.row),
+      Math.abs(c.self.col - FARM_SALE_CACHE_DROP.col)) > approachSteps) return false;
   }
   const scene = ward(pilot, s, c);
   if (!scene || scene.anchor.id !== pin.anchor.id || !quietAt(c, scene, c.self) ||
@@ -170,13 +182,13 @@ export async function tryFarmSaleCache(pilot, {
 
   if (!atDrop) {
     const path = walkPlan(scene.geo, c.self, FARM_SALE_CACHE_DROP, { maxNodes: 400 });
-    if (!path.found || path.goal_exempt || !path.steps?.length || path.steps.length > maxSteps ||
+    if (!path.found || path.goal_exempt || !path.steps?.length || path.steps.length > approachSteps ||
         path.steps.some(step => !quietAt(c, scene, step))) return false;
     const allowed = new Set(path.steps.map(step => `${step.row},${step.col}`));
     const movementGeneration = s.movementGeneration;
     state.at = now();
     await s.walkTo(FARM_SALE_CACHE_DROP.col, FARM_SALE_CACHE_DROP.row, {
-      maxSteps, hardCap: maxSteps, doors: false, movementGeneration,
+      maxSteps: approachSteps, hardCap: approachSteps, doors: false, movementGeneration,
       beforeMutation: (_kind, step) => {
         const current = sameBody() && eligibleBody(pilot, s, c, now(), true) && ward(pilot, s, c);
         return !!current && current.anchor.id === scene.anchor.id &&
@@ -193,7 +205,6 @@ export async function tryFarmSaleCache(pilot, {
   try {
     if (!sameBody() || !await readRoom(s, c)) return false;
     let proof = null;
-    const seq = c.evSeq;
     await s.pacer.submit('drop', () => {
       const current = sameBody() && eligibleBody(pilot, s, c, now()) && ward(pilot, s, c);
       const latest = readWard();
@@ -208,24 +219,33 @@ export async function tryFarmSaleCache(pilot, {
       if (!parcel || parcel.id !== planned.id || parcel.amount !== planned.amount || !item ||
           saleBlocked(s, { id: planned.id, name: planned.name })) return;
       const at = now();
-      proof = { before: amountOf(c, parcel.name), absent: new Set(c.room.objects.keys()),
+      proof = { since: c.evSeq, before: amountOf(c, parcel.name), known: new Set(c.room.objects.keys()),
+        priorPiles: new Map(salePiles(c, parcel.name).map(o => [o.id, o.amount])),
         expires_at: Math.min(at + cacheLifeMs, claim.until, latest.expires_at), parcel };
       state.at = at;
       sent = true;
       return c.drop([dropSpec(item, parcel.amount)]);
     }).catch(() => {});
     if (!sent) return false;
-    await c.waitFor({ since: seq, kinds: ['appeared', 'message'], timeoutMs: 1400 }).catch(() => null);
+    await c.waitFor({ since: proof.since, kinds: ['appeared', 'changed', 'message'], timeoutMs: 1400 }).catch(() => null);
     const inventorySeq = c.evSeq;
     await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
     const reply = await c.waitFor({ since: inventorySeq, kinds: ['inventory'], timeoutMs: 2000 }).catch(() => null);
-    const { parcel, before, absent, expires_at } = proof;
+    const { parcel, before, known, priorPiles, since, expires_at } = proof;
     const current = sameBody() && ward(pilot, s, c);
-    const appeared = new Set(c.eventsSince(seq).filter(event => event.kind === 'appeared').map(event => event.id));
-    const added = current ? wardPiles(c).filter(o => !absent.has(o.id) && appeared.has(o.id) && same(o, FARM_SALE_CACHE_DROP) &&
-      nameOf(c, o) === parcel.name && o.amount === parcel.amount) : [];
+    const increased = current ? salePiles(c, parcel.name).filter(o => priorPiles.has(o.id)
+      ? o.amount > priorPiles.get(o.id) : !known.has(o.id)) : [];
+    const pile = increased.length === 1 ? increased[0] : null;
+    const previous_amount = priorPiles.get(pile?.id) ?? 0;
+    const events = pile ? c.eventsSince(since).filter(event => event.id === pile.id) : [];
+    // The server updates an existing stack in place when it merges a drop. Keep
+    // both the exact floor delta and its native event, so a missing or replaced
+    // stack cannot be mistaken for a deposit.
+    const observed = previous_amount === 0 ? events.some(event => event.kind === 'appeared')
+      : events.some(event => event.kind === 'changed') && !events.some(event =>
+        event.kind === 'vanished' || event.kind === 'appeared');
     if (!reply?.events?.some(event => event.kind === 'inventory') || !current || current.anchor.id !== scene.anchor.id ||
-        added.length !== 1 || amountOf(c, parcel.name) !== before - parcel.amount) {
+        !observed || pile.amount - previous_amount !== parcel.amount || amountOf(c, parcel.name) !== before - parcel.amount) {
       state.blocked.add(parcel.id);
       pilot.ledgerEvent('farm_sale_cache_unverified', { room: FARM_SALE_CACHE_ROOM, item: parcel.name, amount: parcel.amount });
       return true;
@@ -234,7 +254,8 @@ export async function tryFarmSaleCache(pilot, {
     pilot.ledgerEvent(FARM_SALE_CACHE_EVENT, {
       room: FARM_SALE_CACHE_ROOM, room_security: pin.room_security, last_save_at: pin.last_save_at,
       anchor: { id: current.anchor.id, ...FARM_SALE_CACHE_ANCHOR }, courier: FARM_SALE_CACHE_COURIER,
-      item: { id: added[0].id, name: parcel.name, amount: parcel.amount, ...FARM_SALE_CACHE_DROP }, observed_at, expires_at,
+      item: { id: pile.id, name: parcel.name, amount: pile.amount, ...FARM_SALE_CACHE_DROP },
+      previous_amount, deposited_amount: parcel.amount, observed_at, expires_at,
     });
     return true;
   } finally {
