@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   OCEAN_SHOPS, oceanBuyQuantity, oceanProvisionRecord, oceanUnitsFit, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
-import { oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, script } from './fleetscripts/ocean-courier.mjs';
+import { oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
 const now = 100_000;
 const epoch = 90_000;
@@ -105,4 +105,39 @@ test('interrupted courier only returns on its own authorized corridor and quiet 
     .filter(step => step.do === 'walk').map(step => step.to), [544, 552]);
   assert.equal(oceanCourierReturnSteps({ ...s, room: { num: 533 } }), null);
   assert.equal(oceanCourierReturnSteps({ ...s, you: { ...holder, object_id: null } }), null);
+});
+
+test('every conditional courier leg declares its possible rooms for FleetScript preflight', async () => {
+  const prior = process.env.M59_FLEET;
+  process.env.M59_FLEET = 'prod';
+  try {
+    const steps = await script.steps({ agent: 'hk2' });
+    const legs = steps.filter(step => step.do === 'walk' && typeof step.to === 'function');
+    assert.ok(legs.length > 0);
+    for (const leg of legs) {
+      assert.ok(leg.candidates.length > 0);
+      assert.ok(leg.candidates.includes(leg.to({})));
+      assert.ok(leg.candidates.every(room => [201, 202, 200, 534, 544, 552].includes(room)));
+    }
+  } finally {
+    if (prior === undefined) delete process.env.M59_FLEET;
+    else process.env.M59_FLEET = prior;
+  }
+});
+
+test('stamps the broker floor scan only inside one proved room and save epoch', async () => {
+  const live = { ...ward, connected: true, pid: 10, connection_revision: 1,
+    objects: [{ ...item, can: ['get'] }] };
+  const raw = { ok: true, room: 552, near: { row: 43, col: 57 }, items: [item] };
+  const stable = async tool => tool === 'look' ? live : raw;
+  const current = await oceanWardScan(stable, 'hk2', ['blue mushroom']);
+  assert.deepEqual(current, { ...raw, ids_stale: false, last_save_at: epoch });
+  const changed = async tool => tool === 'look' ? { ...live, objects: [{ ...item, amount: 47, can: ['get'] }] } : raw;
+  assert.equal((await oceanWardScan(changed, 'hk2', ['blue mushroom'])).ok, false);
+  let views = 0;
+  const saves = async tool => tool === 'look'
+    ? { ...live, last_save_at: epoch + (views++ ? 10 : 0) } : raw;
+  const crossed = await oceanWardScan(saves, 'hk2', ['blue mushroom']);
+  assert.equal(crossed.ok, false);
+  assert.equal(crossed.ids_stale, true);
 });
