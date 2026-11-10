@@ -13,7 +13,7 @@ import { ITEM_RARITY } from '../m59-items.mjs';
 import { classifyWeapon } from '../m59-weapon-magic.mjs';
 import {
   OCEAN_BREAD, OCEAN_COURIER, OCEAN_GEAR_NAMES, OCEAN_SALE_PRICE, OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanDistance,
-  oceanHasProvisionBatch, oceanItemCount, oceanItemName, oceanProvisionRecord, oceanUnitsFit,
+  oceanCourierRationHoldback, oceanHasProvisionBatch, oceanItemCount, oceanItemName, oceanProvisionRecord, oceanUnitsFit,
   readOceanGearCargo, readOceanSaleAuthorization, readOceanSaleDeposits, recordOceanGearCargo, retireOceanGearCargo,
   selectOceanGearCargo, selectOceanSalePiles, writeOceanCache,
 } from '../m59-ocean-courier-cache.mjs';
@@ -230,13 +230,16 @@ async function sellParcels(rpc, keeper, plan) {
 async function buySupplies(rpc, plan, seller, expected, fleet) {
   const wanted = OCEAN_SHOPS[seller].filter(supply => plan.wanted[supply.name] > 0);
   if (!wanted.length) return;
-  await waitForBody(rpc, expected, 95);
+  const ready = await waitForBody(rpc, expected, 95);
   const merchantId = await merchant(rpc, seller, expected);
+  let holdback;
   for (const supply of wanted) {
     const menu = await rpc('shop', { agent, seller: merchantId }, 20000);
     const listing = menu.items?.find(item => matches(item, supply.name));
     const before = await inventory(rpc);
-    const amount = oceanBuyQuantity(before, listing, supply, plan.wanted[supply.name]);
+    holdback ??= seller === 'Morrigan'
+      ? oceanCourierRationHoldback(before, plan.wanted, ready.autopilot_status.policy.protectedItems) : 0;
+    const amount = oceanBuyQuantity(before, listing, supply, plan.wanted[supply.name], holdback);
     if (!amount) { report('purchase deferred', { item: supply.name }); continue; }
     const body = await read(rpc, agent);
     require(oceanCourierReady(body, expected) && body.last_save_at === before.last_save_at,
@@ -245,7 +248,7 @@ async function buySupplies(rpc, plan, seller, expected, fleet) {
     const after = await inventory(rpc);
     const cost = Number(listing.cost ?? listing.price) * amount;
     require(after.ids_stale === false && before.ids_stale === false && after.last_save_at === before.last_save_at && purse(before) - purse(after) === cost &&
-      count(after, supply.name) - count(before, supply.name) === amount && purse(after) >= reserve,
+      count(after, supply.name) - count(before, supply.name) === amount && purse(after) >= reserve + holdback,
     `ambiguous ${supply.name} purchase; inspect pack before any repeat`);
     plan.purchased[supply.name] = amount;
     const ids = after.items.filter(item => matches(item, supply.name) &&
