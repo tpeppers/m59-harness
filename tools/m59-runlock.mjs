@@ -231,10 +231,13 @@ export function takeRunLock(fleet, { label = 'a fleet run', force = false, agent
                  argv: process.argv.slice(1).join(' ').slice(0, 400) };
   writeFileSync(file, JSON.stringify(mine, null, 2));
 
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
+    process.off('exit', release);
+    for (const sig of signals) process.off(sig, onSignal);
     // Only ever remove OUR OWN claim. A run that overran and was taken over must not delete
     // the lock of whatever took over from it on the way out.
     try {
@@ -242,9 +245,10 @@ export function takeRunLock(fleet, { label = 'a fleet run', force = false, agent
       if (now && Number(now.pid) === process.pid) unlinkSync(file);
     } catch { /* a lock that cannot be removed is stale, and stale is recoverable */ }
   };
+  const onSignal = () => { release(); process.exit(130); };
   process.once('exit', release);
-  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-    try { process.once(sig, () => { release(); process.exit(130); }); } catch { /* not on this platform */ }
+  for (const sig of signals) {
+    try { process.once(sig, onSignal); } catch { /* not on this platform */ }
   }
   return { ok: true, release, lock: mine, tookOverFrom: found.state === 'stale' ? found : null };
 }

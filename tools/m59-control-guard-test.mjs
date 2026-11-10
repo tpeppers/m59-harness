@@ -143,6 +143,16 @@ console.log('\nthe lock covers exactly the declared characters');
   ok('releasing removes the claims', agentLockFiles(F).length === 0);
 }
 
+{
+  const events = ['exit', 'SIGINT', 'SIGTERM', 'SIGHUP'];
+  const before = events.map(event => process.listenerCount(event));
+  for (let lap = 0; lap < 12; lap++) {
+    takeAgentLocks('courier-test', ['hk2', 'hk3']).release();
+  }
+  ok('completed courier laps release their exit and signal listeners',
+     events.every((event, i) => process.listenerCount(event) === before[i]));
+}
+
 console.log('\nall or nothing, and both scopes still see each other');
 {
   const F = 'testfleet2';

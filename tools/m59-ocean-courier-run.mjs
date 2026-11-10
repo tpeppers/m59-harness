@@ -4,20 +4,19 @@ import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { call, fleetScript } from './m59-fleetscript.mjs';
 import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
-import { dibsFile, itemKey } from './m59-dibs.mjs';
+import { dibsFile } from './m59-dibs.mjs';
 import { farmFoodCacheFile } from './m59-farm-food-cache-record.mjs';
 import { farmGearCacheFile } from './m59-farm-gear-cache-record.mjs';
 import {
-  OCEAN_COURIER, OCEAN_SALE_PRICE, oceanCourierReserveFood, oceanDistance, oceanItemCount,
-  oceanProvisionRecord, writeOceanCache,
+  OCEAN_COURIER, oceanCourierReserveFood, oceanDistance, oceanItemCount, oceanProvisionRecord,
+  oceanSaleWardPath, renewOceanSaleClaims, writeOceanCache,
 } from './m59-ocean-courier-cache.mjs';
 import {
   oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanWardReady, oceanWardScan, script,
 } from './fleetscripts/ocean-courier.mjs';
 
-const { agent, holder, room, sale, name } = OCEAN_COURIER;
+const { agent, holder, room } = OCEAN_COURIER;
 const medic = 'hk1';
-const itemsForSale = Object.keys(OCEAN_SALE_PRICE);
 const fleet = fleetName();
 if (fleet !== 'prod' || !process.argv.includes('--run'))
   throw Error('start explicitly with --fleet prod --run after verifying the production roster');
@@ -25,7 +24,7 @@ if (fleet !== 'prod' || !process.argv.includes('--run'))
 const substrate = dirname(dirname(stateFileFor(fleet)));
 const lockPath = join(substrate, 'ocean-courier-prod.lock');
 const stopPath = join(substrate, 'scratch', 'great-ocean.stop');
-const wardPath = process.env.M59_FARM_SALE_CACHE_WARD_FILE || join(substrate, 'farm-sale-cache-ward-prod.json');
+const wardPath = oceanSaleWardPath(fleet);
 const log = (event, fields = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), event, ...fields }));
 const status = who => call('status', { agent: who, brief: true }, 9000);
 const floor = (who, what) => oceanWardScan(call, who, what);
@@ -54,18 +53,8 @@ function acquire() {
 function maintainClaims() {
   const file = dibsFile(fleet);
   const raw = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { format: 'm59-dibs/1', claims: [] };
-  if (!Array.isArray(raw.claims)) throw Error('unreadable floor reservations');
-  const now = Date.now(), ttl = 12 * 60_000;
-  const owns = claim => claim.source === 'ocean-sale-cache' && claim.room === room &&
-    claim.for?.length === 1 && claim.for[0] === name && claim.near?.radius === 0 && position(claim.near, sale);
-  if (itemsForSale.every(item => raw.claims.some(claim => owns(claim) && itemKey(claim.item) === item &&
-      Date.parse(claim.until) > now + ttl / 2))) return;
-  const claims = itemsForSale.map(item => ({
-    source: 'ocean-sale-cache', room, item, for: [name], near: { ...sale, radius: 0 },
-    at: new Date(now).toISOString(), until: new Date(now + ttl).toISOString(),
-    by: 'ocean-courier', why: 'Exact registered keeper sale parcels for the Marion courier',
-  }));
-  writeOceanCache(file, { ...raw, claims: [...raw.claims.filter(claim => !owns(claim)), ...claims] });
+  const renewed = renewOceanSaleClaims(raw);
+  if (renewed) writeOceanCache(file, renewed);
 }
 
 async function refreshManifest(server, ward, ground, kind, file) {
@@ -176,7 +165,7 @@ try {
   while (!stopping && !existsSync(stopPath)) {
     try {
       const carrier = await status(agent);
-      const recovery = oceanCourierReturnSteps(carrier);
+      const recovery = oceanCourierReturnSteps(carrier, { fleet, server });
       if (recovery) {
         const result = await run(recovery, 'ocean-courier return checkback', [agent]);
         if (!result?.ok) log('return deferred', { reason: result?.why ?? 'inspect the verified courier corridor' });

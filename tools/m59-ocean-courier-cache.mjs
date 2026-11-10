@@ -1,26 +1,43 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { dibsFile, itemKey, liveClaims, normalizeBook } from './m59-dibs.mjs';
 import { ledgerDirForRoster, stateFileFor } from './m59-fleetpath.mjs';
-import { weighItem } from './m59-items.mjs';
+import { ITEM_RARITY, weighItem } from './m59-items.mjs';
 
 export const OCEAN_COURIER = Object.freeze({
   room: 552, agent: 'hk2', name: 'Zheng He', holder: 't3', holderName: 'Statler',
   ward: { row: 43, col: 57 }, sale: { row: 44, col: 56 }, reserve: 400,
 });
 export const OCEAN_SALE_PRICE = Object.freeze({ 'blue mushroom': 25, 'red mushroom': 20 });
+export const OCEAN_BREAD = Object.freeze({ name: 'loaf of bread', target: 20, reserve: 4 });
 export const OCEAN_SHOPS = Object.freeze({
-  Morrigan: [{ name: 'herb', limit: 180, price: 20 }, { name: 'elderberry', limit: 32, price: 40 }],
-  Tova: [{ name: 'loaf of bread', limit: 24, price: 120 }],
-  Colhorr: [{ name: 'axe', limit: 1, price: 960 }, { name: 'leather armor', limit: 1, price: 640 }],
+  Morrigan: [{ name: 'herb', limit: 180, price: 20, batch: 24 }, { name: 'elderberry', limit: 32, price: 40, batch: 8 }],
+  Tova: [{ name: OCEAN_BREAD.name, limit: 24, price: 120, batch: 4 }],
+  Colhorr: [{ name: 'axe', limit: 1, price: 960, batch: 1 }, { name: 'leather armor', limit: 1, price: 640, batch: 1 }],
 });
 const MAX_TAIL = 2 * 1024 * 1024;
 const WARD_RADIUS = 3;
+const SALE_CLAIM_TTL = 12 * 60_000;
+const SALE_PICKUP_LIMIT = 15 * 60_000;
+const SALE_PIN_FRESH = 90_000;
+const SALE_PICKUP_BUDGET = 10_000;
+const SALE_SCOPE = 'ocean-sale-cache';
+const SALE_CLAIM_OWNER = 'ocean-courier';
+const SALE_WARD_SCHEMA = 'm59-farm-sale-cache-ward/1';
+const GEAR_CARGO_SCHEMA = 'm59-ocean-gear-cargo/1';
+export const OCEAN_GEAR_NAMES = Object.freeze(['axe', 'leather armor']);
 const positive = value => Number.isSafeInteger(value) && value > 0;
 export const oceanItemName = name => String(name ?? '').trim().toLowerCase();
 export const oceanDistance = (a, b) => Math.abs(a?.row - b?.row) + Math.abs(a?.col - b?.col);
 export const oceanItemCount = (pack, name) => (pack.items ?? []).reduce((count, row) =>
   oceanItemName(row.name) === name ? count + (positive(row.amount) ? row.amount : 1) : count, 0);
+
+export function oceanBreadPlan(floor, carried) {
+  const missing = Math.max(0, OCEAN_BREAD.target - floor);
+  return { stage: Math.min(missing, Math.max(0, carried - OCEAN_BREAD.reserve)),
+    wanted: missing + Math.max(0, OCEAN_BREAD.reserve - carried) };
+}
 
 export function oceanCourierReserveFood(status) {
   const vigor = status?.vigor?.value;
@@ -71,7 +88,71 @@ function isSaleReceipt(row) {
     proof.floor_after_at <= row.observed_at && row.previous_amount > 0;
 }
 
-export function selectOceanSalePiles(rows, scene, ward, now = Date.now()) {
+export const oceanSaleWardPath = fleet => process.env.M59_FARM_SALE_CACHE_WARD_FILE ||
+  join(dirname(dirname(stateFileFor(fleet))), `farm-sale-cache-ward-${fleet || 'default'}.json`);
+
+function normalizedSaleBook(raw) {
+  const problems = [];
+  const book = normalizeBook(raw, problems);
+  if (!Array.isArray(raw?.claims) || problems.length) throw Error('unreadable floor reservations');
+  return book;
+}
+
+const onlyZheng = claim => Array.isArray(claim.for) && claim.for.length === 1 &&
+  oceanItemName(claim.for[0]) === oceanItemName(OCEAN_COURIER.name);
+const ownSaleClaim = claim => claim?.source === SALE_SCOPE && claim.by === SALE_CLAIM_OWNER &&
+  Number(claim.room) === OCEAN_COURIER.room && onlyZheng(claim) && claim.near?.radius != null && Number(claim.near.radius) === 0 &&
+  oceanDistance(claim.near, OCEAN_COURIER.sale) === 0 && Object.hasOwn(OCEAN_SALE_PRICE, itemKey(claim.item));
+
+function currentSaleClaim(book, name, now) {
+  const covering = liveClaims(book, now).filter(claim => claim.room === OCEAN_COURIER.room &&
+    claim.item === itemKey(name) && (!claim.near || oceanDistance(claim.near, OCEAN_COURIER.sale) <= claim.near.radius));
+  if (!covering.every(onlyZheng)) return null;
+  const exact = covering.filter(claim => ownSaleClaim(claim) && positive(claim.until));
+  return exact.length === 1 ? exact[0] : null;
+}
+
+// Renew the lease without erasing when exclusive coverage began. A lapse or a
+// competing claim clears continuity, even if the same tile is claimed again.
+export function renewOceanSaleClaims(raw, now = Date.now()) {
+  const book = normalizedSaleBook(raw);
+  const prior = Object.keys(OCEAN_SALE_PRICE).map(item => [item, currentSaleClaim(book, item, now)]);
+  const validStart = claim => positive(Date.parse(claim?.at)) && Date.parse(claim.at) <= now;
+  if (prior.every(([, claim]) => validStart(claim) && claim.until > now + SALE_CLAIM_TTL / 2)) return null;
+  const claims = prior.map(([item, claim]) => ({
+    source: SALE_SCOPE, room: OCEAN_COURIER.room, item, for: [OCEAN_COURIER.name],
+    near: { ...OCEAN_COURIER.sale, radius: 0 }, at: validStart(claim) ? claim.at : new Date(now).toISOString(),
+    until: new Date(now + SALE_CLAIM_TTL).toISOString(), by: SALE_CLAIM_OWNER,
+    why: 'Exact registered keeper sale parcels for the Marion courier',
+  }));
+  return { ...raw, claims: [...raw.claims.filter(claim => !ownSaleClaim(claim)), ...claims] };
+}
+
+export function readOceanSaleAuthorization(fleet) {
+  let book;
+  try { book = normalizedSaleBook(JSON.parse(readFileSync(dibsFile(fleet), 'utf8'))); }
+  catch { return null; }
+  let pin = null;
+  try { pin = JSON.parse(readFileSync(oceanSaleWardPath(fleet), 'utf8')); }
+  catch { /* A fresh receipt needs the claim; grace additionally needs the ward pin. */ }
+  return { book, pin };
+}
+
+function salePickupAuthorized(row, ward, now, authorization) {
+  const claim = currentSaleClaim(authorization?.book, row.item.name, now);
+  if (!claim || claim.until <= now + SALE_PICKUP_BUDGET) return false;
+  if (row.expires_at > now) return true;
+  const { pin } = authorization;
+  const claimStarted = Date.parse(claim.at);
+  return now < row.observed_at + SALE_PICKUP_LIMIT && positive(claimStarted) && claimStarted <= row.observed_at &&
+    pin?.schema === SALE_WARD_SCHEMA && pin.room === row.room && pin.room_security === row.room_security &&
+    pin.last_save_at === row.last_save_at && positive(pin.observed_at) && positive(pin.expires_at) &&
+    pin.observed_at > pin.last_save_at && pin.observed_at <= now && now - pin.observed_at <= SALE_PIN_FRESH &&
+    pin.expires_at > now + SALE_PICKUP_BUDGET && pin.anchor?.id === (ward.you?.object_id ?? ward.you?.id) &&
+    pin.anchor.name === ward.character && oceanDistance(pin.anchor, ward.you) === 0;
+}
+
+export function selectOceanSalePiles(rows, scene, ward, now = Date.now(), authorization) {
   const anchor = ward.you;
   const holderId = anchor?.object_id ?? anchor?.id;
   const security = ward.room_wire?.room_security_u32;
@@ -103,9 +184,9 @@ export function selectOceanSalePiles(rows, scene, ward, now = Date.now()) {
         row.observed_at < last.observed_at : last) continue;
     receipts.set(item.id, row);
   }
-  return [...receipts.values()].filter(({ item, expires_at }) => expires_at > now &&
-    scene.items.some(pile => pile.id === item.id && pile.name === item.name &&
-      pile.amount === item.amount && oceanDistance(pile, item) === 0)).map(row => row.item);
+  return [...receipts.values()].filter(row => salePickupAuthorized(row, ward, now, authorization) &&
+    scene.items.some(pile => pile.id === row.item.id && pile.name === row.item.name &&
+      pile.amount === row.item.amount && oceanDistance(pile, row.item) === 0)).map(row => row.item);
 }
 
 export function oceanUnitsFit(pack, name) {
@@ -121,8 +202,73 @@ export function oceanBuyQuantity(pack, offer, supply, wanted) {
   const price = Number(offer?.cost ?? offer?.price);
   if (!positive(offer?.id) || oceanItemName(offer.name) !== supply.name || !positive(price) ||
       price > supply.price || !positive(wanted)) return 0;
+  return oceanQuantityAtPrice(pack, supply, wanted, price);
+}
+
+function oceanQuantityAtPrice(pack, supply, wanted, price) {
   return Math.max(0, Math.min(wanted, supply.limit, oceanUnitsFit(pack, supply.name),
     Math.floor((oceanItemCount(pack, 'shilling') - OCEAN_COURIER.reserve) / price)));
+}
+
+export function oceanHasProvisionBatch(pack, wanted) {
+  return Object.values(OCEAN_SHOPS).flat().some(supply => positive(wanted[supply.name]) &&
+    oceanQuantityAtPrice(pack, supply, wanted[supply.name], supply.price) >= supply.batch);
+}
+
+export const oceanGearCargoFile = fleet => process.env.M59_OCEAN_GEAR_CARGO_FILE ||
+  join(dirname(dirname(stateFileFor(fleet))), 'scratch', `ocean-gear-cargo-${fleet}.json`);
+
+export function readOceanGearCargo(fleet) {
+  try { return JSON.parse(readFileSync(oceanGearCargoFile(fleet), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; return null; }
+}
+
+const bodyId = body => body?.you?.object_id ?? body?.you?.id;
+const gearCargoCurrent = (record, server, body) => record?.schema === GEAR_CARGO_SCHEMA &&
+  body?.character === OCEAN_COURIER.name && body.ids_stale === false && positive(bodyId(body)) &&
+  positive(body.last_save_at) && record.last_save_at === body.last_save_at && record.body_id === bodyId(body) &&
+  record.agent === OCEAN_COURIER.agent && typeof server?.host === 'string' && server.host && positive(Number(server.port)) &&
+  record.server?.host === server.host && record.server.port === Number(server.port) && Array.isArray(record.items);
+
+function provenGearCargo(item, save, carrier) {
+  const receipt = item?.receipt;
+  if (!positive(item?.id) || !OCEAN_GEAR_NAMES.includes(item.name) || receipt?.generation !== save) return false;
+  if (item.source === 'Colhorr') return receipt.seller === 'Colhorr' && receipt.room === 201 &&
+    receipt.item === item.name && receipt.amount === 1 && receipt.ids?.length === 1 && receipt.ids[0] === item.id &&
+    positive(receipt.shillings) && positive(receipt.at) && receipt.at > save;
+  return item.source === 'Raphael' && item.name === 'axe' && receipt.from === 'hk3' &&
+    receipt.to === OCEAN_COURIER.agent && receipt.name === item.name && receipt.id === item.id &&
+    positive(receipt.from_body) && receipt.to_body === carrier && positive(receipt.started) &&
+    receipt.started > save && positive(receipt.confirmed) && receipt.confirmed >= receipt.started;
+}
+
+export function recordOceanGearCargo(fleet, server, body, item) {
+  const record = { schema: GEAR_CARGO_SCHEMA, agent: OCEAN_COURIER.agent, body_id: bodyId(body),
+    server: { host: server?.host, port: Number(server?.port) }, last_save_at: body?.last_save_at, items: [] };
+  if (!gearCargoCurrent(record, server, body) || !provenGearCargo(item, record.last_save_at, record.body_id))
+    throw Error('gear cargo needs an exact receipt in Zheng’s current save epoch');
+  const prior = readOceanGearCargo(fleet);
+  if (gearCargoCurrent(prior, server, body)) record.items = prior.items.filter(entry =>
+    provenGearCargo(entry, record.last_save_at, record.body_id) && entry.id !== item.id);
+  record.items.push(item);
+  writeOceanCache(oceanGearCargoFile(fleet), record);
+}
+
+export function retireOceanGearCargo(fleet, server, body, ids) {
+  if (!ids.length) return;
+  const record = readOceanGearCargo(fleet);
+  if (!gearCargoCurrent(record, server, body)) return;
+  const items = record.items.filter(item => !ids.includes(item?.id));
+  if (items.length !== record.items.length) writeOceanCache(oceanGearCargoFile(fleet), { ...record, items });
+}
+
+export function selectOceanGearCargo(record, server, body, pack) {
+  if (!gearCargoCurrent(record, server, body) || pack?.ids_stale !== false || pack.last_save_at !== body.last_save_at ||
+      !positive(pack.ids_as_of) || pack.ids_as_of < body.last_save_at || !Array.isArray(pack.items)) return [];
+  return record.items.filter(item => provenGearCargo(item, record.last_save_at, record.body_id) && pack.items.some(row =>
+    row.id === item.id && oceanItemName(row.name) === item.name && Number.isInteger(row.rarity) &&
+    row.rarity >= ITEM_RARITY.NORMAL && row.rarity < ITEM_RARITY.UNIDENTIFIED && [null, undefined, 0, 1].includes(row.amount)))
+    .sort((a, b) => Number(b.source === 'Raphael') - Number(a.source === 'Raphael'));
 }
 
 export function oceanProvisionRecord({ host, ward, items, kind, now = Date.now() }) {
