@@ -12,8 +12,8 @@ import { OF } from '../m59-parse.mjs';
 import { ITEM_RARITY } from '../m59-items.mjs';
 import { classifyWeapon } from '../m59-weapon-magic.mjs';
 import {
-  OCEAN_COURIER, OCEAN_SALE_PRICE, OCEAN_SHOPS, oceanBuyQuantity, oceanDistance,
-  oceanItemCount, oceanItemName, oceanProvisionRecord, oceanUnitsFit, readOceanSaleDeposits,
+  OCEAN_BREAD, OCEAN_COURIER, OCEAN_SALE_PRICE, OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanDistance,
+  oceanHasProvisionBatch, oceanItemCount, oceanItemName, oceanProvisionRecord, oceanUnitsFit, readOceanSaleDeposits,
   selectOceanSalePiles, writeOceanCache,
 } from '../m59-ocean-courier-cache.mjs';
 
@@ -374,19 +374,22 @@ async function handoffNewAxe(rpc, fleet, plan) {
   report('desk intake receipt', { purchase, handoff });
 }
 
-async function stageSupplies(rpc, plan, fleet) {
-  const names = ['axe', 'leather armor', 'loaf of bread', 'elderberry'];
-  if (!names.some(item => plan.purchased[item])) return;
+async function stageSupplies(rpc, plan, fleet, { breadOnly = false } = {}) {
+  const bread = OCEAN_BREAD.name;
+  const names = ['axe', 'leather armor', bread, 'elderberry'];
+  if (!breadOnly && !names.some(item => plan.purchased[item])) return;
   const body = await moveToWard(rpc);
   const [singer, current, carried] = await Promise.all([read(rpc, holder), scan(rpc, names), inventory(rpc)]);
-  require(oceanWardReady(singer) && current.ok && current.ids_stale === false &&
-    singer.last_save_at === body.last_save_at && current.last_save_at === body.last_save_at,
+  require(oceanWardReady(singer) && current.ok && current.ids_stale === false && carried.ids_stale === false &&
+    [singer, current, carried].every(snapshot => snapshot.last_save_at === body.last_save_at),
   'cache did not have one current save epoch before delivery');
-  const food = current.items.filter(item => item.name === 'loaf of bread');
+  const food = current.items.filter(item => item.name === bread);
   const gearNames = ['axe', 'leather armor'];
-  const bread = 'loaf of bread';
+  const breadSurplus = oceanBreadPlan(count({ items: food }, bread), count(carried, bread)).stage;
+  const breadToStage = breadOnly ? breadSurplus : Math.min(breadSurplus, plan.purchased[bread] ?? 0);
+  const carriedBread = carried.items.filter(item => matches(item, bread));
   let pack = carried, recovered = 0;
-  if (plan.purchased[bread] && food.length === 1 && food[0].amount < 20 &&
+  if (breadToStage && food.length === 1 && carriedBread.length === 1 &&
       oceanUnitsFit(pack, bread) >= food[0].amount) {
     const file = farmFoodCacheFile(fleet);
     let registered;
@@ -400,34 +403,44 @@ async function stageSupplies(rpc, plan, fleet) {
       await rpc('act', { agent, verb: 'get', target: food[0].id }, 10000);
       pack = await inventory(rpc);
       recovered = count(pack, bread) - count(carried, bread);
-      require(pack.last_save_at === carried.last_save_at && recovered > 0 && recovered <= food[0].amount,
+      require(pack.ids_stale === false && pack.last_save_at === carried.last_save_at && recovered === food[0].amount,
         'ambiguous food top-up pickup; inspect the pack and pile');
     }
   }
-  const payload = names.filter(item => plan.purchased[item] && (item !== bread || !food.length || recovered))
+  const payload = names.filter(item => item === bread ? breadToStage && (!food.length || recovered)
+    : !breadOnly && plan.purchased[item])
     .map(item => {
       const gear = gearNames.includes(item);
-      const stock = pack.items.find(row => matches(row, item) && (!gear || plan.purchasedIds[item]?.includes(row.id)));
-      const cap = item === bread ? count(pack, item) - 2 : count(pack, item);
-      return { name: item, id: stock?.id, amount: Math.min(cap, plan.purchased[item] + (item === bread ? recovered : 0)), gear };
+      const items = pack.items.filter(row => matches(row, item) && (!gear || plan.purchasedIds[item]?.includes(row.id)));
+      const stock = item === bread ? items.sort((a, b) => b.amount - a.amount)[0] : items[0];
+      const amount = item === bread ? Math.min(stock?.amount ?? 0, count(pack, item) - OCEAN_BREAD.reserve, breadToStage + recovered)
+        : Math.min(count(pack, item), plan.purchased[item]);
+      return { name: item, id: stock?.id, amount, gear };
     }).filter(item => item.id && item.amount > 0);
-  if (!payload.length) return;
+  require(!recovered || payload.some(item => item.name === bread && item.amount >= recovered),
+    'exact recovered food pile could not be staged as one stack');
+  if (!payload.length) return { singer, stock: current, pack };
   for (const item of payload) {
     const latest = await read(rpc, agent);
     require(oceanCourierReady(latest, room) && unchanged(body, latest) && position(latest.you, sale) &&
-      latest.items?.some(row => row.id === item.id && matches(row, item.name)), 'courier moved before exact ward drop');
+      latest.items?.some(row => row.id === item.id && matches(row, item.name) &&
+        (item.name !== bread || row.amount >= item.amount && count(latest, bread) - item.amount >= OCEAN_BREAD.reserve)),
+    'courier moved or exact ward cargo changed before drop');
     addStashClaim(dibsFile(fleet), stashClaim({ room, item: item.name, holder: holderName, near: ward,
       radius: 3, why: 'Provision procured by Zheng He for the Ocean fleet' }));
     await rpc('act', { agent, verb: 'drop', target: item.id, ...(item.gear ? {} : { amount: item.amount }) }, 10000);
   }
   const [after, refreshed, anchor] = await Promise.all([inventory(rpc), scan(rpc, names), read(rpc, holder)]);
-  require(oceanWardReady(anchor) && refreshed.ok && refreshed.ids_stale === false &&
-    refreshed.last_save_at === body.last_save_at && after.last_save_at === body.last_save_at &&
+  require(oceanWardReady(anchor) && refreshed.ok && refreshed.ids_stale === false && after.ids_stale === false &&
+    [anchor, refreshed, after].every(snapshot => snapshot.last_save_at === body.last_save_at) &&
     payload.every(item => count(pack, item.name) - count(after, item.name) === item.amount),
   'ambiguous ward drop; inspect pack and floor before any repeat');
   const newPiles = refreshed.items.filter(item => position(item, sale) && !current.items.some(old => old.id === item.id));
   const gear = newPiles.filter(item => gearNames.includes(item.name));
-  const newFood = newPiles.filter(item => item.name === 'loaf of bread');
+  const foodDrop = payload.find(item => item.name === bread);
+  const newFood = refreshed.items.filter(item => item.name === bread);
+  if (foodDrop) require(newFood.length === 1 && position(newFood[0], sale) && newFood[0].amount === foodDrop.amount,
+    'exact staged food pile could not be confirmed');
   if (gear.length) {
     const file = farmGearCacheFile(fleet);
     let prior;
@@ -437,9 +450,10 @@ async function stageSupplies(rpc, plan, fleet) {
       ? refreshed.items.filter(item => prior.items?.some(old => exactHandle(item, old))) : [];
     writeOceanCache(file, oceanProvisionRecord({ host: plan.server, ward: anchor, items: [...stillHere, ...gear], kind: 'gear' }));
   }
-  if (newFood.length === 1)
+  if (foodDrop)
     writeOceanCache(farmFoodCacheFile(fleet), oceanProvisionRecord({ host: plan.server, ward: anchor, items: newFood, kind: 'food' }));
   report('ward delivery', { placed: newPiles, requested: payload });
+  return { singer: anchor, stock: refreshed, pack: after };
 }
 
 function verifiedGearStock(floor, singer, fleet) {
@@ -470,28 +484,31 @@ export const script = {
     };
     const steps = [verify(async ({ call: rpc }) => {
       plan.server = await oceanCourierIdentity(fleet);
-      const [body, singer, healer, stock, pack] = await Promise.all([
-        read(rpc, agent), read(rpc, holder), read(rpc, 'hk1'),
+      let [body, healer, singer, stock, pack] = await Promise.all([
+        read(rpc, agent), read(rpc, 'hk1'), read(rpc, holder),
         scan(rpc, ['axe', 'leather armor', 'loaf of bread', 'elderberry']), inventory(rpc),
       ]);
       require(oceanCourierReady(body, room, 140) && oceanWardReady(singer) && healer.in_game && stock.ok &&
-        stock.last_save_at === body.last_save_at && body.last_save_at === singer.last_save_at &&
+        stock.ids_stale === false && pack.ids_stale === false &&
+        [stock, singer, pack].every(snapshot => snapshot.last_save_at === body.last_save_at) &&
         body.autopilot_status.policy.confineRooms?.join(',') === String(room), 'courier, healer, or ward is unavailable');
       const floorCount = item => count({ items: stock.items }, item);
+      const bread = OCEAN_BREAD.name;
+      if (oceanBreadPlan(floorCount(bread), count(pack, bread)).stage > 0) {
+        ({ singer, stock, pack } = await stageSupplies(rpc, plan, fleet, { breadOnly: true }));
+      }
       const gearStock = verifiedGearStock(stock, singer, fleet);
       const herbsOnHand = count(healer, 'herb') + Math.max(0, count(pack, 'herb') - 5);
       plan.wanted = {
         herb: herbsOnHand < 90 ? 180 - herbsOnHand : 0,
         elderberry: Math.max(0, 32 - count(singer, 'elderberry') - floorCount('elderberry') - count(pack, 'elderberry')),
-        'loaf of bread': floorCount('loaf of bread') < 20 ? Math.max(0, 24 - count(pack, 'loaf of bread')) : 0,
+        [bread]: oceanBreadPlan(floorCount(bread), count(pack, bread)).wanted,
         axe: gearStock.some(item => item.name === 'axe') ? 0 : 1,
         'leather armor': gearStock.some(item => item.name === 'leather armor') ? 0 : 1,
       };
       await collectSale(rpc, fleet, plan);
-      const minimum = Math.min(...Object.values(OCEAN_SHOPS).flat()
-        .filter(supply => plan.wanted[supply.name] > 0).map(supply => supply.price));
-      const spare = plan.wanted[AXE] > 0 && await oceanReadyDeskSpare(rpc, fleet, body.last_save_at);
-      plan.go = plan.sales.size > 0 || !!spare || purse(pack) >= reserve + minimum;
+      const spare = plan.wanted[AXE] > 0 && await oceanReadyDeskSpare(rpc, fleet, pack.last_save_at);
+      plan.go = plan.sales.size > 0 || !!spare || oceanHasProvisionBatch(pack, plan.wanted);
       if (plan.go) await setCorridor(rpc, corridor);
       report('lap plan', { departing: plan.go, wanted: plan.wanted, sales: Object.fromEntries(plan.sales) });
       return true;

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  OCEAN_SHOPS, oceanBuyQuantity, oceanCourierReserveFood, oceanProvisionRecord, oceanUnitsFit, selectOceanSalePiles,
+  OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanCourierReserveFood, oceanHasProvisionBatch,
+  oceanProvisionRecord, oceanUnitsFit, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
 import { oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
@@ -17,6 +18,29 @@ const donation = { kind: 'farm_sale_cache_deposit', room: 552, room_security: 50
   anchor: { id: 90, name: 'Statler', row: 43, col: 57 }, item };
 const pack = { carry: { load: { exact: true }, room_for: { bulk: 100, weight: 100 } },
   items: [{ name: 'shilling', amount: 1000 }] };
+
+test('interrupted bread delivery uses the carried surplus before buying and preserves four loaves', () => {
+  const floor = 8, carried = 10;
+  const { stage } = oceanBreadPlan(floor, carried);
+  assert.equal(stage, 6);
+  assert.deepEqual(oceanBreadPlan(floor + stage, carried - stage), { stage: 0, wanted: 6 });
+  assert.deepEqual(oceanBreadPlan(18, 10), { stage: 2, wanted: 2 });
+  assert.deepEqual(oceanBreadPlan(20, 1), { stage: 0, wanted: 3 });
+  assert.deepEqual(oceanBreadPlan(10, 2), { stage: 0, wanted: 12 });
+});
+
+test('a purchase-only lap needs a useful affordable batch after the walking reserve', () => {
+  const stocked = amount => ({ carry: { load: { exact: true }, room_for: { weight: 2_000, bulk: 2_000 } },
+    items: [{ name: 'shilling', amount }] });
+  assert.equal(oceanHasProvisionBatch(stocked(430), { herb: 95 }), false);
+  assert.equal(oceanHasProvisionBatch(stocked(879), { herb: 95 }), false);
+  assert.equal(oceanHasProvisionBatch(stocked(880), { herb: 95 }), true);
+  assert.equal(oceanHasProvisionBatch(stocked(880), { herb: 23 }), false);
+  assert.equal(oceanHasProvisionBatch(stocked(880), { 'loaf of bread': 4 }), true);
+  assert.equal(oceanHasProvisionBatch(stocked(720), { elderberry: 8 }), true);
+  assert.equal(oceanHasProvisionBatch(stocked(1_360), { axe: 1 }), true);
+  assert.equal(oceanHasProvisionBatch({ ...stocked(1_360), carry: pack.carry }, { 'leather armor': 1 }), false);
+});
 
 test('only picks an exact, current Raphael spare paired with Zheng’s intake receipts', () => {
   const intake = { id: 42, generation: epoch, from: 'hk2', purchaseReceipt: 'Colhorr exact purchase', handoffReceipt: 'bilateral handoff' };
