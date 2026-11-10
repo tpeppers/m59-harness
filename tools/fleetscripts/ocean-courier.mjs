@@ -28,6 +28,8 @@ const corridor = [552, 544, 534, 535, 200, TOAD, SMITH];
 const saleNames = Object.keys(OCEAN_SALE_PRICE);
 const count = oceanItemCount;
 const purse = pack => count(pack, 'shilling');
+export const oceanCanVisitSmith = (pack, wanted) => OCEAN_SHOPS.Colhorr.some(supply =>
+  wanted[supply.name] > 0 && purse(pack) >= reserve + supply.price && oceanUnitsFit(pack, supply.name) > 0);
 const matches = (item, itemName) => oceanItemName(item.name) === oceanItemName(itemName);
 const report = (event, fields = {}) => console.log(JSON.stringify({
   at: new Date().toISOString(), courier: name, event, ...fields,
@@ -480,7 +482,6 @@ export const script = {
       const minimum = Math.min(...Object.values(OCEAN_SHOPS).flat()
         .filter(supply => plan.wanted[supply.name] > 0).map(supply => supply.price));
       plan.go = plan.sales.size > 0 || purse(pack) >= reserve + minimum;
-      plan.gear = plan.go && (plan.wanted.axe > 0 || plan.wanted['leather armor'] > 0);
       if (plan.go) await setCorridor(rpc, corridor);
       report('lap plan', { departing: plan.go, wanted: plan.wanted, sales: Object.fromEntries(plan.sales) });
       return true;
@@ -498,7 +499,8 @@ export const script = {
       await buySupplies(rpc, plan, 'Morrigan', TOAD);
       await buySupplies(rpc, plan, 'Tova', TOAD);
       await collectDeskSpare(rpc, fleet, plan);
-      plan.gear = plan.wanted[AXE] > 0 || plan.wanted['leather armor'] > 0;
+      const stock = await inventory(rpc);
+      plan.gear = stock.ids_stale === false && oceanCanVisitSmith(stock, plan.wanted);
     }), 'sell the ward parcels and stock herbs, elderberries, and food'));
     const gearStop = () => plan.gear && !plan.problem;
     const nearSmith = () => plan.go ? 200 : room;
