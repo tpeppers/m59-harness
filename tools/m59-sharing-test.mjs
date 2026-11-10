@@ -68,6 +68,42 @@ await ok('demandsNear: farm delivery still sees farmers only; sharing sees the d
   assert.equal(d?.service, true); assert.equal(d?.hops, 1); assert.equal(d?.needs.emerald, 10);
 });
 
+await ok('local stock requests survive the board file round trip, expire and cannot dispatch a courier', () => {
+  const until = Date.now() + 90_000;
+  interest.declare('shield', { character: 'Shield', room: 552, farming: true,
+    roomNeeds: { mushroom: { amount: 4, until }, 'orc tooth': { amount: 2, until: until - 100_000 } } });
+  interest.byAgent.delete('shield');
+  assert.deepEqual(interest.demandsForRoom(552), []);
+  assert.deepEqual(interest.demandsNear(new Map([[202, 0], [552, 1]]), { roomNeedsOnly: true }), []);
+  assert.deepEqual(interest.demandsForRoom(552, { roomNeedsOnly: true })[0]?.needs, { mushroom: 4 });
+  interest.forget('shield');
+});
+
+await ok('same-room donors use the local request without travelling or spending their reserve', async () => {
+  const who = { agent: 'local-donor', character: 'Local Donor' };
+  process.env.M59_REAGENT_RESERVE_FILE = join(dir, 'local-reserve.json');
+  writeFileSync(process.env.M59_REAGENT_RESERVE_FILE, JSON.stringify({ default: { items: { mushroom: 6 } } }));
+  interest.declare('local-caster', { character: 'Caster', room: 552, farming: true,
+    roomNeeds: { mushroom: { amount: 4, until: Date.now() + 90_000 } } });
+  const ap = Object.create(Autopilot.prototype), actions = [];
+  ap.s = { name: who.agent, reserveWho: who, world: { room: { num: 202 } },
+    client: { vitals: () => ({ health: { max: 120, value: 120 } }) } };
+  ap.policy = { shareSpare: { walk_for: 'any' } };
+  ap.running = true; ap.tally = {}; ap.note = () => {}; ap.progress = () => {};
+  ap.saleProtectedNames = () => []; ap.ownFloorFor = () => 3; ap.countOfKind = () => 8;
+  ap.deliveryNeighbourhood = () => new Map([[202, 0], [552, 1]]);
+  ap.travel = async room => actions.push({ travel: room });
+  ap.giveFarmReagents = async (target, give) => { actions.push({ target, give }); return { gave: give }; };
+  assert.equal(await ap.shareSpareReagents(), false);
+  ap.s.world.room.num = 552;
+  ap._shareAt = 0;
+  ap.deliveryNeighbourhood = () => new Map([[552, 0]]);
+  assert.equal(await ap.shareSpareReagents(), true);
+  assert.deepEqual(actions, [{ target: { character: 'Caster' }, give: { mushroom: 2 } }]);
+  interest.forget('local-caster');
+  delete process.env.M59_REAGENT_RESERVE_FILE;
+});
+
 // ------------------------------------------------------------------------------ need
 await ok('the server\'s reagent refusal names the spell, either apostrophe', () => {
   assert.equal(reagentRefusalSpell("You don't have the reagents to cast remove curse!"), 'remove curse');
@@ -256,6 +292,32 @@ await ok('an explicit acceptDonations list also takes whatever is needed right n
   assert.equal(r?.accepted, true, JSON.stringify(r)); assert.ok(calls.includes('accept'));
 });
 
+await ok('the local recipient accepts only the exact requested amount and does not shed to take it', async () => {
+  const exact = recipient(['mushroom'], { needs: [] });
+  const red = recipient(['red mushroom'], { needs: [] });
+  const tooMuch = recipient(['mushroom'], { needs: [] });
+  const unweighed = recipient(['mushroom'], { needs: [] });
+  const alsoOnTakeList = recipient(['mushroom'], { needs: [],
+    policy: { acceptDonations: { enabled: true, reagents: ['mushroom'] } } });
+  tooMuch.ap.s.client.trade.theirs[0].amount = 5;
+  for (const { ap } of [exact, red, tooMuch, alsoOnTakeList, unweighed]) {
+    ap.oceanBuffNeeds = () => new Map([['mushroom', { amount: 4 }]]);
+    ap.s.client.stat = () => 25;
+    ap.bulkFree = () => 1;
+    ap.shedForDonation = () => assert.fail('local request must not drop any existing reagent');
+  }
+  unweighed.ap.s.client.stat = () => null;
+  assert.equal((await exact.ap.acceptNeededGift())?.accepted, true);
+  assert.equal((await alsoOnTakeList.ap.acceptNeededGift())?.accepted, true);
+  assert.equal((await red.ap.acceptNeededGift())?.left_open, true);
+  assert.equal((await tooMuch.ap.acceptNeededGift())?.left_open, true);
+  assert.equal((await unweighed.ap.acceptNeededGift())?.left_open, true);
+  assert.deepEqual(exact.calls, ['counter', 'accept']);
+  assert.deepEqual(red.calls, []);
+  assert.deepEqual(tooMuch.calls, []);
+  assert.deepEqual(unweighed.calls, []);
+});
+
 await ok('a SERVICE post is a desk, not every farmer that takes donations', () => {
   const ap = Object.create(Autopilot.prototype);
   ap.policy = { acceptDonations: { enabled: true } }; ap.mode = 'farm';
@@ -268,8 +330,8 @@ await ok('a SERVICE post is a desk, not every farmer that takes donations', () =
 
 await ok('the keeper wires all three halves into every pass, the game hook and the shared store', () => {
   const ap = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
-  assert.ok(ap.includes('await this.acceptNeededGift()'));
-  assert.ok(ap.includes('if (await this.shareSpareReagents()'));
+  assert.match(ap, /await withBodyStage\(s,\s*'passSharing',\s*\(\)\s*=>\s*this\.acceptNeededGift\(\)/);
+  assert.match(ap, /await withBodyStage\(s,\s*'passSharing',\s*\(\)\s*=>\s*this\.shareSpareReagents\(\)/);
   const game = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'latin1');
   assert.ok(game.includes('this.noteReagentRefusal(ev);'));
   const kp = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'latin1');

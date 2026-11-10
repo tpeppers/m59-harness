@@ -358,8 +358,8 @@ console.log('\nand when nothing refuses, it goes');
 // ---------------------------------------------------------------------------
 console.log('\nthe wiring the keeper cannot check for itself');
 {
-  ok('the broker hands travelJob its destination, not just the room name',
-     /goTravelling\(`travelling to \$\{where\}`, \{ to: dest, origin: opts.origin \}\)/.test(BROKER_SRC));
+  ok('the travel hold keeps the numeric destination and the issuer’s origin',
+     /keeper\.goTravelling\(`travelling to \$\{where\}`,\s*\{\s*to:\s*dest,\s*origin:\s*opts\.origin\s*(?:,|\})/.test(BROKER_SRC));
   // An unrecognised key is REPORTED, never applied and never dropped — so a policy the
   // keeper reads has to exist in the schema or it can never be set at all.
   for (const key of ['resume_travel', 'resume_travel_attempts', 'resume_travel_within_ms'])
@@ -713,11 +713,11 @@ console.log('THE RUNG THAT RESUMES HAS TO GET A TURN, AND FOR A DAY IT DID NOT')
   // between this repository and a bot is not allowed to do.
   ok('passFarm is still last', PASS_STAGES[PASS_STAGES.length - 1] === 'passFarm',
      PASS_STAGES.join(','));
-  // Only the buddy system (a farm for a paired character, inert otherwise) may sit between the
-  // errand and the farm; nothing directional moved above survival.
-  ok('and passErrand is still the last thing before the farm (the buddy system aside)',
-     PASS_STAGES.slice(PASS_STAGES.indexOf('passErrand') + 1, -1).every(n => n === 'passBuddy')
-     && PASS_STAGES.indexOf('passFleeAndRest') < PASS_STAGES.indexOf('passErrand'), PASS_STAGES.join(','));
+  // The exact ladder belongs to m59-passorder-test. Here the resume must run
+  // after protected survival and before ordinary farming chooses new work.
+  const survival = PASS_STAGES.indexOf('passFleeAndRest'), errandStage = PASS_STAGES.indexOf('passErrand');
+  ok('the errand resume remains below survival and above ordinary farming',
+     survival >= 0 && survival < errandStage && errandStage < PASS_STAGES.indexOf('passFarm'), PASS_STAGES.join(','));
 }
 
 console.log('');

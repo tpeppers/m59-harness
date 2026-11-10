@@ -101,6 +101,7 @@ function harness({ verdicts = {} } = {}) {
   const calls = [];
   const notes = [];
   const ap = Object.create(Autopilot.prototype);
+  ap.oceanRangedRecoveryEnabled = () => false;
 
   for (const stage of PASS_STAGES) {
     ap[stage] = async () => {

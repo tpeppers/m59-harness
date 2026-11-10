@@ -80,6 +80,7 @@ console.log('startJob is the one slot, and it can be awaited');
     o.name = 'tester';
     o.movementGeneration = 0;
     o.job = null;
+    o.runCommand = run => run();
     return o;
   };
 
