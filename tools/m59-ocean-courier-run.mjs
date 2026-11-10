@@ -8,7 +8,8 @@ import { dibsFile, itemKey } from './m59-dibs.mjs';
 import { farmFoodCacheFile } from './m59-farm-food-cache-record.mjs';
 import { farmGearCacheFile } from './m59-farm-gear-cache-record.mjs';
 import {
-  OCEAN_COURIER, OCEAN_SALE_PRICE, oceanDistance, oceanItemCount, oceanProvisionRecord, writeOceanCache,
+  OCEAN_COURIER, OCEAN_SALE_PRICE, oceanCourierReserveFood, oceanDistance, oceanItemCount,
+  oceanProvisionRecord, writeOceanCache,
 } from './m59-ocean-courier-cache.mjs';
 import {
   oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanWardReady, oceanWardScan, script,
@@ -136,6 +137,23 @@ async function deliverHerbs(carrier) {
   log('medic supply', { amount, verified, reason: receipt.reason ?? receipt.error ?? null });
 }
 
+let nextMealCheck = 0;
+async function restoreCourierVigor(before) {
+  const meal = oceanCourierReserveFood(before);
+  if (!meal || Date.now() < nextMealCheck || !oceanCourierReady(before, room) ||
+      before.autopilot_status.faculties?.work !== 'keeper') return before;
+  nextMealCheck = Date.now() + 90_000;
+  await call('act', { agent, verb: 'eat', target: meal.id, ids_as_of: before.ids_as_of }, 12_000);
+  const after = await status(agent);
+  const verified = oceanCourierReady(after, room) && bodyId(after) === bodyId(before) &&
+    after.last_save_at === before.last_save_at && after.connection_revision === before.connection_revision &&
+    oceanItemCount(before, meal.name) - oceanItemCount(after, meal.name) === 1 &&
+    after.vigor.value > before.vigor.value;
+  if (verified) nextMealCheck = 0;
+  log('courier reserve meal', { item: meal.name, verified, vigor: after.vigor?.value });
+  return after;
+}
+
 const server = await oceanCourierIdentity(fleet);
 acquire();
 let active = false, stopping = false, maintenance = null;
@@ -164,7 +182,8 @@ try {
         if (!result?.ok) log('return deferred', { reason: result?.why ?? 'inspect the verified courier corridor' });
       } else if (oceanCourierReady(carrier, room) && carrier.autopilot_status.faculties?.work === 'keeper') {
         await deliverHerbs(carrier);
-        const [fresh, singer] = await Promise.all([status(agent), status(holder)]);
+        const [carrierNow, singer] = await Promise.all([status(agent), status(holder)]);
+        const fresh = await restoreCourierVigor(carrierNow);
         if (oceanCourierReady(fresh, room, 140) && oceanWardReady(singer) && !stopping) {
           const steps = await script.steps({ agent });
           active = true;

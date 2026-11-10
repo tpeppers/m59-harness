@@ -22,6 +22,14 @@ export const oceanDistance = (a, b) => Math.abs(a?.row - b?.row) + Math.abs(a?.c
 export const oceanItemCount = (pack, name) => (pack.items ?? []).reduce((count, row) =>
   oceanItemName(row.name) === name ? count + (positive(row.amount) ? row.amount : 1) : count, 0);
 
+export function oceanCourierReserveFood(status) {
+  const vigor = status?.vigor?.value;
+  if (!Number.isFinite(vigor) || vigor < 80 || vigor >= 140 || status.ids_stale !== false) return null;
+  const protectedItems = new Set((status.autopilot_status?.policy?.protectedItems ?? []).map(oceanItemName));
+  return status.items?.find(item => positive(item.id) && positive(item.amount) &&
+    ['loaf of bread', 'meat pie'].includes(item.name) && !protectedItems.has(item.name)) ?? null;
+}
+
 function tailRows(file) {
   let fd;
   try {
