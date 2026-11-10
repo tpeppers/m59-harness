@@ -38,10 +38,31 @@ const unchanged = (a, b) => epoch(a).every((value, index) => value === epoch(b)[
 const position = (a, b) => oceanDistance(a, b) === 0;
 const exactHandle = (a, b) => a.id === b.id && a.name === b.name && position(a, b);
 
-const scan = (rpc, what) => rpc('floor_cache', { action: 'scan', agent, near: holder, what, radius: 3 }, 9000);
 const read = (rpc, who) => rpc('status', { agent: who, brief: true }, 12000);
 const inventory = (rpc, who = agent) => rpc('inventory', { agent: who, fresh: true }, 12000);
 const visibility = (rpc, who) => rpc('look', { agent: who, cached: true, projection: 'render' }, 12000);
+
+export async function oceanWardScan(rpc, who, what) {
+  const before = await visibility(rpc, who);
+  const result = await rpc('floor_cache', { action: 'scan', agent: who, near: holder, what, radius: 3 }, 9000);
+  const after = await visibility(rpc, who);
+  const current = observation => observation?.in_game && observation.connected && observation.ids_stale === false &&
+    observation.room?.num === room && Number.isSafeInteger(observation.last_save_at) &&
+    Number.isSafeInteger(observation.pid) && Number.isSafeInteger(observation.you?.object_id ?? observation.you?.id) &&
+    Number.isSafeInteger(observation.room_wire?.room_security_u32);
+  if (!result?.ok || result.ids_stale === true || result.room !== room || !Array.isArray(result.items) ||
+      !current(before) || !current(after) || !unchanged(before, after) ||
+      before.room_wire.room_security_u32 !== after.room_wire.room_security_u32)
+    return { ok: false, ids_stale: true, why: 'the floor scan crossed an unverified Ocean room epoch' };
+  const quantity = item => Number(item.amount) || 1;
+  if (result.items.some(item => !after.objects?.some(object => object.id === item.id && matches(object, item.name) &&
+      position(object, item) && quantity(object) === quantity(item) &&
+      (object.can?.includes('get') || (object.flags & OF.GETTABLE)))))
+    return { ok: false, ids_stale: true, why: 'the exact floor object changed after the Ocean scan' };
+  return { ...result, ids_stale: false, last_save_at: after.last_save_at };
+}
+
+const scan = (rpc, what) => oceanWardScan(rpc, agent, what);
 
 export async function oceanCourierIdentity(fleet) {
   const url = resolveControlUrl().url;
@@ -465,7 +486,8 @@ export const script = {
       return true;
     }, 'verify Zheng and collect only ledger-bound surplus at the ward')];
     const leg = (to, gate = () => plan.go, stay = room) =>
-      walk(() => gate() ? to : stay, { minHealth: 1, why: 'one verified leg of the Ocean courier corridor' });
+      walk(() => gate() ? to : stay, { candidates: [...new Set([to, stay])], minHealth: 1,
+        why: 'one verified leg of the Ocean courier corridor' });
     const settled = (to, gate = () => plan.go) => verify(async ({ call: rpc }) => {
       if (gate()) await waitForBody(rpc, to);
       return true;
@@ -481,7 +503,7 @@ export const script = {
     const gearStop = () => plan.gear && !plan.problem;
     const nearSmith = () => plan.go ? 200 : room;
     const smithLeg = (to, gate) => walk(() => gate() ? to : nearSmith(),
-      { minHealth: 1, why: 'one verified leg of the Ocean courier corridor' });
+      { candidates: [...new Set([to, 200, room])], minHealth: 1, why: 'one verified leg of the Ocean courier corridor' });
     steps.push(leg(200), settled(200), smithLeg(SMITH, gearStop), settled(SMITH, gearStop));
     steps.push(verify(async ({ call: rpc }) => {
       if (!gearStop()) return true;

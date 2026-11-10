@@ -10,7 +10,9 @@ import { farmGearCacheFile } from './m59-farm-gear-cache-record.mjs';
 import {
   OCEAN_COURIER, OCEAN_SALE_PRICE, oceanDistance, oceanItemCount, oceanProvisionRecord, writeOceanCache,
 } from './m59-ocean-courier-cache.mjs';
-import { oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanWardReady, script } from './fleetscripts/ocean-courier.mjs';
+import {
+  oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanWardReady, oceanWardScan, script,
+} from './fleetscripts/ocean-courier.mjs';
 
 const { agent, holder, room, sale, name } = OCEAN_COURIER;
 const medic = 'hk1';
@@ -25,7 +27,7 @@ const stopPath = join(substrate, 'scratch', 'great-ocean.stop');
 const wardPath = process.env.M59_FARM_SALE_CACHE_WARD_FILE || join(substrate, 'farm-sale-cache-ward-prod.json');
 const log = (event, fields = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), event, ...fields }));
 const status = who => call('status', { agent: who, brief: true }, 9000);
-const floor = (who, what) => call('floor_cache', { agent: who, action: 'scan', near: holder, radius: 3, what }, 9000);
+const floor = (who, what) => oceanWardScan(call, who, what);
 const position = (a, b) => oceanDistance(a, b) === 0;
 const bodyId = s => s.you?.object_id ?? s.you?.id;
 
