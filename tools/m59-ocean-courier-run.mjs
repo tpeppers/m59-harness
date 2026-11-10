@@ -90,7 +90,9 @@ async function maintainWard(server) {
   if (!oceanWardReady(ward) || !seen?.ok || seen.ids_stale !== false || seen.room !== room ||
       seen.last_save_at !== ward.last_save_at) return;
   const now = Date.now();
-  const expires_at = Math.min(now + 180_000, ward.next_save_expected_at - 30_000);
+  // Keeper receipts can live five minutes. Give a fresh pin enough runway
+  // for parcels deposited while the courier is on a round trip.
+  const expires_at = Math.min(now + 7 * 60_000, ward.next_save_expected_at - 30_000);
   const room_security = ward.room_wire?.room_security_u32;
   if (Number.isSafeInteger(ward.last_save_at) && Number.isSafeInteger(room_security) &&
       ward.last_save_at < now && expires_at > now + 30_000 &&

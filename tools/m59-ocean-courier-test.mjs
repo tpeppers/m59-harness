@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   OCEAN_SHOPS, oceanBuyQuantity, oceanProvisionRecord, oceanUnitsFit, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
-import { oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
+import { oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
 const now = 100_000;
 const epoch = 90_000;
@@ -75,6 +75,17 @@ test('provision purchase respects price ceilings, capacity and walking purse', (
   assert.equal(oceanBuyQuantity({ ...pack, items: [{ name: 'shilling', amount: 519 }] }, listing, bread, 24), 0);
   assert.equal(oceanUnitsFit({ carry: { load: { exact: false }, room_for: { bulk: 100, weight: 100 } } },
     'red mushroom'), 0);
+});
+
+test('skips the smith when the prior counter left only the walking purse', () => {
+  const packWith = amount => ({
+    carry: { load: { exact: true }, room_for: { bulk: 200, weight: 200 } },
+    items: [{ name: 'shilling', amount }],
+  });
+  const wanted = { axe: 1, 'leather armor': 1 };
+  assert.equal(oceanCanVisitSmith(packWith(400), wanted), false);
+  assert.equal(oceanCanVisitSmith(packWith(1040), wanted), true);
+  assert.equal(oceanCanVisitSmith(packWith(1040), { axe: 1 }), false);
 });
 
 test('provision records admit only exact kinds, room and holder', () => {
