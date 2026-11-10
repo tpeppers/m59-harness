@@ -3195,6 +3195,11 @@ const server = createServer(async (req, res) => {
               ? { id: Number(args.item.id), amount: args.item.amount }
               : { id: Number(args.item) };
             if (!Number.isFinite(item.id)) { json({ error: 'sell_one needs an item id' }, 400); return; }
+            const expectedPrice = args.expected_price ?? null;
+            if (expectedPrice !== null && (!Number.isSafeInteger(expectedPrice) || expectedPrice <= 0)) {
+              json({ error: 'sell_one expected_price must be a positive integer' }, 400);
+              return;
+            }
             const merchant = session.client?.room?.objects?.get(Number(args.merchant));
             if (!(merchant?.flags & OF.BUYABLE) || (merchant.flags & OF.PLAYER)) {
               json({ error: 'sell_one needs a merchant in this room' }, 400);
@@ -3204,7 +3209,7 @@ const server = createServer(async (req, res) => {
               const job = session.startJob('commerce:sell', `sell to ${merchant.id}`, async () => {
                 const loop = session._tickLoop, wasFrozen = loop?._frozen;
                 if (loop) loop._frozen = true;
-                try { return await session.sellOne(merchant.id, item, args.confirm === true); }
+                try { return await session.sellOne(merchant.id, item, args.confirm === true, { expectedPrice }); }
                 finally { if (loop) loop._frozen = wasFrozen; }
               });
               const r = await job.promise;
@@ -5088,46 +5093,73 @@ const server = createServer(async (req, res) => {
               // spell rather than from a default that suits one spell.
               // A CASTING STRATEGY MAY DRESS FOR THIS CAST FIRST (m59-castrite.mjs). Its gear steps
               // run BEFORE the hold below, because an item use during the trance fizzles it.
+              const room = c.room?.id;
+              const save = c.idsAsOf?.().last_save_at;
+              const castBodyCurrent = () => session.client === c && c.room?.id === room &&
+                c.idsAsOf?.().last_save_at === save;
+              const standing = () => c.lastPostureCommand?.verb === 'stand' &&
+                c.lastPostureCommand.room_object_id === room;
               await withCastRite(session, { spell, targets, why: 'keeper action' }, async () => {
-              const loop = session._tickLoop;
-              const hold = Number(args.holdMs) || 15000;
-              const since = c.evSeq;
-              const startedAt = Date.now();
-              if (loop) loop._frozen = true;
-              session.pacer.holdForCast?.(hold, `casting ${spellName}`);
-              try {
-                // STAND FIRST, INSIDE THE HOLD. A resting player cannot cast at all:
-                // player.kod:1162 sets PFLAG_NO_MAGIC while resting, and UserCast refuses
-                // before CanPayCosts — no trance, no mana, no reagent. The keeper's own
-                // recovery sits a caster down from paths the tick loop does not own, so a
-                // caller's `stand` a second earlier is no guarantee: rehearsal 29
-                // (2026-09-26) lost most of its dedications to "no mana and no reagents
-                // moved". The pacer hold above now suppresses any new sit, and this stand
-                // (a no-op on a standing body) goes out on the same socket ahead of the cast.
-                c.stand?.();
-                if (c.cast(spell.id, targets) === false) {
-                  result = { error: `${spellName} was vetoed before sending` };
-                  return;
+                const loop = session._tickLoop;
+                const pacer = session.pacer;
+                const hold = Math.min(60_000, Number(args.holdMs) > 0 ? Number(args.holdMs) : 15_000);
+                let holdUntil = null;
+                let wasFrozen;
+                const armHold = ms => {
+                  if (holdUntil === null && loop) {
+                    wasFrozen = loop._frozen;
+                    loop._frozen = true;
+                  }
+                  holdUntil = pacer.holdForCast(ms, `casting ${spellName}`);
+                };
+                try {
+                  // Both packets count against the server's five-per-second budget. Use the
+                  // keeper's Pacer for each, and reuse a broker stand in this room. If we need
+                  // to stand ourselves, fence queued rest before it can undo the preparation.
+                  if (!standing()) {
+                    const stood = await pacer.submit('stand', () => {
+                      if (!castBodyCurrent() || pacer.holdStatus().active) return false;
+                      armHold(Math.max(hold, 2000));
+                      c.stand();
+                      return true;
+                    }, 0, { urgent: true });
+                    if (stood !== true) {
+                      result = { error: `${spellName} could not establish casting posture` };
+                      return;
+                    }
+                  }
+                  const sent = await pacer.submit('cast', () => {
+                    if (!castBodyCurrent() || !standing() ||
+                        !(c.spells ?? []).some(current => current.id === spell.id && current.nameRsc === spell.nameRsc))
+                      return { error: `${spellName} casting conditions changed before sending` };
+                    const held = pacer.holdStatus().active;
+                    if (holdUntil === null ? held : !held || pacer.holdUntil !== holdUntil)
+                      return { error: `${spellName} concentration hold changed before sending` };
+                    armHold(hold);
+                    const since = c.evSeq;
+                    const startedAt = Date.now();
+                    return c.cast(spell.id, targets) === false
+                      ? { error: `${spellName} was vetoed before sending` } : { since, startedAt };
+                  }, 1050, { urgent: true });
+                  if (sent?.since == null) {
+                    result = { error: sent?.error ?? `${spellName} was held before sending` };
+                    return;
+                  }
+                  // Stop as soon as the server has decided, or wait out the full charge.
+                  const w = await c.waitFor({
+                    since: sent.since, kinds: ['moved', 'message'], timeoutMs: hold,
+                    match: e => e.kind === 'moved'
+                      || (e.kind === 'message' && /fizzles|unsuccessful in casting|is now dedicated|already/i.test(String(e.text ?? ''))),
+                  });
+                  const moved = (w.events ?? []).filter(e => e.kind === 'moved');
+                  const said = (w.events ?? []).filter(e => e.kind === 'message').map(e => String(e.text));
+                  result = { sent: true, spell: spellName, targets, held_ms: Date.now() - sent.startedAt,
+                             relocated: moved.length > 0, timedOut: w.timedOut, said,
+                             suppressed: pacer.holdStatus().dropped ?? null };
+                } finally {
+                  if (holdUntil !== null && pacer.holdUntil === holdUntil) pacer.releaseCastHold();
+                  if (holdUntil !== null && loop && session._tickLoop === loop) loop._frozen = wasFrozen;
                 }
-                // Stop as soon as the server has DECIDED — blink relocates, everything else
-                // announces — and otherwise sit out the whole charge.
-                const w = await c.waitFor({
-                  since, kinds: ['moved', 'message'], timeoutMs: hold,
-                  match: e => e.kind === 'moved'
-                    || (e.kind === 'message' && /fizzles|unsuccessful in casting|is now dedicated|already/i.test(String(e.text ?? ''))),
-                });
-                const moved = (w.events ?? []).filter(e => e.kind === 'moved');
-                const said = (w.events ?? []).filter(e => e.kind === 'message').map(e => String(e.text));
-                result = { sent: true, spell: spellName, targets, held_ms: Date.now() - startedAt,
-                           relocated: moved.length > 0, timedOut: w.timedOut, said,
-                           suppressed: session.pacer.holdStatus?.()?.dropped ?? null };
-              } finally {
-                // ALWAYS, on every path. A hold that outlives its cast is a deaf character;
-                // the Pacer caps it at 60s as a second line of defence, but the cast's own
-                // exit is the first one.
-                session.pacer.releaseCastHold?.();
-                if (loop) loop._frozen = false;
-              }
               });
             }
             break;

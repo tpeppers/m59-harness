@@ -34,6 +34,29 @@ for(const why of ['unconfirmed','predicted','room changed','identity changed','c
  assert.equal(r.sent,false,why);assert(!f.calls.includes('turn'),why+' cannot wake a body');
 }
 {
+ const f=fixture(),ocean=roomGeometry(552),rim={id:1,row:27,col:1,x:96,y:1760};
+ f.s.world.geometry=ocean;
+ Object.assign(f.c.self,rim);
+ assert.equal(knownRefugeCell(ocean,rim),null,'the rim remains excluded from movement refuges');
+ assert.equal((await turnAtProvedRefuge(f.s)).sent,false,'no turn on an unproved rim');
+ const stationaryWall=()=>({ok:true,row:27,col:1});
+ f.c.enchantments=()=>[{name:'Hold'}];
+ assert.equal((await turnAtProvedRefuge(f.s,{stationaryWall})).sent,false,'a native Hold retains control');
+ f.c.enchantments=()=>[];
+ f.s.pacer.holdStatus=()=>({active:true});
+ assert.equal((await turnAtProvedRefuge(f.s,{stationaryWall})).sent,false,'a trance retains control');
+ f.s.pacer.holdStatus=()=>({active:false});
+ const nativeRead=f.s.confirmFinePosition;
+ f.s.confirmFinePosition=async()=>{f.c.self.degrees=0;return nativeRead();};
+ const refused=await turnAtProvedRefuge(f.s,{stationaryWall});
+ assert(refused.sent&&!refused.confirmed,'an optimistic local angle is insufficient');
+ f.s.confirmFinePosition=nativeRead;
+ const accepted=await turnAtProvedRefuge(f.s,{stationaryWall});
+ assert(accepted.sent&&accepted.confirmed,'a stationary turn may wake a proved rim after Hold clears');
+ assert.deepEqual(f.calls,['turn','turn']);
+ assert.deepEqual({...f.c.self,degrees:0},{...rim,degrees:0});
+}
+{
  const f=fixture();await assert.rejects(restUntil(f.s,{health:1,vigor:0,beforeMutation:k=>{if(k==='turn')throw Error('fixture takeover');}}),/fixture takeover/);
  assert.deepEqual(f.calls,['rest','stand'],'a failed activation retains authorized rest cleanup');
 }

@@ -262,6 +262,7 @@ export const STRATEGY_FIELDS = Object.freeze([
   // that counter after the sale and before any buying.
   { path: 'town', keys: ['farmTown'], faculty: 'economy', arg: 'farm_town',
     normalize: (v, o = {}) => normalizeFarmTown(v, { resolveItem: o.resolveItem ?? null }) },
+  { path: 'townTrips', keys: ['townTrips'], faculty: 'economy', arg: 'town_trips', normalize: bool('townTrips') },
   // HUNT ON THE ROAD (m59-travel-hunt.mjs): true | { reach, maxThreats, maxPerJourney, cooldownS, skipRooms, origins }. On
   // the keeper's OWN work journeys (town trips, the walk back to the station), fight in-band monsters within reach, then
   // walk on. Never on anybody else's order, never below the flee line, never opening a fight below the engage line. WHAT

@@ -16,6 +16,7 @@ import { guildPassage, hallPost, SURVEYED_HALLS, chestSectionOf } from '../m59-g
 import { SAID_NOTE, hallPassword, inFoyer, foyerFor } from '../m59-hallsecret.mjs';
 import { GuildRegistry } from '../m59-guild-registry.mjs';
 import { guildPlan } from '../m59-guildwants.mjs';
+import { usesOceanCourier } from '../m59-farm-town.mjs';
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { affordances, dropSpec as dropSpecFor } from '../m59-parse.mjs';
@@ -303,6 +304,7 @@ export class HallPart {
   }
 
   async vaultRunIfPassing() {
+    if (usesOceanCourier(this.policy) && !this.townTrip) return false;
     const wanted = [...new Set([...(Array.isArray(this.policy.vaultItems)
       ? this.policy.vaultItems.map(String).filter(Boolean) : []), ...dispositionNames(this, 'vault')])];
     if (!wanted.length) return false;

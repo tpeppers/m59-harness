@@ -11,9 +11,11 @@ import { join } from 'node:path';
 const dir = mkdtempSync(join(tmpdir(), 'm59-dibs-test-'));
 const FILE = join(dir, 'dibs-test.json');
 const FOOD_FILE = join(dir, 'farm-food-cache.json');
+const GEAR_FILE = join(dir, 'farm-gear-cache.json');
 process.env.M59_LEDGER_DIR = join(dir, 'ledger');
 process.env.M59_DIBS_FILE = FILE;
 process.env.M59_FARM_FOOD_CACHE_FILE = FOOD_FILE;
+process.env.M59_FARM_GEAR_CACHE_FILE = GEAR_FILE;
 
 let pass = 0, fail = 0;
 const ok = (label, cond, detail = '') => { if (cond) pass++; else fail++; console.log(`  ${cond ? 'ok  ' : 'FAIL'} ${label}${detail ? ' -- ' + detail : ''}`); };
@@ -62,6 +64,7 @@ function world({ agent, me, room }) {
     rsc: { get: id => names.get(id) ?? '' },
     get evSeq() { return evSeq; },
     roomContents() {}, requestInventory() {},
+    look(id) { events.push({ seq: ++evSeq, kind: 'look', id, description: 'This axe is in flawless condition.' }); },
     equipment() { return { known: true, equipped: [] }; },
     async waitFor({ since = 0, kinds = [] } = {}) { return { events: events.filter(e => e.seq > since && kinds.includes(e.kind)) }; },
     get(id) { gets.push(names.get(objects.get(id)?.nameRsc)); objects.delete(id); events.push({ seq: ++evSeq, kind: 'got', id }); },
@@ -150,6 +153,23 @@ function oceanFloor() {
   const w = oceanFloor();
   await w.s.lootFloor({});
   ok('an expired registration does not reserve unrelated loot', w.gets.length === 1);
+}
+
+console.log('registered Ocean gear through Session.lootFloor');
+{
+  const w = oceanFloor();
+  const first = { id: 96, name: 'axe', row: 44, col: 56 };
+  const second = { id: 97, name: 'leather armor', row: 43, col: 56 };
+  const now = Date.now();
+  writeFileSync(GEAR_FILE, JSON.stringify({ schema: 'm59-farm-gear-cache/1', room: 552, room_security: 7,
+    holder: ward, items: [first, second], server, last_save_at: null, observed_at: now - 10, expires_at: now + 1000 }));
+  w.drop(first.id, first.name, first);
+  w.drop(second.id, second.name, second);
+  w.drop(98, first.name, { row: 44, col: 55 });
+  const result = await w.s.lootFloor({ ids: [96, 97, 98], explicitIdsOverride: false });
+  ok('an automatic enumerated sweep reserves only the registered gear', w.c.room.objects.has(96) &&
+    w.c.room.objects.has(97) && !w.c.room.objects.has(98));
+  ok('it identifies both exact gear withdrawals', result.refused.filter(row => /exact farm gear/.test(row.why)).length === 2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

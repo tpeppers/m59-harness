@@ -11,9 +11,12 @@
 // 9 methods: damageRate, timeToDeath, passArm, unarmedMakeSpace, engagePlayerTarget, respondToConflict, passPlaybook,
 //   fightNow, passFightBack
 import * as grudge from '../m59-grudge.mjs';
+import { tryFarmGearCache } from '../m59-farm-gear-cache.mjs';
+import { usesOceanCourier } from '../m59-farm-town.mjs';
 import { activeConflicts, clearConflict, declareConflict, recordTargetKill, targetsFor } from '../m59-intel.mjs';
 import { findPath } from '../m59-map.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
+import { tryOceanSelfDedication } from '../m59-ocean-self-dedication.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import { pvpAllowedHere, pvpRoomsOf } from '../m59-pvp-rooms.mjs';
@@ -209,6 +212,9 @@ export class PassCombatPart {
     // The same exemption as above, applied to the two branches that actually walk the
     // character somewhere. Stated as one local so the pair cannot drift apart later.
     const postedCaster = !!this.policy.roomEnchant?.enabled;
+    // A nearby verified spare can replace missing gear without starting a town trip.
+    if (!postedCaster && await tryFarmGearCache(this).catch(() => false)) return HANDLED;
+    if (!postedCaster && await tryOceanSelfDedication(this).catch(() => false)) return HANDLED;
     if (!postedCaster && tooHurtToArm && !skills.isArmed(this.s.client)) {
       // Said once a minute rather than every pass: a body below the flee line is having a
       // bad enough second without its own journal being the loudest thing in the room.
@@ -236,6 +242,12 @@ export class PassCombatPart {
       if (!this.knowsCreateWeapon() && this.sanctuary()) {
         await s.pacer.submit('read', () => c.requestSpells()).catch(() => {});
         await sleep(400);
+      }
+      const courierSupplied = usesOceanCourier(this.policy);
+      if (courierSupplied && !this.knowsCreateWeapon()) {
+        this.wantsWeapon = null;
+        this.noProgress('unarmed — waiting for a ward cache weapon');
+        return CONTINUE;
       }
       if (!this.knowsCreateWeapon() && this.sanctuary()) {
         const now = Date.now();
@@ -331,15 +343,19 @@ export class PassCombatPart {
       // monster room, and the walk is the cheapest of the four routes because it needs no
       // money, no donor and no meeting. The argument, and the gate that used to make this
       // unreachable, are on `leaveForManaWhileUnarmed`.
-      if (!this.sanctuary()) {
+      const vitals = c.vitals?.();
+      const needsConjureRest = (vitals?.mana?.value ?? 0) < 15 ||
+        (vigorOf(vitals) ?? 0) < SPELL_EXERTION_VIGOR;
+      if (!courierSupplied && (vitals?.mana?.value ?? 0) < 15 && !this.sanctuary()) {
         if (await this.leaveForManaWhileUnarmed()) return HANDLED;
       }
       // settle() returns {settled}, not a boolean — reading it as one would make this
       // fallback dead code, which is exactly the kind of silent no-op this branch exists
       // to stop happening.
-      const sat = await this.settle('no weapon, resting for the mana to make one')
-                            .catch(() => ({ settled: false }));
-      if (!sat?.settled && this.sanctuary()) {
+      const sat = needsConjureRest
+        ? await this.settle('no weapon, resting for the mana to make one').catch(() => ({ settled: false }))
+        : null;
+      if (needsConjureRest && !sat?.settled && this.sanctuary()) {
         // SIT ONCE AND THEN LEAVE IT ALONE.
         //
         // The pass is about a second long, so the first version of this re-sent REST
@@ -514,7 +530,7 @@ export class PassCombatPart {
         // 2026-09-26 at 2,668 and 2,684 of 2,700 bulk, no weapon, declining a conjure every
         // second for hours, with 525 emeralds and 258 diamonds aboard that the guild chest wants.
         // Open the same trip a full pack opens (it rides the chalice home where one is on duty).
-        if (await this.bankRun().catch(() => false)) return HANDLED;
+        if (!courierSupplied && await this.bankRun().catch(() => false)) return HANDLED;
         // NOT A WAIT. Vigor and mana come back on their own; pack space does not, so a
         // `waitFor` here would be a promise nothing intends to keep. Say what has to happen.
         this.doneWaiting?.();

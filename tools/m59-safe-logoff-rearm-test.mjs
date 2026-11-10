@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Autopilot } from './m59-autopilot.mjs';
+import { roomGeometry } from './m59-ground.mjs';
 import { attachSurvivalDecisions, chooseSurvivalDecision, currentSurvivalDecision, observeSurvivalDecision } from './m59-survival-decision.mjs';
 const { mayLogoff, noteLogoff, readSession, SESSION_MIN_MS } = await import('./m59-healing-session.mjs');
 const healingDir=fs.mkdtempSync(join(tmpdir(),'m59-safe-logoff-rearm-'));
@@ -12,12 +13,14 @@ const realNow=Date.now;
 Date.now=()=>now;
 const ok=(label,fn)=>{fn();checks++;console.log('ok '+label);};
 function fixture({pre=91,post=91,room=552,idAfter=4460,roomObjectAfter=1416,preAilment=false,postAilment=false,failReconnect=false}={}){
- const hold={room,row:6,col:74,proven:true,takenAt:now-1000};
+ const hold={room,row:6,col:74,proven:true,ok:true,takenAt:now-1000};
  let health=pre, ailments=preAilment?[{name:'poison'}]:[], wall=true, turns=0;
- const client=(bodyId,roomId)=>({combatReady:true,selfId:bodyId,self:{id:bodyId,row:6,col:74,degrees:135},
-   room:{id:roomId,objects:new Map()},vitals:()=>({health:{value:health,max:122},vigor:{value:200,max:200}}),
-   ailments:()=>ailments,face:()=>{turns++;}});
- const s={name:'victim-'+(++id),live:true,client:client(4460,1416),lifeBoundary:7,movementGeneration:29,damagedAt:now-1000,world:{room:{num:room,name:'The Great Ocean'}},
+ const client=(bodyId,roomId)=>({state:'game',combatReady:true,selfId:bodyId,
+   self:{id:bodyId,row:6,col:74,x:4768,y:416,degrees:135},room:{id:roomId,objects:new Map()},
+   vitals:()=>({health:{value:health,max:122},vigor:{value:200,max:200}}),ailments:()=>ailments,
+   face(degrees){turns++;this.self.degrees=degrees;}});
+ const s={name:'victim-'+(++id),live:true,client:client(4460,1416),lifeBoundary:7,movementGeneration:29,damagedAt:now-1000,
+   world:{room:{num:room,name:'The Great Ocean'},geometry:roomGeometry(552)},confirmFinePosition:async()=>({...s.client.self}),
    pacer:{submit:async(_kind,fn)=>fn()},need:()=>s.client,cancelMovement:()=>{s.movementGeneration++;}};
  attachSurvivalDecisions(s,{epoch:'fixture-epoch'});
  const k=Object.assign(Object.create(Autopilot.prototype),{

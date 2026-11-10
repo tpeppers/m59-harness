@@ -21,7 +21,7 @@ import { bankAboveOf, leaseCarry, walkingFloatOf } from '../m59-purse-lease.mjs'
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
-import { farmTownKeep, farmTownMenu, farmTownSaleLoadout } from '../m59-farm-town.mjs';
+import { farmTownKeep, farmTownMenu, farmTownSaleLoadout, usesOceanCourier } from '../m59-farm-town.mjs';
 import { floorsFor, keptCastsFor, readReserve, reagentKey, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
 import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
 import { countsOf, overlayRequests } from '../m59-reagent-autobalance.mjs';
@@ -395,7 +395,8 @@ export class ShoppingPart {
     // for the session to close at full health (m59-healing-session.mjs).
     if (readSession(String(this.s?.name ?? ''))) return false;
     // ASKED FOR, by the operator or a `townTrip` strategy: open it now, past the thresholds below.
-    await this.askTownStrategy().catch(() => null);
+    if (!usesOceanCourier(this.policy)) await this.askTownStrategy().catch(() => null);
+    else if (String(this.operatorTripRequest?.by).startsWith('strategy:')) this.operatorTripRequest = null;
     if (this.operatorTripRequest) return this.openRequestedTownTrip();
     // NO TOWN TRIPS OF ITS OWN (policy.townTrips === false). Operator, 2026-10-06: "Set Raphael to not
     // do any town trips, selling, etc., we want him to be locked in room 2 if I'm not logged in on him

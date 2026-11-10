@@ -38,7 +38,7 @@ import {movementRegionSpec} from './m59-movement-region.mjs';
 import{createDeliveryNoticeTool,receiveDeliveryNotice}from'./m59-delivery-notices.mjs';
 import { identifiedAs } from './m59-item-signature.mjs';
 import { normalizeMagicFor } from './m59-magic-for.mjs';
-import { normalizeFarmTown } from './m59-farm-town.mjs';
+import { normalizeFarmTown, usesOceanCourier } from './m59-farm-town.mjs';
 import { normalizeTravelHunt } from './m59-travel-hunt.mjs';
 import { normalizeCookFood } from './m59-cook-food.mjs';
 import {exactDrop,executeExactDrop} from './m59-inventory-drop.mjs';
@@ -7118,6 +7118,7 @@ function serviceWeaponRequests() {
     // roster as a side effect of looking.
     const ap = autopilotIfAny(agent);
     if (!ap?.wantsWeapon) continue;
+    if (usesOceanCourier(ap.policy)) { ap.wantsWeapon = null; continue; }
     if (weaponErrands.has(agent)) continue;      // one trip at a time, per character
     if (!s.live) continue;
 
@@ -13172,7 +13173,8 @@ const TOOLS = [
       town_trips: { type: 'boolean',
         description: 'TOWN TRIPS OF ITS OWN (default true). false: this character never opens a town trip by itself -- ' +
           'no bank, sell, food or restock trip -- and drops one already under way at its next pass, with no hold. ' +
-          'A trip the operator or a townTrip strategy asks for still opens. For a character kept at a post' },
+          'A trip the operator asks for still opens. Fighters assigned to 552 also leave strategy shopping and remote outfitting to their courier. ' +
+          'Other characters still honor a townTrip strategy request' },
       hold_for_courier: { type: 'boolean',
         description: 'HOLD THE FULL-PACK TOWN TRIP FOR THE COURIER (default false): the load and stack sell ' +
           'triggers wait, so a crew hunter unloads to its courier at the stage room instead of walking to ' +

@@ -14,6 +14,7 @@
 //   minSellTripValue, continueTownTrip, detailEvent, hitDamageTotal, purseNow, tradeFact,
 //   autobalanceLoop, autobalancePlan, autobalanceObserve, autobalanceTrigger, autobalanceLapEnd, autobalanceStatus
 import { balancesFor } from '../m59-bank.mjs';
+import { usesOceanCourier } from '../m59-farm-town.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { siftValue } from '../m59-overfarm.mjs';
 import { buyLines } from '../m59-parse.mjs';
@@ -419,7 +420,8 @@ export class TownTripPart {
     if (this.travelInterrupted() || this.suspendedJourney || this.inert?.travelling)
       return true; // still pending; the survival ladder owns this pass
     // A TRIP OF ITS OWN UNDER A ROSTER THAT NOW SAYS NONE (see bankRun) is dropped, not finished.
-    if (this.policy.townTrips === false && !['operator', 'strategy'].includes(trip.purpose)) {
+    const directed = trip.purpose === 'operator' || (trip.purpose === 'strategy' && !usesOceanCourier(this.policy));
+    if (this.policy.townTrips === false && !directed) {
       this.abandonTownTrip(trip, 'policy.townTrips is false: no town trips of its own', 'policy');
       return false;
     }

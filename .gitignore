@@ -1091,3 +1091,6 @@ substrate/rescue-travel/
 # machine's; the shape is substrate/dibs.example.json, BESIDE the files the tool reads.
 /substrate/dibs-*.json
 /substrate/farm-food-cache-*.json
+/substrate/farm-gear-cache-*.json
+/substrate/farm-sale-cache-ward-*.json
+/substrate/ocean-courier-*.lock
