@@ -54,6 +54,23 @@ test('collects one receipt-bound exact stack and ignores ordinary identical floo
   assert.deepEqual(selectOceanSalePiles([donation], { ...scene, items: [{ ...item, amount: 47 }] }, ward, now), []);
 });
 
+test('collects an exact same-save merge only when every prior unit has a receipt', () => {
+  const base = { ...donation, observed_at: 91_000, expires_at: 95_000 };
+  const combined = { ...item, amount: 74 };
+  const merge = { ...donation, item: combined, previous_amount: 48, deposited_amount: 26 };
+  const floor = { ...scene, items: [combined] };
+  assert.deepEqual(selectOceanSalePiles([merge, base], floor, ward, now), [combined]);
+  assert.deepEqual(selectOceanSalePiles([merge], floor, ward, now), []);
+  assert.deepEqual(selectOceanSalePiles([base, { ...merge, previous_amount: 47, deposited_amount: 27 }],
+    floor, ward, now), []);
+  const reconciled = { ...merge, kind: 'farm_sale_cache_reconciled', reconciliation: {
+    kind: 'native-drop-merge', agent: 't2', floor_before_at: 92_000, pack_after_at: 93_000, floor_after_at: 94_000,
+  } };
+  assert.deepEqual(selectOceanSalePiles([base, reconciled], floor, ward, now), [combined]);
+  assert.deepEqual(selectOceanSalePiles([base, { ...reconciled, reconciliation: { ...reconciled.reconciliation,
+    floor_after_at: 89_000 } }], floor, ward, now), []);
+});
+
 test('rejects expired, wrong-ward, old-generation and unapproved parcels', () => {
   const bad = [
     { ...donation, expires_at: now },

@@ -56,8 +56,19 @@ function tailRows(file) {
 
 export function readOceanSaleDeposits(fleet, now = Date.now()) {
   const dir = ledgerDirForRoster(stateFileFor(fleet));
-  return [now - 86_400_000, now].flatMap(time =>
+  const receipts = [now - 86_400_000, now].flatMap(time =>
     tailRows(join(dir, 'fleet-' + new Date(time).toISOString().slice(0, 10) + '.jsonl')));
+  return receipts.concat(tailRows(join(dir, 'ocean-courier-reconciliations.jsonl')));
+}
+
+function isSaleReceipt(row) {
+  if (row?.kind === 'farm_sale_cache_deposit') return true;
+  const proof = row?.reconciliation;
+  return row?.kind === 'farm_sale_cache_reconciled' && proof?.kind === 'native-drop-merge' &&
+    /^t\d+$/.test(proof.agent ?? '') && positive(proof.floor_before_at) && positive(proof.pack_after_at) &&
+    positive(proof.floor_after_at) && row.last_save_at <= proof.floor_before_at &&
+    proof.floor_before_at < proof.pack_after_at && proof.pack_after_at < proof.floor_after_at &&
+    proof.floor_after_at <= row.observed_at && row.previous_amount > 0;
 }
 
 export function selectOceanSalePiles(rows, scene, ward, now = Date.now()) {
@@ -69,21 +80,32 @@ export function selectOceanSalePiles(rows, scene, ward, now = Date.now()) {
       scene.room !== OCEAN_COURIER.room || scene.last_save_at !== ward.last_save_at ||
       ward.character !== OCEAN_COURIER.holderName || !positive(holderId) || !positive(security) ||
       oceanDistance(anchor, OCEAN_COURIER.ward) !== 0) return [];
-  const exact = new Map();
-  for (const row of rows) {
+  const receipts = new Map();
+  for (const row of rows.filter(isSaleReceipt).sort((a, b) => a.observed_at - b.observed_at)) {
     const { item, anchor: receiptHolder } = row;
-    if (row.kind !== 'farm_sale_cache_deposit' || row.room !== OCEAN_COURIER.room ||
+    if (row.room !== OCEAN_COURIER.room ||
         row.courier !== OCEAN_COURIER.name || row.room_security !== security ||
         row.last_save_at !== ward.last_save_at || row.observed_at <= row.last_save_at ||
-        !(row.observed_at <= now && row.expires_at > now) ||
+        !positive(row.observed_at) || !positive(row.expires_at) ||
+        !(row.observed_at <= now && row.expires_at > row.observed_at) ||
         receiptHolder?.id !== holderId || receiptHolder.name !== ward.character ||
         oceanDistance(receiptHolder, anchor) !== 0 ||
         !positive(item?.id) || !positive(item?.amount) || !Object.hasOwn(OCEAN_SALE_PRICE, item.name) ||
         oceanDistance(item, OCEAN_COURIER.sale) !== 0) continue;
-    if (scene.items.some(pile => pile.id === item.id && pile.name === item.name &&
-        pile.amount === item.amount && oceanDistance(pile, item) === 0)) exact.set(item.id, item);
+    const previous = row.previous_amount ?? 0;
+    const deposited = row.deposited_amount ?? item.amount;
+    if (!Number.isSafeInteger(previous) || previous < 0 || !positive(deposited) ||
+        previous + deposited !== item.amount) continue;
+    const last = receipts.get(item.id);
+    // An expired base can still explain part of the live stack. A new
+    // deposit renews only the contiguous, fully accounted-for amount.
+    if (previous > 0 ? !last || last.item.name !== item.name || last.item.amount !== previous ||
+        row.observed_at < last.observed_at : last) continue;
+    receipts.set(item.id, row);
   }
-  return [...exact.values()];
+  return [...receipts.values()].filter(({ item, expires_at }) => expires_at > now &&
+    scene.items.some(pile => pile.id === item.id && pile.name === item.name &&
+      pile.amount === item.amount && oceanDistance(pile, item) === 0)).map(row => row.item);
 }
 
 export function oceanUnitsFit(pack, name) {
