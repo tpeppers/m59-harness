@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { dibsFile, itemKey, liveClaims, normalizeBook } from './m59-dibs.mjs';
 import { ledgerDirForRoster, stateFileFor } from './m59-fleetpath.mjs';
 import { weighItem } from './m59-items.mjs';
 
@@ -17,6 +18,13 @@ export const OCEAN_SHOPS = Object.freeze({
 });
 const MAX_TAIL = 2 * 1024 * 1024;
 const WARD_RADIUS = 3;
+const SALE_CLAIM_TTL = 12 * 60_000;
+const SALE_PICKUP_LIMIT = 15 * 60_000;
+const SALE_PIN_FRESH = 90_000;
+const SALE_PICKUP_BUDGET = 10_000;
+const SALE_SCOPE = 'ocean-sale-cache';
+const SALE_CLAIM_OWNER = 'ocean-courier';
+const SALE_WARD_SCHEMA = 'm59-farm-sale-cache-ward/1';
 const positive = value => Number.isSafeInteger(value) && value > 0;
 export const oceanItemName = name => String(name ?? '').trim().toLowerCase();
 export const oceanDistance = (a, b) => Math.abs(a?.row - b?.row) + Math.abs(a?.col - b?.col);
@@ -78,7 +86,71 @@ function isSaleReceipt(row) {
     proof.floor_after_at <= row.observed_at && row.previous_amount > 0;
 }
 
-export function selectOceanSalePiles(rows, scene, ward, now = Date.now()) {
+export const oceanSaleWardPath = fleet => process.env.M59_FARM_SALE_CACHE_WARD_FILE ||
+  join(dirname(dirname(stateFileFor(fleet))), `farm-sale-cache-ward-${fleet || 'default'}.json`);
+
+function normalizedSaleBook(raw) {
+  const problems = [];
+  const book = normalizeBook(raw, problems);
+  if (!Array.isArray(raw?.claims) || problems.length) throw Error('unreadable floor reservations');
+  return book;
+}
+
+const onlyZheng = claim => Array.isArray(claim.for) && claim.for.length === 1 &&
+  oceanItemName(claim.for[0]) === oceanItemName(OCEAN_COURIER.name);
+const ownSaleClaim = claim => claim?.source === SALE_SCOPE && claim.by === SALE_CLAIM_OWNER &&
+  Number(claim.room) === OCEAN_COURIER.room && onlyZheng(claim) && claim.near?.radius != null && Number(claim.near.radius) === 0 &&
+  oceanDistance(claim.near, OCEAN_COURIER.sale) === 0 && Object.hasOwn(OCEAN_SALE_PRICE, itemKey(claim.item));
+
+function currentSaleClaim(book, name, now) {
+  const covering = liveClaims(book, now).filter(claim => claim.room === OCEAN_COURIER.room &&
+    claim.item === itemKey(name) && (!claim.near || oceanDistance(claim.near, OCEAN_COURIER.sale) <= claim.near.radius));
+  if (!covering.every(onlyZheng)) return null;
+  const exact = covering.filter(claim => ownSaleClaim(claim) && positive(claim.until));
+  return exact.length === 1 ? exact[0] : null;
+}
+
+// Renew the lease without erasing when exclusive coverage began. A lapse or a
+// competing claim clears continuity, even if the same tile is claimed again.
+export function renewOceanSaleClaims(raw, now = Date.now()) {
+  const book = normalizedSaleBook(raw);
+  const prior = Object.keys(OCEAN_SALE_PRICE).map(item => [item, currentSaleClaim(book, item, now)]);
+  const validStart = claim => positive(Date.parse(claim?.at)) && Date.parse(claim.at) <= now;
+  if (prior.every(([, claim]) => validStart(claim) && claim.until > now + SALE_CLAIM_TTL / 2)) return null;
+  const claims = prior.map(([item, claim]) => ({
+    source: SALE_SCOPE, room: OCEAN_COURIER.room, item, for: [OCEAN_COURIER.name],
+    near: { ...OCEAN_COURIER.sale, radius: 0 }, at: validStart(claim) ? claim.at : new Date(now).toISOString(),
+    until: new Date(now + SALE_CLAIM_TTL).toISOString(), by: SALE_CLAIM_OWNER,
+    why: 'Exact registered keeper sale parcels for the Marion courier',
+  }));
+  return { ...raw, claims: [...raw.claims.filter(claim => !ownSaleClaim(claim)), ...claims] };
+}
+
+export function readOceanSaleAuthorization(fleet) {
+  let book;
+  try { book = normalizedSaleBook(JSON.parse(readFileSync(dibsFile(fleet), 'utf8'))); }
+  catch { return null; }
+  let pin = null;
+  try { pin = JSON.parse(readFileSync(oceanSaleWardPath(fleet), 'utf8')); }
+  catch { /* A fresh receipt needs the claim; grace additionally needs the ward pin. */ }
+  return { book, pin };
+}
+
+function salePickupAuthorized(row, ward, now, authorization) {
+  const claim = currentSaleClaim(authorization?.book, row.item.name, now);
+  if (!claim || claim.until <= now + SALE_PICKUP_BUDGET) return false;
+  if (row.expires_at > now) return true;
+  const { pin } = authorization;
+  const claimStarted = Date.parse(claim.at);
+  return now < row.observed_at + SALE_PICKUP_LIMIT && positive(claimStarted) && claimStarted <= row.observed_at &&
+    pin?.schema === SALE_WARD_SCHEMA && pin.room === row.room && pin.room_security === row.room_security &&
+    pin.last_save_at === row.last_save_at && positive(pin.observed_at) && positive(pin.expires_at) &&
+    pin.observed_at > pin.last_save_at && pin.observed_at <= now && now - pin.observed_at <= SALE_PIN_FRESH &&
+    pin.expires_at > now + SALE_PICKUP_BUDGET && pin.anchor?.id === (ward.you?.object_id ?? ward.you?.id) &&
+    pin.anchor.name === ward.character && oceanDistance(pin.anchor, ward.you) === 0;
+}
+
+export function selectOceanSalePiles(rows, scene, ward, now = Date.now(), authorization) {
   const anchor = ward.you;
   const holderId = anchor?.object_id ?? anchor?.id;
   const security = ward.room_wire?.room_security_u32;
@@ -110,9 +182,9 @@ export function selectOceanSalePiles(rows, scene, ward, now = Date.now()) {
         row.observed_at < last.observed_at : last) continue;
     receipts.set(item.id, row);
   }
-  return [...receipts.values()].filter(({ item, expires_at }) => expires_at > now &&
-    scene.items.some(pile => pile.id === item.id && pile.name === item.name &&
-      pile.amount === item.amount && oceanDistance(pile, item) === 0)).map(row => row.item);
+  return [...receipts.values()].filter(row => salePickupAuthorized(row, ward, now, authorization) &&
+    scene.items.some(pile => pile.id === row.item.id && pile.name === row.item.name &&
+      pile.amount === row.item.amount && oceanDistance(pile, row.item) === 0)).map(row => row.item);
 }
 
 export function oceanUnitsFit(pack, name) {

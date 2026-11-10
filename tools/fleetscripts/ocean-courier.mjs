@@ -13,8 +13,8 @@ import { ITEM_RARITY } from '../m59-items.mjs';
 import { classifyWeapon } from '../m59-weapon-magic.mjs';
 import {
   OCEAN_BREAD, OCEAN_COURIER, OCEAN_SALE_PRICE, OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanDistance,
-  oceanHasProvisionBatch, oceanItemCount, oceanItemName, oceanProvisionRecord, oceanUnitsFit, readOceanSaleDeposits,
-  selectOceanSalePiles, writeOceanCache,
+  oceanHasProvisionBatch, oceanItemCount, oceanItemName, oceanProvisionRecord, oceanUnitsFit,
+  readOceanSaleAuthorization, readOceanSaleDeposits, selectOceanSalePiles, writeOceanCache,
 } from '../m59-ocean-courier-cache.mjs';
 
 const { agent, name, room, holder, holderName, ward, sale, reserve } = OCEAN_COURIER;
@@ -162,12 +162,18 @@ async function collectSale(rpc, fleet, plan) {
   const snapshot = await moveToWard(rpc);
   const [singer, floor] = await Promise.all([read(rpc, holder), scan(rpc, saleNames)]);
   require(oceanWardReady(singer), 'the cache holder moved or is nearing a save');
-  const piles = selectOceanSalePiles(readOceanSaleDeposits(fleet), floor, singer);
+  const receipts = readOceanSaleDeposits(fleet);
+  const approved = (scene, ward) => selectOceanSalePiles(receipts, scene, ward, Date.now(), readOceanSaleAuthorization(fleet));
+  const piles = approved(floor, singer);
   for (const item of piles) {
-    const [body, before, scene] = await Promise.all([read(rpc, agent), inventory(rpc), scan(rpc, item.name)]);
-    require(oceanCourierReady(body, room) && unchanged(snapshot, body), 'courier state changed while staging sale');
-    if (oceanUnitsFit(before, item.name) < item.amount || scene.last_save_at !== snapshot.last_save_at ||
-        !scene.items?.some(pile => exactHandle(pile, item) && pile.amount === item.amount)) continue;
+    const [body, before, scene, currentSinger] = await Promise.all([
+      read(rpc, agent), inventory(rpc), scan(rpc, item.name), read(rpc, holder),
+    ]);
+    require(oceanCourierReady(body, room) && unchanged(snapshot, body) && position(body.you, sale),
+      'courier state changed while staging sale');
+    if (!oceanWardReady(currentSinger) || before.ids_stale !== false || before.last_save_at !== snapshot.last_save_at ||
+        scene.last_save_at !== snapshot.last_save_at || oceanUnitsFit(before, item.name) < item.amount ||
+        !approved(scene, currentSinger).some(pile => exactHandle(pile, item) && pile.amount === item.amount)) continue;
     await rpc('act', { agent, verb: 'get', target: item.id }, 10000);
     const after = await inventory(rpc);
     const amount = count(after, item.name) - count(before, item.name);

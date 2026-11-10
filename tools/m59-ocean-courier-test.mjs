@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { normalizeBook } from './m59-dibs.mjs';
 import {
   OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanCourierReserveFood, oceanHasProvisionBatch,
-  oceanProvisionRecord, oceanUnitsFit, selectOceanSalePiles,
+  oceanProvisionRecord, oceanUnitsFit, readOceanSaleAuthorization, renewOceanSaleClaims, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
 import { oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
@@ -18,6 +22,84 @@ const donation = { kind: 'farm_sale_cache_deposit', room: 552, room_security: 50
   anchor: { id: 90, name: 'Statler', row: 43, col: 57 }, item };
 const pack = { carry: { load: { exact: true }, room_for: { bulk: 100, weight: 100 } },
   items: [{ name: 'shilling', amount: 1000 }] };
+
+const minute = 60_000;
+const originalClaims = renewOceanSaleClaims({ claims: [] }, donation.observed_at - 30_000);
+const liveWardPin = time => ({ schema: 'm59-farm-sale-cache-ward/1', room: 552, room_security: 500,
+  last_save_at: epoch, observed_at: time - 2000, expires_at: time + 2 * minute, anchor: donation.anchor });
+const saleAuthorization = (raw, time, pin = liveWardPin(time)) => ({ book: normalizeBook(raw), pin });
+const selectUnexpired = (rows, floor, singer) =>
+  selectOceanSalePiles(rows, floor, singer, now, saleAuthorization(originalClaims, now, null));
+
+test('a fully receipted sale stack survives an interrupted lap while exact Dibs are renewed', () => {
+  const eightMinutesLater = donation.observed_at + 8 * minute;
+  const renewed = renewOceanSaleClaims(originalClaims, eightMinutesLater);
+  assert.ok(renewed.claims.every((claim, index) => claim.at === originalClaims.claims[index].at &&
+    Date.parse(claim.until) > Date.parse(originalClaims.claims[index].until)));
+  const pickup = time => selectOceanSalePiles([donation], scene, ward, time, saleAuthorization(renewed, time));
+  assert.deepEqual(pickup(eightMinutesLater), [item]);
+  assert.deepEqual(pickup(donation.observed_at + 13 * minute), [item]);
+  assert.deepEqual(pickup(donation.observed_at + 15 * minute), []);
+});
+
+test('claim lapses and competing covering claims end sale-pickup continuity', () => {
+  const afterGap = Date.parse(originalClaims.claims[0].until) + 1;
+  const restarted = renewOceanSaleClaims(originalClaims, afterGap);
+  assert.equal(Date.parse(restarted.claims[0].at), afterGap);
+  assert.deepEqual(selectOceanSalePiles([donation], scene, ward, afterGap, saleAuthorization(restarted, afterGap)), []);
+
+  const time = donation.observed_at + 8 * minute;
+  const conflict = { room: 552, item: item.name, for: ['Another farmer'] };
+  const contended = { claims: [...originalClaims.claims, conflict] };
+  assert.deepEqual(selectOceanSalePiles([donation], scene, ward, time, saleAuthorization(contended, time)), []);
+  const renewed = renewOceanSaleClaims(contended, time);
+  assert.ok(renewed.claims.includes(conflict));
+  const cleared = { claims: renewed.claims.filter(claim => claim !== conflict) };
+  assert.deepEqual(selectOceanSalePiles([donation], scene, ward, time + 1, saleAuthorization(cleared, time + 1)), []);
+  assert.deepEqual(selectOceanSalePiles([donation], scene, ward, now, saleAuthorization(contended, now)), []);
+});
+
+test('sale grace rejects a stale ward, save change, or altered exact stack before pickup', () => {
+  const time = donation.observed_at + 8 * minute;
+  const livePin = liveWardPin(time);
+  const select = (candidate = scene, pin = livePin, singer = ward) =>
+    selectOceanSalePiles([donation], candidate, singer, time, saleAuthorization(originalClaims, time, pin));
+  assert.deepEqual(select(), [item]);
+  for (const pin of [null, { ...livePin, observed_at: time - 91_000 }, { ...livePin, expires_at: time + 1 },
+    { ...livePin, last_save_at: epoch + 1 }, { ...livePin, room_security: 501 },
+    { ...livePin, anchor: { ...livePin.anchor, id: 100 } }]) assert.deepEqual(select(scene, pin), []);
+  assert.deepEqual(select({ ...scene, ids_stale: true }), []);
+  assert.deepEqual(select({ ...scene, last_save_at: epoch + 1 }), []);
+  assert.deepEqual(select({ ...scene, items: [] }), []);
+  assert.deepEqual(select({ ...scene, items: [{ ...item, amount: 49 }] }), []);
+  assert.deepEqual(select({ ...scene, items: [{ ...item, row: 43 }] }), []);
+  assert.deepEqual(select(scene, livePin, { ...ward, you: { ...holder, col: 56 } }), []);
+});
+
+test('reads the current ward and Dibs files and rechecks after an exact claim is revoked', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'm59-ocean-sale-'));
+  const files = { M59_DIBS_FILE: join(dir, 'dibs.json'), M59_FARM_SALE_CACHE_WARD_FILE: join(dir, 'ward.json') };
+  const saved = Object.fromEntries(Object.keys(files).map(key => [key, process.env[key]]));
+  t.after(() => {
+    for (const [key, file] of Object.entries(files)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+      rmSync(file, { force: true });
+    }
+    rmdirSync(dir);
+  });
+  Object.assign(process.env, files);
+  const time = donation.observed_at + 8 * minute;
+  const readAndSelect = () => selectOceanSalePiles([donation], scene, ward, time, readOceanSaleAuthorization('prod'));
+  writeFileSync(files.M59_DIBS_FILE, JSON.stringify(originalClaims));
+  writeFileSync(files.M59_FARM_SALE_CACHE_WARD_FILE, JSON.stringify(liveWardPin(time)));
+  assert.deepEqual(readAndSelect(), [item]);
+  writeFileSync(files.M59_DIBS_FILE, JSON.stringify({ claims: [{ room: 552, item: item.name, for: ['Other'] }] }));
+  assert.deepEqual(readAndSelect(), []);
+  writeFileSync(files.M59_DIBS_FILE, '{');
+  assert.equal(readOceanSaleAuthorization('prod'), null);
+  assert.deepEqual(selectOceanSalePiles([donation], scene, ward, now), []);
+});
 
 test('interrupted bread delivery uses the carried surplus before buying and preserves four loaves', () => {
   const floor = 8, carried = 10;
@@ -73,9 +155,9 @@ test('only a quiet and unattended Raphael at the Toad qualifies for stationary t
 
 test('collects one receipt-bound exact stack and ignores ordinary identical floor loot', () => {
   const floor = { ...scene, items: [...scene.items, { ...item, id: 101 }] };
-  assert.deepEqual(selectOceanSalePiles([donation, donation], floor, ward, now), [item]);
-  assert.deepEqual(selectOceanSalePiles([], floor, ward, now), []);
-  assert.deepEqual(selectOceanSalePiles([donation], { ...scene, items: [{ ...item, amount: 47 }] }, ward, now), []);
+  assert.deepEqual(selectUnexpired([donation, donation], floor, ward), [item]);
+  assert.deepEqual(selectUnexpired([], floor, ward), []);
+  assert.deepEqual(selectUnexpired([donation], { ...scene, items: [{ ...item, amount: 47 }] }, ward), []);
 });
 
 test('collects an exact same-save merge only when every prior unit has a receipt', () => {
@@ -83,16 +165,15 @@ test('collects an exact same-save merge only when every prior unit has a receipt
   const combined = { ...item, amount: 74 };
   const merge = { ...donation, item: combined, previous_amount: 48, deposited_amount: 26 };
   const floor = { ...scene, items: [combined] };
-  assert.deepEqual(selectOceanSalePiles([merge, base], floor, ward, now), [combined]);
-  assert.deepEqual(selectOceanSalePiles([merge], floor, ward, now), []);
-  assert.deepEqual(selectOceanSalePiles([base, { ...merge, previous_amount: 47, deposited_amount: 27 }],
-    floor, ward, now), []);
+  assert.deepEqual(selectUnexpired([merge, base], floor, ward), [combined]);
+  assert.deepEqual(selectUnexpired([merge], floor, ward), []);
+  assert.deepEqual(selectUnexpired([base, { ...merge, previous_amount: 47, deposited_amount: 27 }], floor, ward), []);
   const reconciled = { ...merge, kind: 'farm_sale_cache_reconciled', reconciliation: {
     kind: 'native-drop-merge', agent: 't2', floor_before_at: 92_000, pack_after_at: 93_000, floor_after_at: 94_000,
   } };
-  assert.deepEqual(selectOceanSalePiles([base, reconciled], floor, ward, now), [combined]);
-  assert.deepEqual(selectOceanSalePiles([base, { ...reconciled, reconciliation: { ...reconciled.reconciliation,
-    floor_after_at: 89_000 } }], floor, ward, now), []);
+  assert.deepEqual(selectUnexpired([base, reconciled], floor, ward), [combined]);
+  assert.deepEqual(selectUnexpired([base, { ...reconciled, reconciliation: { ...reconciled.reconciliation,
+    floor_after_at: 89_000 } }], floor, ward), []);
 });
 
 test('rejects expired, wrong-ward, old-generation and unapproved parcels', () => {
@@ -104,8 +185,8 @@ test('rejects expired, wrong-ward, old-generation and unapproved parcels', () =>
     { ...donation, item: { ...item, name: 'sapphire' } },
     { ...donation, item: { ...item, row: 43 } },
   ];
-  assert.deepEqual(selectOceanSalePiles(bad, scene, ward, now), []);
-  assert.deepEqual(selectOceanSalePiles([donation], { ...scene, ids_stale: true }, ward, now), []);
+  assert.deepEqual(selectUnexpired(bad, scene, ward), []);
+  assert.deepEqual(selectUnexpired([donation], { ...scene, ids_stale: true }, ward), []);
 });
 
 test('provision purchase respects price ceilings, capacity and walking purse', () => {
