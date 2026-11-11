@@ -244,6 +244,48 @@ console.log('\nOcean sale overflow');
   }
 }
 
+console.log('\nOcean caps for the courier hand-over (2026-11-11)');
+{
+  // Kermit's pack at 99% bulk: the capped farm-town plan is what loot ejection hands Zheng.
+  const capped = normalizeFarmTown({ ...MARION,
+    keep: ['herbs', 'orc tooth', 'sapphire', 'inky-cap mushroom'],
+    sellReserve: { mushroom: 48, 'red mushroom': 24, elderberry: 30, 'edible mushroom': 40, 'entroot berry': 10 },
+    sellOverflow: ['elderberry', 'edible mushroom'] }, { resolveItem });
+  const directory = mkdtempSync(join(tmpdir(), 'm59-ocean-caps-'));
+  const reserveFile = join(directory, 'reserve.json'), oldReserveFile = process.env.M59_REAGENT_RESERVE_FILE;
+  process.env.M59_REAGENT_RESERVE_FILE = reserveFile;
+  writeFileSync(reserveFile, JSON.stringify({ default: { spells: {}, items: { sapphire: 100000 } } }));
+  configureInterestStore({ enabled: false });
+  const names = ['elderberry', 'edible mushroom', 'sapphire', 'emerald', 'red mushroom', 'entroot berry', 'Inky-cap mushroom'];
+  const amounts = [79, 71, 47, 125, 111, 9, 6];
+  const wanter = 'fixture-ocean-singer';
+  interest.declare(wanter, { wants: ['elderberry'], wantMatches: new Map([['elderberry', 'exact']]) });
+  try {
+    const c = { inventory: amounts.map((amount, i) => ({ id: i + 1, nameRsc: i, amount })),
+      rsc: new Map(names.map((name, i) => [i, name])), using: new Set(), spells: [] };
+    const k = Object.assign(Object.create(Autopilot.prototype), {
+      s: { name: 'fixture', client: c, need: () => c, world: { room: { num: 552 } },
+        reserveWho: { fleet: 'fixture', agent: 'fixture', character: 'Fixture' } },
+      policy: { farmTown: capped }, loadout: () => null, saleProtectedNames: () => [], weaponPriorityNow: () => [],
+      heldBackIds: () => new Set(), saleExcludeIds: () => new Set() });
+    const rows = new Map(k.ownSalePlan().items.map(row => [row.name, row]));
+    const sells = (name, n) => rows.get(name)?.state === 'sell' && rows.get(name).sale_amount === n;
+    ok('elderberries above 30 go, even though the fleet wants elderberries and MARKET_KEEP names them',
+       sells('elderberry', 49), JSON.stringify(rows.get('elderberry')));
+    ok('edible mushrooms above 40 go', sells('edible mushroom', 31));
+    ok('red mushrooms above 24 and every emerald go', sells('red mushroom', 87) && sells('emerald', 125));
+    ok('every sapphire stays (the PvP reserve), and so do inky-caps and entroot under its floor',
+       rows.get('sapphire').state !== 'sell' && rows.get('Inky-cap mushroom').state !== 'sell' &&
+       rows.get('entroot berry').state !== 'sell');
+  } finally {
+    interest.forget(wanter);
+    if (oldReserveFile === undefined) delete process.env.M59_REAGENT_RESERVE_FILE;
+    else process.env.M59_REAGENT_RESERVE_FILE = oldReserveFile;
+    unlinkSync(reserveFile);
+    rmdirSync(directory);
+  }
+}
+
 console.log('\nselling without a banking threshold');
 {
   const limited = normalizeFarmTown({ ...MARION, sellReserve: { mushroom: 48 },

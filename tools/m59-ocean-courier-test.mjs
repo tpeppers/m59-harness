@@ -107,12 +107,11 @@ test('reads the current ward and Dibs files and rechecks after an exact claim is
   assert.deepEqual(selectOceanSalePiles([donation], scene, ward, now), []);
 });
 
-test('an interrupted 534 return stages only the exact receipted dedicated axe and retires its cargo', async t => {
-  const files = courierTestFiles(t, ['M59_OCEAN_GEAR_CARGO_FILE', 'M59_FARM_GEAR_CACHE_FILE', 'M59_DIBS_FILE']);
+test('an interrupted 534 return hands the exact receipted dedicated axe to a farmer without magic and retires its cargo', async t => {
+  courierTestFiles(t, ['M59_OCEAN_GEAR_CARGO_FILE', 'M59_FARM_GEAR_CACHE_FILE', 'M59_DIBS_FILE']);
   const server = { host: 'prod.example', port: 5900 };
   const axe = { id: 18782, name: 'axe', amount: 0, rarity: 0 };
   const other = { ...axe, id: 400 };
-  const floorAxe = { ...axe, id: 19001, row: 44, col: 55, can: ['get'] };
   const home = { character: 'Zheng He', in_game: true, connected: true, ids_stale: false, room: { num: 552 },
     pid: 10, connection_revision: 1, last_save_at: epoch, ids_as_of: now, you: { object_id: 25, row: 44, col: 55 },
     hp: { value: 23, max: 23 }, vigor: { value: 120 }, karma: { value: 15 }, room_wire: ward.room_wire,
@@ -131,16 +130,31 @@ test('an interrupted 534 return stages only the exact receipted dedicated axe an
   assert.deepEqual(selectOceanGearCargo(stored, { ...server, port: 5901 }, home, before), []);
   assert.throws(() => recordOceanGearCargo('prod', server, home, { ...cargo, receipt: { ...cargo.receipt, id: other.id } }));
 
-  let dropped = false;
+  // 2026-11-11: a dedicated axe is HANDED to a farmer without magic, by stationary trade, never left on the ward floor.
+  let delivered = false;
   const mutations = [];
-  const carried = () => ({ ...home, items: dropped ? [other] : [other, axe] });
+  const carried = () => ({ ...home, items: delivered ? [other] : [other, axe] });
+  const roomy = { load: { exact: true }, room_for: { bulk: 500, weight: 500 } };
+  const takerPack = () => ({ ids_stale: false, last_save_at: epoch, ids_as_of: now, carry: roomy,
+    items: delivered ? [{ id: 777, name: 'hammer', rarity: 0 }, { id: 901, name: 'axe', rarity: 0 }] : [{ id: 777, name: 'hammer', rarity: 0 }] });
+  const plain = { wielded: { name: 'hammer', bypasses_nonmagic: false }, magic_spares: 0 };
+  const taker = { character: 'Kermit', in_game: true, connected: true, ids_stale: false, room: { num: 552 },
+    hp: { value: 130, max: 130 }, combat: { personal_threat: { level: 'quiet' } },
+    autopilot_status: { weapon_magic: plain, faculties: { work: 'keeper', movement: 'keeper', economy: 'keeper' } } };
+  const rows = [
+    { agent: 't4', room_num: 552, wielding: 'axe', weapon_magic: { wielded: { bypasses_nonmagic: true } } },
+    { agent: 't3', room_num: 552, wielding: null, weapon_magic: plain },
+    { agent: 't7', room_num: 202, wielding: 'axe', weapon_magic: plain },
+    { agent: 't1', room_num: 552, wielding: 'hammer', weapon_magic: plain },
+  ];
   const rpc = async (tool, args) => {
-    if (tool === 'status') return args.agent === 'hk2' ? carried()
+    if (tool === 'status') return args.agent === 'hk2' ? carried() : args.agent === 't1' ? taker
       : { ...ward, next_save_expected_at: Date.now() + 60_000,
         autopilot_status: { faculties: { work: { owner: 'great-ocean:jala-singer' } } } };
-    if (tool === 'inventory') return carried();
-    if (tool === 'look') return { ...home, objects: dropped ? [floorAxe] : [] };
-    if (tool === 'floor_cache') return { ok: true, room: 552, near: { row: 43, col: 57 }, items: dropped ? [floorAxe] : [] };
+    if (tool === 'inventory') return args.agent === 't1' ? takerPack() : carried();
+    if (tool === 'fleet') return { fleet: rows };
+    if (tool === 'look') return { ...home, objects: [] };
+    if (tool === 'floor_cache') return { ok: true, room: 552, near: { row: 43, col: 57 }, items: [] };
     if (tool === 'equipment') return { known: true, equipped: [{ id: other.id }] };
     if (tool === 'look_at') {
       assert.equal(args.target, axe.id);
@@ -148,17 +162,21 @@ test('an interrupted 534 return stages only the exact receipted dedicated axe an
     }
     mutations.push([tool, args]);
     if (tool === 'autopilot') return { keeper_push: { confirmed: true } };
-    if (tool === 'act' && args.verb === 'drop' && args.target === axe.id) { dropped = true; return { ok: true }; }
+    if (tool === 'supply' && args.to === 't1' && args.what[0].id === axe.id) { delivered = true; return { supplied: true }; }
     assert.fail(`unexpected call ${tool}`);
   };
   const steps = oceanCourierReturnSteps({ ...before, room: { num: 534 } }, { fleet: 'prod', server });
   await steps.at(-1).fn({ call: rpc });
-  assert.deepEqual(mutations.filter(([tool]) => tool === 'act'), [['act', { agent: 'hk2', verb: 'drop', target: axe.id }]]);
+  assert.deepEqual(mutations.filter(([tool]) => tool === 'act'), []);
+  const supplies = mutations.filter(([tool]) => tool === 'supply');
+  assert.equal(supplies.length, 1);
+  assert.equal(supplies[0][1].from, 'hk2');
+  assert.equal(supplies[0][1].who_travels, 'neither');
+  assert.equal(supplies[0][1].no_dropoff, true);
+  assert.deepEqual(supplies[0][1].what, [{ id: axe.id, name: 'axe', amount: 1 }]);
   assert.deepEqual(readOceanGearCargo('prod').items, []);
-  assert.deepEqual(JSON.parse(readFileSync(files.M59_FARM_GEAR_CACHE_FILE, 'utf8')).items,
-    [{ id: floorAxe.id, name: axe.name, row: 44, col: 55 }]);
   await steps.at(-1).fn({ call: rpc });
-  assert.equal(mutations.filter(([tool]) => tool === 'act').length, 1);
+  assert.equal(mutations.filter(([tool]) => tool === 'supply').length, 1);
 
   const leather = { id: 515, name: 'leather armor', amount: 0, rarity: 0 };
   const purchase = { id: leather.id, name: leather.name, source: 'Colhorr', receipt: { seller: 'Colhorr',

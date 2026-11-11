@@ -1246,7 +1246,11 @@ default (and first eject) of using spare space for sell-gear 'trade goods'"*. `t
 | `accept_donations.trade_goods` | the receiver | `true` or `{ keep_free: 0.25, from: [characters] }` | takes a fleetmate's offer of anything, as long as its pack is still `keep_free` empty afterwards; an unweighed pack or offer is a no |
 
 - **Only what a market visit would sell leaves.** The rows come from the same plan the counter uses, so equipped,
-  protected, conjured and magic items, food, fleet reagents and loadout keeps stay.
+  protected, conjured and magic items, food, fleet reagents and loadout keeps stay. **Under a farm town** that is the
+  farm town's own plan (`ownSalePlan`: its `keep` list and `sellReserve`/`sellOverflow` caps): since 2026-11-11 the
+  Great Ocean farmers eject to Zheng He instead of walking to Marion, and the generic plan would have handed over the
+  sapphires the operator reserves for PvP. The courier side is `tools/m59-ocean-courier-run.mjs` (acceptance only
+  between laps) and `sellTradeGoods` in `tools/fleetscripts/ocean-courier.mjs` (only what was received, at the quote).
 - **A station passes it on the same way.** It carries `loot_eject: { to: [courier] }`; the courier carries
   `trade_goods` and no `loot_eject`, or goods circulate.
 - **Counted by what left the pack**, by id (`giveItems`), like every gift here: a handshake that moves nothing is not a

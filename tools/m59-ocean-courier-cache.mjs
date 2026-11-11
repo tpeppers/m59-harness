@@ -36,6 +36,79 @@ export function oceanItemCount(pack, name) {
     oceanItemName(row.name) === wanted ? count + (positive(row.amount) ? row.amount : 1) : count, 0);
 }
 
+// THE SAVE EPOCH, KNOWN OR NOT. A positive `last_save_at` is the last server save the broker observed; `null` with
+// `ids_stale === false` is an epoch too: no save observed since this broker and keeper connected. 2026-11-11: the
+// broker and keepers restarted at 18:05Z and prod had not saved since 2026-11-10T08:59Z, so every reply carried
+// last_save_at=null and next_save_expected_at=null -- and every courier gate read "not a positive integer" as "not
+// ready". Zheng ran no lap and no ward pin was written, silently, while the farmers' packs filled to 100%.
+//
+// THE RENUMBER SAFETY IS KEPT, NOT WAIVED. An object id dies at a server save. A save observed mid-operation turns
+// `null` into a number, so the strict before/after equality every act already performs still refuses it; an unknown
+// epoch is additionally bound to the keeper process and connection (`pid`, `connection_revision`), because a keeper
+// that reconnected may have crossed a save it never saw; and every hand-over re-reads the exact item by name (and
+// LOOK for a weapon) immediately before it acts. `undefined` means the reply cannot say (stale ids): never ready.
+export function oceanSaveEpoch(s) {
+  if (s?.ids_stale !== false) return undefined;
+  if (positive(s.last_save_at)) return s.last_save_at;
+  return s.last_save_at == null ? null : undefined;
+}
+export const oceanEpochKnown = s => oceanSaveEpoch(s) !== undefined;
+/** No save is predicted inside `margin`. Without an observed cadence nothing can be predicted; the per-act equality guards it. */
+export function oceanSaveClear(s, margin, now = Date.now()) {
+  if (!oceanEpochKnown(s)) return false;
+  if (positive(s.next_save_expected_at)) return s.next_save_expected_at - now > margin;
+  return s.next_save_expected_at == null;
+}
+
+// WHAT ZHENG SELLS THAT THE FARMERS HANDED HIM. Operator 2026-11-11: "farmers hand their sellable loot to Zheng He,
+// Zheng sells in Marion, money accumulates instead of items occupying packs". The farmers' keepers offer their own
+// farm-town sale plan (lootEject in great-ocean-marion.mjs); Zheng's keeper takes it as trade goods and counts it by
+// name (m59-loot-eject.mjs noteReceived). Only what was RECEIVED is sold, never below the courier's own working stock
+// of what he buys for the ward; gear, money and the cup are never sold.
+export const OCEAN_COURIER_KEEP = Object.freeze({ elderberry: 40, herb: 180,
+  [OCEAN_BREAD.name]: OCEAN_BREAD.target + OCEAN_BREAD.reserve });
+const NEVER_SOLD = new Set(['shilling', 'axe', 'leather armor', 'chalice of the rain', 'small round shield', 'hammer']);
+export const OCEAN_TRADE_GOODS_DUE = Object.freeze({ bulk: 500, fullness: 0.55 });
+
+export function oceanTradeGoodsSale(pack, received = {}) {
+  const out = [];
+  for (const [raw, owed] of Object.entries(received ?? {})) {
+    const name = oceanItemName(raw);
+    if (!name || NEVER_SOLD.has(name) || !positive(Number(owed))) continue;
+    const amount = Math.min(Number(owed), oceanItemCount(pack, name) - (OCEAN_COURIER_KEEP[name] ?? 0));
+    if (positive(amount)) out.push({ name, amount });
+  }
+  return out;
+}
+
+// Zheng takes a farmer's sale pile while it leaves 30% of his pack free for the provisions he brings back. The
+// acceptance is his existing accept_donations (the reagent and wand list he already takes) plus trade_goods, or the
+// same without it. Null when the keeper already holds what is asked, so the runner pushes only a change. Shillings
+// come off his shed-for-space list: he now carries the farmers' sale proceeds (live 2026-11-11 the list named them).
+export const OCEAN_TRADE_GOODS = Object.freeze({ keep_free: 0.3 });
+const shedList = base => Array.isArray(base?.drop_for_space)
+  ? base.drop_for_space.filter(name => oceanItemName(name) !== 'shilling') : null;
+export function oceanTradeGoodsAcceptance(current, on) {
+  const has = !!current?.trade_goods && current.enabled !== false;
+  const same = has && Number(current.trade_goods.keep_free) === OCEAN_TRADE_GOODS.keep_free && !current.trade_goods.from &&
+    (shedList(current) ?? []).length === (current.drop_for_space?.length ?? 0);
+  if (on ? same : !has) return null;
+  const base = current && typeof current === 'object' && current.enabled !== false ? current : {};
+  return { enabled: true,
+    ...(Array.isArray(base.reagents) && base.reagents.length ? { reagents: base.reagents } : {}),
+    ...(shedList(base) ? { drop_for_space: shedList(base) } : {}),
+    min_bulk_free: Number.isFinite(base.min_bulk_free) ? base.min_bulk_free : 40,
+    ...(on ? { trade_goods: { ...OCEAN_TRADE_GOODS } } : {}) };
+}
+
+/** Is the received pile worth a lap by itself? */
+export function oceanTradeGoodsDue(pack, sale) {
+  const load = sale.reduce((t, row) => t + (weighItem(row.name)?.bulk ?? 0) * row.amount, 0);
+  const have = pack?.carry?.load?.bulk, free = pack?.carry?.room_for?.bulk;
+  const fullness = Number.isFinite(have) && Number.isFinite(free) && have + free > 0 ? have / (have + free) : 0;
+  return sale.length > 0 && (load >= OCEAN_TRADE_GOODS_DUE.bulk || fullness >= OCEAN_TRADE_GOODS_DUE.fullness);
+}
+
 export function oceanBreadPlan(floor, carried) {
   const missing = Math.max(0, OCEAN_BREAD.target - floor);
   return { stage: Math.min(missing, Math.max(0, carried - OCEAN_BREAD.reserve)),
@@ -229,27 +302,36 @@ export function readOceanGearCargo(fleet) {
 }
 
 const bodyId = body => body?.you?.object_id ?? body?.you?.id;
+// An unknown save epoch binds a record to the exact keeper process and connection that observed it.
+const sessionOf = body => oceanSaveEpoch(body) === null
+  ? { keeper_pid: body.pid, connection_revision: body.connection_revision } : {};
+const sameSession = (record, body) => oceanSaveEpoch(body) !== null ||
+  (positive(body.pid) && Number.isSafeInteger(body.connection_revision) &&
+    record.keeper_pid === body.pid && record.connection_revision === body.connection_revision);
 const gearCargoCurrent = (record, server, body) => record?.schema === GEAR_CARGO_SCHEMA &&
   body?.character === OCEAN_COURIER.name && body.ids_stale === false && positive(bodyId(body)) &&
-  positive(body.last_save_at) && record.last_save_at === body.last_save_at && record.body_id === bodyId(body) &&
+  oceanEpochKnown(body) && record.last_save_at === oceanSaveEpoch(body) && sameSession(record, body) &&
+  record.body_id === bodyId(body) &&
   record.agent === OCEAN_COURIER.agent && typeof server?.host === 'string' && server.host && positive(Number(server.port)) &&
   record.server?.host === server.host && record.server.port === Number(server.port) && Array.isArray(record.items);
 
 function provenGearCargo(item, save, carrier) {
   const receipt = item?.receipt;
+  const after = at => positive(at) && (save === null || at > save);
   if (!positive(item?.id) || !OCEAN_GEAR_NAMES.includes(item.name) || receipt?.generation !== save) return false;
   if (item.source === 'Colhorr') return receipt.seller === 'Colhorr' && receipt.room === 201 &&
     receipt.item === item.name && receipt.amount === 1 && receipt.ids?.length === 1 && receipt.ids[0] === item.id &&
-    positive(receipt.shillings) && positive(receipt.at) && receipt.at > save;
+    positive(receipt.shillings) && after(receipt.at);
   return item.source === 'Raphael' && item.name === 'axe' && receipt.from === 'hk3' &&
     receipt.to === OCEAN_COURIER.agent && receipt.name === item.name && receipt.id === item.id &&
-    positive(receipt.from_body) && receipt.to_body === carrier && positive(receipt.started) &&
-    receipt.started > save && positive(receipt.confirmed) && receipt.confirmed >= receipt.started;
+    positive(receipt.from_body) && receipt.to_body === carrier && after(receipt.started) &&
+    positive(receipt.confirmed) && receipt.confirmed >= receipt.started;
 }
 
 export function recordOceanGearCargo(fleet, server, body, item) {
   const record = { schema: GEAR_CARGO_SCHEMA, agent: OCEAN_COURIER.agent, body_id: bodyId(body),
-    server: { host: server?.host, port: Number(server?.port) }, last_save_at: body?.last_save_at, items: [] };
+    server: { host: server?.host, port: Number(server?.port) }, last_save_at: oceanSaveEpoch(body),
+    ...sessionOf(body), items: [] };
   if (!gearCargoCurrent(record, server, body) || !provenGearCargo(item, record.last_save_at, record.body_id))
     throw Error('gear cargo needs an exact receipt in Zheng’s current save epoch');
   const prior = readOceanGearCargo(fleet);
@@ -269,7 +351,8 @@ export function retireOceanGearCargo(fleet, server, body, ids) {
 
 export function selectOceanGearCargo(record, server, body, pack) {
   if (!gearCargoCurrent(record, server, body) || pack?.ids_stale !== false || pack.last_save_at !== body.last_save_at ||
-      !positive(pack.ids_as_of) || pack.ids_as_of < body.last_save_at || !Array.isArray(pack.items)) return [];
+      !positive(pack.ids_as_of) || (positive(body.last_save_at) && pack.ids_as_of < body.last_save_at) ||
+      !Array.isArray(pack.items)) return [];
   return record.items.filter(item => provenGearCargo(item, record.last_save_at, record.body_id) && pack.items.some(row =>
     row.id === item.id && oceanItemName(row.name) === item.name && Number.isInteger(row.rarity) &&
     row.rarity >= ITEM_RARITY.NORMAL && row.rarity < ITEM_RARITY.UNIDENTIFIED && [null, undefined, 0, 1].includes(row.amount)))

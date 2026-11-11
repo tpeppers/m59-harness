@@ -498,8 +498,14 @@ export class DeliveryPart {
     if ((this.frozenUntil && now < this.frozenUntil) || this.threat?.()?.landing > 0) return false;
     this._ejectAt = now;
     if (!skills.equippedNow(c)) return false;               // unknown equipment blocks every row of the plan
-    const plan = skills.inventorySalePlan(this.s, { keep: MARKET_KEEP, protect: this.protectedItemNames(),
-      loadout: this.loadout(), maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
+    // UNDER A FARM TOWN, THE FARM TOWN'S OWN SALE PLAN (ownSalePlan: its keep list, its sellReserve minima and the spell
+    // floors they compose with). The Ocean farmers eject to Zheng instead of walking to Marion (2026-11-11), and the
+    // generic plan would have handed over every sapphire the operator reserves for PvP, the farm's edible mushrooms and
+    // the red mushrooms sellReserve keeps for buffs. Everywhere else: the plan it always used.
+    const farmTown = townTable(this.s?.world?.room?.num, this.policy).farmTown;
+    const plan = farmTown && typeof this.ownSalePlan === 'function' ? this.ownSalePlan()
+      : skills.inventorySalePlan(this.s, { keep: MARKET_KEEP, protect: this.protectedItemNames(),
+        loadout: this.loadout(), maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
     if (plan?.error) return false;
     const heldBack = this.heldBackIds?.(c) ?? new Set();
     const items = (plan?.items ?? []).filter(i => !heldBack.has(Number(i.id)));

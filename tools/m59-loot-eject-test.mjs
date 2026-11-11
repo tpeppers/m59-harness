@@ -156,6 +156,9 @@ console.log('the bindings');
   ok('a bot holding economy turns ejection off', /async ejectLoot\(\)[\s\S]{0,900}facultyHeld\('economy'\)/.test(src));
   ok('a station notes what it received as trade goods', /if \(tradeGoodsApply\) \{ try \{ noteReceived/.test(src));
   ok('a station never overflow-drops (it refuses instead)', /cfg\.overflow_at == null \|\| cfg\.only_received/.test(src));
+  // 2026-11-11, the Ocean farmers: under a farm town the offer is the farm town's OWN sale plan (its keep list and
+  // sellReserve minima), never the generic plan that would hand over every reserved sapphire and the buff mushrooms.
+  ok('under a farm town ejectLoot offers ownSalePlan()', /async ejectLoot\(\)[\s\S]{0,1600}townTable\([^)]*\)\.farmTown[\s\S]{0,200}this\.ownSalePlan\(\)/.test(src));
   const { fieldFor } = await import('./m59-strategy-schema.mjs');
   ok('a farm strategy may carry lootEject, under economy', fieldFor('lootEject')?.faculty === 'economy');
   const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');

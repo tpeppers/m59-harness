@@ -12,7 +12,8 @@ import {
   oceanSaleWardPath, renewOceanSaleClaims, writeOceanCache,
 } from './m59-ocean-courier-cache.mjs';
 import {
-  oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanWardReady, oceanWardScan, script,
+  oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanCourierWaiting, oceanWardReady,
+  oceanWardScan, oceanWardWaiting, script, setOceanTradeGoods,
 } from './fleetscripts/ocean-courier.mjs';
 
 const { agent, holder, room } = OCEAN_COURIER;
@@ -159,6 +160,23 @@ const run = (steps, reason = script.name, controls = script.controls) => fleetSc
 const stop = () => { stopping = true; };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
+// SAY WHY IT IS WAITING. Every gate here answered a bare false, so on 2026-11-11 the courier sat out an unknown save
+// epoch for hours with "courier online" as its only line. A changed reason is logged at once, an unchanged one every
+// ten minutes.
+let waitingWhy = null, waitingAt = 0;
+function waiting(why) {
+  if (why === waitingWhy && Date.now() - waitingAt < 10 * 60_000) return;
+  waitingWhy = why;
+  waitingAt = Date.now();
+  if (why) log('courier waiting', { why });
+}
+
+// TRADE GOODS ARE TAKEN ONLY BETWEEN LAPS. Farmers hand Zheng their sale piles (loot ejection) while he waits in the
+// Ocean. The lap switches the acceptance off the moment it decides to depart (setOceanTradeGoods in the first step);
+// this loop switches it back on whenever he is home and idle. Each push is confirmed by the keeper and made only on a
+// change, so an idle courier does not refuse offers (a refused farmer backs off for five minutes).
+const tradeGoods = on => setOceanTradeGoods(call, on);
+
 log('courier online', { pid: process.pid, agent, room });
 maintain();
 try {
@@ -167,19 +185,30 @@ try {
       const carrier = await status(agent);
       const recovery = oceanCourierReturnSteps(carrier, { fleet, server });
       if (recovery) {
+        waiting(null);
         const result = await run(recovery, 'ocean-courier return checkback', [agent]);
         if (!result?.ok) log('return deferred', { reason: result?.why ?? 'inspect the verified courier corridor' });
       } else if (oceanCourierReady(carrier, room) && carrier.autopilot_status.faculties?.work === 'keeper') {
         await deliverHerbs(carrier);
+        await tradeGoods(true);
         const [carrierNow, singer] = await Promise.all([status(agent), status(holder)]);
         const fresh = await restoreCourierVigor(carrierNow);
-        if (oceanCourierReady(fresh, room, 140) && oceanWardReady(singer) && !stopping) {
+        const why = oceanCourierWaiting(fresh, room, 140) ?? (oceanWardWaiting(singer) && `ward: ${oceanWardWaiting(singer)}`);
+        if (!why && !stopping) {
+          waiting(null);
           const steps = await script.steps({ agent });
           active = true;
-          const result = await run(steps);
-          active = false;
-          if (!result?.ok) log('lap deferred', { reason: result?.why ?? 'inspect courier step receipts' });
-        }
+          try {
+            const result = await run(steps);
+            if (!result?.ok) log('lap deferred', { reason: result?.why ?? 'inspect courier step receipts' });
+          } finally {
+            active = false;
+            await tradeGoods(true).catch(error => log('trade goods acceptance deferred', { reason: error.message }));
+          }
+        } else waiting(why);
+      } else {
+        waiting(carrier?.autopilot_status?.faculties?.work !== 'keeper' && oceanCourierReady(carrier, room)
+          ? 'a lease holds Zheng’s work faculty' : `Zheng: ${oceanCourierWaiting(carrier, room)}`);
       }
     } catch (error) {
       log('courier check deferred', { active, reason: error.message });

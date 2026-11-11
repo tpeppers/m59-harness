@@ -1,0 +1,211 @@
+// THE OCEAN COURIER AFTER 2026-11-11: an unknown save epoch is an epoch, the farmers' sale piles ride with Zheng and are
+// sold in Marion, and the desk's dedicated axes are handed to the farmers without magic. Offline; fakes only.
+//   node tools/m59-ocean-trade-goods-test.mjs
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+
+// Every file this suite writes goes to a temporary directory, set before the modules read their paths.
+const dir = mkdtempSync(join(tmpdir(), 'm59-ocean-trade-goods-'));
+process.env.M59_TRADE_GOODS_DIR = join(dir, 'trade-goods');
+process.env.M59_OCEAN_GEAR_CARGO_FILE = join(dir, 'cargo.json');
+test.after(() => rmSync(dir, { recursive: true, force: true }));
+
+const {
+  OCEAN_COURIER_KEEP, oceanSaveClear, oceanSaveEpoch, oceanTradeGoodsAcceptance, oceanTradeGoodsDue, oceanTradeGoodsSale,
+  readOceanGearCargo, recordOceanGearCargo, selectOceanGearCargo,
+} = await import('./m59-ocean-courier-cache.mjs');
+const {
+  oceanAxeRecipients, oceanCourierReady, oceanCourierWaiting, oceanDeskReady, oceanDeskStockAxes, oceanWardReady,
+  oceanWardWaiting, sellTradeGoods, setOceanTradeGoods,
+} = await import('./fleetscripts/ocean-courier.mjs');
+const { noteReceived, readReceived } = await import('./m59-loot-eject.mjs');
+
+const now = Date.now();
+const zheng = (over = {}) => ({ character: 'Zheng He', in_game: true, connected: true, ids_stale: false,
+  room: { num: 552 }, pid: 38080, connection_revision: 1, last_save_at: null, next_save_expected_at: null,
+  you: { object_id: 7081, row: 19, col: 32 }, hp: { value: 23, max: 23 }, vigor: { value: 160 }, karma: { value: 10 },
+  combat: { personal_threat: { level: 'quiet' } },
+  autopilot_status: { mode: 'survive', faculties: { work: 'keeper' }, policy: { neverAttack: true, townTrips: false } }, ...over });
+const statler = (over = {}) => ({ character: 'Statler', in_game: true, ids_stale: false, room: { num: 552 },
+  you: { object_id: 4444, row: 43, col: 57 }, last_save_at: null, next_save_expected_at: null,
+  autopilot_status: { faculties: { work: { owner: 'great-ocean:jala-singer' } } }, ...over });
+
+test('an unobserved save epoch is an epoch; stale ids and a save due soon are not', () => {
+  assert.equal(oceanSaveEpoch({ ids_stale: false, last_save_at: null }), null);
+  assert.equal(oceanSaveEpoch({ ids_stale: false, last_save_at: 1234 }), 1234);
+  assert.equal(oceanSaveEpoch({ ids_stale: true, last_save_at: null }), undefined);
+  assert.equal(oceanSaveEpoch({ ids_stale: false, last_save_at: 'soon' }), undefined);
+  assert.equal(oceanSaveClear({ ids_stale: false, last_save_at: null, next_save_expected_at: null }, 30_000, now), true);
+  assert.equal(oceanSaveClear({ ids_stale: false, last_save_at: 9, next_save_expected_at: now + 10_000 }, 30_000, now), false);
+  assert.equal(oceanSaveClear({ ids_stale: false, last_save_at: 9, next_save_expected_at: now + 60_000 }, 30_000, now), true);
+  assert.equal(oceanSaveClear({ ids_stale: true, last_save_at: 9, next_save_expected_at: now + 60_000 }, 30_000, now), false);
+});
+
+test('the 2026-11-11 courier is ready with null save fields, and says why when it is not', () => {
+  // The live replies after the 18:05Z restart: last_save_at null, next_save_expected_at null.
+  assert.equal(oceanCourierReady(zheng(), 552, 140), true);
+  assert.equal(oceanWardReady(statler()), true);
+  assert.equal(oceanCourierWaiting(zheng({ ids_stale: true }), 552), 'Zheng ids are stale');
+  assert.match(oceanCourierWaiting(zheng({ hp: { value: 20, max: 23 } }), 552), /health 20\/23/);
+  assert.match(oceanCourierWaiting(zheng({ room: { num: 202 } }), 552), /in 202, not 552/);
+  assert.match(oceanCourierWaiting(zheng({ pid: null }), 552), /pid/);
+  assert.match(oceanWardWaiting(statler({ you: { object_id: 4444, row: 40, col: 57 } })), /ward square/);
+  assert.match(oceanWardWaiting(statler({ last_save_at: 5, next_save_expected_at: Date.now() + 5000 })), /save is due/);
+});
+
+test('a quiet desk with an unknown epoch qualifies; a save due within 45 s does not', () => {
+  const raphael = (over = {}) => ({ character: 'Raphael son of Mephistopheles', in_game: true, connected: true,
+    combat_ready: true, ids_stale: false, room: { num: 202 }, pid: 50, connection_revision: 2, last_save_at: null,
+    next_save_expected_at: null, you: { object_id: 7082 }, hp: { value: 30, max: 30 },
+    combat: { personal_threat: { level: 'quiet' } },
+    autopilot_status: { mode: 'survive', policy: { assignedRoom: 202, townTrips: false },
+      faculties: { work: 'keeper', movement: 'keeper', economy: 'keeper' } }, ...over });
+  assert.equal(oceanDeskReady(raphael()), true);
+  assert.equal(oceanDeskReady(raphael({ last_save_at: 7, next_save_expected_at: Date.now() + 20_000 })), false);
+});
+
+test('gear cargo in an unknown epoch is bound to the keeper process and connection that saw it', () => {
+  const server = { host: 'prod.example', port: 5959 };
+  const at202 = zheng({ room: { num: 202 } });
+  const cargo = { id: 12995, name: 'axe', source: 'Raphael', receipt: { id: 12995, name: 'axe', from: 'hk3', to: 'hk2',
+    generation: null, started: now - 2000, confirmed: now - 1000, from_body: 7082, to_body: 7081 } };
+  recordOceanGearCargo('prod', server, at202, cargo);
+  const record = readOceanGearCargo('prod');
+  assert.equal(record.last_save_at, null);
+  assert.equal(record.keeper_pid, 38080);
+  const pack = { ids_stale: false, last_save_at: null, ids_as_of: now, items: [{ id: 12995, name: 'axe', rarity: 0 }] };
+  assert.deepEqual(selectOceanGearCargo(record, server, zheng(), pack), [cargo]);
+  // A reconnect, a new keeper process, or an observed save each void the handle.
+  assert.deepEqual(selectOceanGearCargo(record, server, zheng({ connection_revision: 2 }), pack), []);
+  assert.deepEqual(selectOceanGearCargo(record, server, zheng({ pid: 1 }), pack), []);
+  assert.deepEqual(selectOceanGearCargo(record, server, zheng({ last_save_at: now }), { ...pack, last_save_at: now }), []);
+});
+
+test('only what farmers handed over is sold, above the courier working stock, never gear or money', () => {
+  const pack = { items: [
+    { name: 'emerald', amount: 125 }, { name: 'red mushroom', amount: 80 }, { name: 'elderberry', amount: 70 },
+    { name: 'shilling', amount: 900 }, { name: 'axe', amount: 0 }, { name: 'diamond', amount: 3 }, { name: 'herb', amount: 20 },
+  ] };
+  const sale = oceanTradeGoodsSale(pack, { emerald: 125, 'red mushroom': 60, elderberry: 50, shilling: 300, axe: 1,
+    diamond: 10, herb: 40, sapphire: 4 });
+  assert.deepEqual(sale, [
+    { name: 'emerald', amount: 125 }, { name: 'red mushroom', amount: 60 },
+    { name: 'elderberry', amount: 70 - OCEAN_COURIER_KEEP.elderberry }, { name: 'diamond', amount: 3 },
+  ]);
+  assert.deepEqual(oceanTradeGoodsSale(pack, {}), []);
+});
+
+test('a received pile is worth a lap at 500 bulk or a pack 55% full', () => {
+  const light = { carry: { load: { bulk: 400 }, room_for: { bulk: 2300 } } };
+  assert.equal(oceanTradeGoodsDue(light, [{ name: 'emerald', amount: 100 }]), false);
+  assert.equal(oceanTradeGoodsDue(light, [{ name: 'red mushroom', amount: 100 }]), true);
+  assert.equal(oceanTradeGoodsDue({ carry: { load: { bulk: 1600 }, room_for: { bulk: 1100 } } },
+    [{ name: 'emerald', amount: 10 }]), true);
+  assert.equal(oceanTradeGoodsDue({ carry: { load: { bulk: 2000 }, room_for: { bulk: 700 } } }, []), false);
+});
+
+test('trade-goods acceptance keeps Zheng\'s existing take list and pushes only a change', () => {
+  const live = { enabled: true, reagents: ['wand', 'entroot berry'], drop_for_space: ['loaf of bread'], min_bulk_free: 40 };
+  const on = oceanTradeGoodsAcceptance(live, true);
+  assert.deepEqual(on, { ...live, trade_goods: { keep_free: 0.3 } });
+  assert.equal(oceanTradeGoodsAcceptance({ ...on, trade_goods: { enabled: true, keep_free: 0.3, from: null } }, true), null);
+  assert.deepEqual(oceanTradeGoodsAcceptance(on, false), live);
+  assert.equal(oceanTradeGoodsAcceptance(live, false), null);
+  assert.deepEqual(oceanTradeGoodsAcceptance(null, true), { enabled: true, min_bulk_free: 40, trade_goods: { keep_free: 0.3 } });
+  // The live list on 2026-11-11 named shillings among the things he sheds for space; a purse of sale proceeds is not.
+  const shedsMoney = { ...live, drop_for_space: ['shilling', 'loaf of bread'] };
+  assert.deepEqual(oceanTradeGoodsAcceptance(shedsMoney, true).drop_for_space, ['loaf of bread']);
+  assert.notEqual(oceanTradeGoodsAcceptance({ ...shedsMoney, trade_goods: { keep_free: 0.3 } }, true), null);
+});
+
+test('desk stock: only unworn axes the weapon book reads as dedicated', () => {
+  const raphael = { items: [
+    { id: 11439, name: 'mace', rarity: 0 }, { id: 12658, name: 'axe', rarity: 0 }, { id: 12995, name: 'axe', rarity: 0 },
+    { id: 13001, name: 'axe', rarity: 0 }, { id: 13002, name: 'axe', rarity: 100 },
+  ], autopilot_status: { weapon_magic: { weapons: [
+    { id: 11439, name: 'mace', class: 'mundane', wielded: true },
+    { id: 12658, name: 'axe', class: 'mundane', bypasses_nonmagic: false },
+    { id: 12995, name: 'axe', class: 'enchanted', bypasses_nonmagic: true },
+    { id: 13001, name: 'axe', class: 'enchanted', bypasses_nonmagic: true, wielded: true },
+    { id: 13002, name: 'axe', class: 'enchanted', bypasses_nonmagic: true },
+  ] } } };
+  // 13001 is in his hand; 13002 is unidentified (rarity 100), so it is never handed over on a name.
+  assert.deepEqual(oceanDeskStockAxes(raphael), [12995]);
+  assert.deepEqual(oceanDeskStockAxes(null), []);
+});
+
+test('dedicated axes go to automated Ocean farmers without magic, bludgeon wielders first', () => {
+  const plain = { wielded: { bypasses_nonmagic: false }, magic_spares: 0 };
+  const rows = [
+    { agent: 't20', room_num: 552, wielding: 'scimitar', weapon_magic: plain },
+    { agent: 't1', room_num: 552, wielding: 'hammer', weapon_magic: plain },
+    { agent: 't4', room_num: 552, wielding: 'axe', weapon_magic: { wielded: { bypasses_nonmagic: true } } },
+    { agent: 't19', room_num: 552, wielding: 'long sword', weapon_magic: { ...plain, magic_spares: 1 } },
+    { agent: 't3', room_num: 552, wielding: null, weapon_magic: plain },
+    { agent: 't6', room_num: 552, activity: 'NOT IN GAME', weapon_magic: plain },
+    { agent: 't9', room_num: 552, piloted: true, wielding: 'mace', weapon_magic: plain },
+    { agent: 't7', room_num: 534, wielding: 'axe', weapon_magic: plain },
+    { agent: 'hk2', room_num: 552, wielding: 'hammer', weapon_magic: plain },
+    { agent: 't8', room_num: 552, wielding: 'mace', weapon_magic: null },
+  ];
+  assert.deepEqual(oceanAxeRecipients(rows).map(r => r.agent), ['t1', 't20']);
+});
+
+test('trade goods are sold at the quote, judged by pack and purse, and a refusing counter keeps the row', async () => {
+  noteReceived('hk2', [{ name: 'emerald', amount: 30 }, { name: 'hammer', amount: 1 }]);
+  let pack = { ids_stale: false, last_save_at: null, items: [{ id: 1, name: 'shilling', amount: 500 },
+    { id: 2, name: 'emerald', amount: 30 }, { id: 3, name: 'hammer', amount: 0 }] };
+  const body = zheng({ room: { num: 202 } });
+  const calls = [];
+  const rpc = async (tool, args) => {
+    if (tool === 'status') return body;
+    if (tool === 'inventory') return pack;
+    if (tool === 'look') return { room: { num: 202 }, objects: [{ id: 99, name: 'Morrigan', can: ['buy'] }] };
+    assert.fail(`unexpected ${tool}`);
+  };
+  const keeper = async (op, args) => {
+    calls.push([op, args]);
+    if (args.item.id === 3) return { sold: false, offered_price: null };          // an innkeeper does not buy a hammer
+    if (!args.confirm) return { sold: false, offered_price: 21 * args.item.amount };
+    assert.equal(args.expected_price, 21 * args.item.amount);
+    pack = { ...pack, items: [{ id: 1, name: 'shilling', amount: 500 + args.expected_price }, { id: 3, name: 'hammer', amount: 0 }] };
+    return { sold: true };
+  };
+  const plan = { trade: [{ name: 'emerald', amount: 30 }, { name: 'hammer', amount: 1 }] };
+  await sellTradeGoods(rpc, keeper, plan, 'Morrigan', 202);
+  assert.deepEqual(plan.trade, [{ name: 'hammer', amount: 1 }]);
+  assert.deepEqual(calls.filter(([, a]) => a.confirm).map(([, a]) => a.item), [{ id: 2, amount: 30 }]);
+  assert.deepEqual(readReceived('hk2'), { hammer: 1 });
+
+  // A purse that does not move by the quoted price is an ambiguous sale and stops the lap.
+  pack = { ids_stale: false, last_save_at: null, items: [{ id: 1, name: 'shilling', amount: 500 }, { id: 4, name: 'ruby', amount: 5 }] };
+  const short = async (op, args) => {
+    if (!args.confirm) return { sold: false, offered_price: 100 };
+    pack = { ...pack, items: [{ id: 1, name: 'shilling', amount: 550 }] };
+    return { sold: true };
+  };
+  await assert.rejects(sellTradeGoods(rpc, short, { trade: [{ name: 'ruby', amount: 5 }] }, 'Morrigan', 202), /ambiguous ruby sale/);
+});
+
+test('the acceptance switch pushes only a change and reports whether the keeper confirmed it', async () => {
+  let policy = { enabled: true, reagents: ['wand'], min_bulk_free: 40 };
+  const pushes = [];
+  const rpc = async (tool, args) => {
+    if (tool === 'status') return zheng({ autopilot_status: { policy: { acceptDonations: policy } } });
+    assert.equal(tool, 'autopilot');
+    pushes.push(args.accept_donations);
+    policy = args.accept_donations;
+    return { keeper_push: { confirmed: true } };
+  };
+  assert.equal(await setOceanTradeGoods(rpc, true), true);
+  assert.equal(await setOceanTradeGoods(rpc, true), true);
+  assert.equal(pushes.length, 1);
+  assert.deepEqual(pushes[0].trade_goods, { keep_free: 0.3 });
+  assert.equal(await setOceanTradeGoods(rpc, false), true);
+  assert.equal(pushes.length, 2);
+  assert.equal(pushes[1].trade_goods, undefined);
+  assert.deepEqual(pushes[1].reagents, ['wand']);
+});

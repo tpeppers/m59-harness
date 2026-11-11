@@ -626,12 +626,19 @@ through a nested shelter order.
   record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
   we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all; weapon readings are carried to a new keeper,
   believed and re-checked; and survive a server save that renumbers the pack (an enchanted reading follows its name).
-- `m59-loot-eject-test.mjs` (43): loot ejection (`m59-loot-eject.mjs`). Off when absent; the target is the first of
+- `m59-loot-eject-test.mjs` (44): loot ejection (`m59-loot-eject.mjs`). Off when absent; the target is the first of
   `to` in the room and not backed off; the offer is the sale plan's `sell` rows (plus `extra`) only (never equipped,
   never a synthetic id), best value per unit of pack first, partial stacks by amount; overflow drops the worst value
   per unit until under the line and never an unpriced item; a station passes on only what it received; a station takes trade goods only while its pack stays `keep_free`
   empty; `giveItems` counts what left the pack by id and cancels an uncountered offer; the keeper, acceptor, broker and
   strategy bindings.
+  Under a farm town the offer is the farm town's own sale plan (`ownSalePlan`: keep list, `sellReserve` minima).
+- `m59-ocean-trade-goods-test.mjs` (11): the Great Ocean courier after 2026-11-11. A save epoch nobody observed
+  (`last_save_at: null`) is an epoch, bound to the keeper pid and connection, and a stale or about-to-save one is not;
+  the courier and ward say WHY they are not ready; Zheng sells only received trade goods above his working stock, at the
+  quote, judged by pack and purse, and a counter that quotes nothing keeps the row; his acceptance keeps his take list and
+  drops shillings from it; desk stock is the unworn axes the weapon book reads dedicated; dedicated axes go to automated
+  Ocean farmers without magic, bludgeon wielders first; the acceptance switch pushes only a change.
 - `m59-purse-lease-test.mjs` (22): an errand's purse lease (`m59-purse-lease.mjs`). A live lease raises every banking
   float and `bank_above` to its carry and lapses by itself; no keeper part reads `policy.walkingMoney` directly; the
   broker's `purse_lease` and the bank tool's `lease_ms` set it.
