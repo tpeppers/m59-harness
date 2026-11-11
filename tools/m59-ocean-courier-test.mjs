@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import {
   oceanProvisionRecord, oceanUnitsFit, readOceanGearCargo, readOceanSaleAuthorization, recordOceanGearCargo,
   renewOceanSaleClaims, selectOceanGearCargo, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
-import { collectSale, moveToWard, oceanCanVisitSmith, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
+import { collectSale, moveToWard, oceanCanVisitSmith, oceanCourierArrivedWaiting, oceanCourierSettled, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
 const now = 100_000;
 const epoch = 90_000;
@@ -211,7 +211,7 @@ test('a purchase-only lap needs a useful affordable batch after the walking rese
   assert.equal(oceanHasProvisionBatch({ ...stocked(1_360), carry: pack.carry }, { 'leather armor': 1 }), false);
 });
 
-test('only picks an exact, current Raphael spare paired with Zheng’s intake receipts', () => {
+test('only picks an exact, current Raphael spare paired with Zhengâ€™s intake receipts', () => {
   const intake = { id: 42, generation: epoch, from: 'hk2', purchaseReceipt: 'Colhorr exact purchase', handoffReceipt: 'bilateral handoff' };
   const spare = { ...intake, room: 202, owner: 'hk3', name: 'axe', verified_at: now };
   const desk = { state: { deskSpare: [spare], deskCustody: [] }, conf: { deskSpareIntake: [intake] } };
@@ -434,4 +434,23 @@ test('stamps the broker floor scan only inside one proved room and save epoch', 
   const crossed = await oceanWardScan(saves, 'hk2', ['blue mushroom']);
   assert.equal(crossed.ok, false);
   assert.equal(crossed.ids_stale, true);
+});
+
+test('a transit room is crossed, not settled in: arrival is enough in 544, quiet and full health still rule 552 and the Toad', () => {
+  const body = room => ({ character: 'Zheng He', in_game: true, connected: true, ids_stale: false, room: { num: room },
+    pid: 7, connection_revision: 3, you: { object_id: 70 }, last_save_at: null,
+    hp: { value: 15, max: 23 }, vigor: { value: 150 }, karma: { value: 10 },
+    combat: { active: false, personal_threat: { level: 'engaged', last_personal_at: Date.now() } },
+    autopilot_status: { mode: 'survive', policy: { neverAttack: true, townTrips: false }, faculties: { work: 'keeper' } } });
+  // Hurt and not quiet, camped in the Valley of Ileria: arrived.
+  assert.equal(oceanCourierArrivedWaiting(body(544), 544), null);
+  assert.equal(oceanCourierSettled(body(544), 544), true);
+  assert.equal(oceanCourierSettled(body(534), 534), true);
+  // The same body is NOT settled where he trades or waits.
+  assert.equal(oceanCourierSettled(body(552), 552), false);
+  assert.equal(oceanCourierSettled(body(202), 202), false);
+  // Wrong room, dead, or out of the courier posture is still refused in transit.
+  assert.match(oceanCourierArrivedWaiting(body(534), 544), /in 534, not 544/);
+  assert.match(oceanCourierArrivedWaiting({ ...body(544), hp: { value: 0, max: 23 } }, 544), /dead/);
+  assert.match(oceanCourierArrivedWaiting({ ...body(544), autopilot_status: { mode: 'farm', policy: {} } }, 544), /posture/);
 });

@@ -30,6 +30,13 @@ const courierScriptName = 'ocean-courier';
 const toTown = [552, 544, 534, 200, TOAD];
 const fromTown = [200, 534, 544, 552];
 const corridor = [552, 544, 534, 535, 200, TOAD, SMITH];
+// TRANSIT ROOMS ARE CROSSED, NOT SETTLED IN (operator 2026-11-11: "Zheng should be able to survive a few hits from
+// Fungus Beasts ... just have Zheng keep running the laps and it's not a problem if they die 1-2x"). The first lap of
+// deploy-2026-11-11-1 aborted in the Valley of Ileria because a fungus beast and a groundworm larva camped beside him
+// kept the threat reading off 'quiet' for the whole 155 s settle, and the return checkback then refused to walk him home
+// for the same reason: stranded on a safe spot for 35 minutes. In these rooms arrival is enough; every room where he
+// trades or waits (552, 200, the Toad, the smith) still requires the full quiet, full-health reading.
+export const OCEAN_TRANSIT_ROOMS = Object.freeze([544, 534, 535]);
 const saleNames = Object.keys(OCEAN_SALE_PRICE);
 const count = oceanItemCount;
 const purse = pack => count(pack, 'shilling');
@@ -126,11 +133,29 @@ export function oceanCourierWaiting(s, expected, minVigor = 0) {
 }
 export const oceanCourierReady = (s, expected, minVigor = 0) => oceanCourierWaiting(s, expected, minVigor) === null;
 
+// ARRIVED IN A TRANSIT ROOM: the identity, epoch and posture half of oceanCourierWaiting, without health or quiet.
+export function oceanCourierArrivedWaiting(s, expected) {
+  const p = s?.autopilot_status;
+  return firstUnmet([
+    [s?.character === name && s.in_game && s.connected, 'Zheng is not connected in game'],
+    [s?.ids_stale === false, 'Zheng ids are stale'],
+    [s?.room?.num === expected, `Zheng is in ${s?.room?.num}, not ${expected}`],
+    [liveEpoch(s), 'no keeper pid, connection or body id to bind the save epoch to'],
+    [s?.hp?.value > 0, 'Zheng is dead'],
+    [p?.mode === 'survive' && p.policy?.neverAttack === true && p.policy?.townTrips === false,
+      'not in the courier posture (survive, never attack, no town trips)'],
+    [!s?.ridealong?.piloted && !p?.recovering_from_death, 'piloted or recovering from death'],
+  ]);
+}
+export const oceanCourierSettled = (s, expected, minVigor = 0) => OCEAN_TRANSIT_ROOMS.includes(expected)
+  ? oceanCourierArrivedWaiting(s, expected) === null
+  : oceanCourierReady(s, expected, minVigor);
+
 async function waitForBody(rpc, expected, minVigor = 0) {
   const deadline = Date.now() + 155_000;
   do {
     const s = await read(rpc, agent);
-    if (oceanCourierReady(s, expected, minVigor)) return s;
+    if (oceanCourierSettled(s, expected, minVigor)) return s;
     await sleep(2600);
   } while (Date.now() < deadline);
   throw Error(`Zheng did not settle safely in ${expected}`);
@@ -138,7 +163,8 @@ async function waitForBody(rpc, expected, minVigor = 0) {
 
 export function oceanCourierReturnSteps(s, { fleet, server } = {}) {
   const origin = s?.room?.num;
-  if (!corridor.includes(origin) || !oceanCourierReady(s, origin, 95) ||
+  // A live fight is the keeper's (survival owns the body); a merely unquiet transit room is not a reason to stay.
+  if (!corridor.includes(origin) || s?.combat?.active || !oceanCourierSettled(s, origin, 95) ||
       s.autopilot_status.faculties?.work !== 'keeper' ||
       s.autopilot_status.policy.confineRooms?.join(',') !== corridor.join(',')) return null;
   const resumeFrom = origin === 535 ? 534 : origin;
