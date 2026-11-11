@@ -1251,6 +1251,12 @@ default (and first eject) of using spare space for sell-gear 'trade goods'"*. `t
   Great Ocean farmers eject to Zheng He instead of walking to Marion, and the generic plan would have handed over the
   sapphires the operator reserves for PvP. The courier side is `tools/m59-ocean-courier-run.mjs` (acceptance only
   between laps) and `sellTradeGoods` in `tools/fleetscripts/ocean-courier.mjs` (only what was received, at the quote).
+  Two farm-town keys exist for this: `release` (a roster vaultItems/protectedItems name this town sells, because no
+  hall trip leaves from it: the Ocean releases blue dragon scales and dark angel feathers) and `reserveOnTop` (the
+  sellReserve quantity is USABLE stock and the reserve book's PvP spell floor is added on top, not maxed with it: the
+  Ocean keeps 20 sapphires plus 6 for a Bless caster). Both need a sellReserve quantity and a sellOverflow entry.
+  Above a 2,000-shilling float the courier hands his purse to Raphael at the Toad (`depositPurseWithDesk`), judged by
+  both purses.
 - **A station passes it on the same way.** It carries `loot_eject: { to: [courier] }`; the courier carries
   `trade_goods` and no `loot_eject`, or goods circulate.
 - **Counted by what left the pack**, by id (`giveItems`), like every gift here: a handshake that moves nothing is not a

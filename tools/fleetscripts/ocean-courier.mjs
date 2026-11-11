@@ -550,6 +550,41 @@ async function deliverDedicatedAxes(rpc, fleet, server) {
   }
 }
 
+// ZHENG'S PURSE GOES TO RAPHAEL (operator 2026-11-11: "when he is in the Limping Toad on a lap ... hand his purse above
+// a working float (keep ~2000 shillings for axe/bread purchases) to Raphael by stationary trade/supply, verified by both
+// purses read back. Raphael accumulates; no hall deposit for now"). Marion has no bank, and the courier is a 23-health
+// body on the road. Only with both bodies quiet in the Toad in one save epoch, and judged by both purses: an exact
+// transfer or nothing moved; anything else stops the lap for inspection.
+export const OCEAN_PURSE_FLOAT = 2000;
+export async function depositPurseWithDesk(rpc) {
+  const [courier, raphael, giver, taker] = await Promise.all([
+    read(rpc, agent), read(rpc, deskAgent).catch(() => null), inventory(rpc), inventory(rpc, deskAgent).catch(() => null)]);
+  const amount = purse(giver) - OCEAN_PURSE_FLOAT;
+  if (amount < 100) return null;
+  const coins = giver.items.filter(item => matches(item, 'shilling'));
+  if (!oceanCourierReady(courier, TOAD) || !oceanDeskReady(raphael) || coins.length !== 1 ||
+      [giver, taker].some(pack => pack?.ids_stale !== false || !Array.isArray(pack.items)) ||
+      giver.last_save_at !== courier.last_save_at || taker.last_save_at !== raphael.last_save_at ||
+      courier.last_save_at !== raphael.last_save_at) {
+    report('purse hand-over deferred', { amount, why: 'Zheng and Raphael are not both quiet in the Toad in one save epoch' });
+    return null;
+  }
+  const receipt = await rpc('supply', { from: agent, to: deskAgent, stationary: true, who_travels: 'neither',
+    no_dropoff: true, ids_as_of: giver.ids_as_of, what: [{ id: coins[0].id, name: 'shilling', amount }] }, 35000)
+    .catch(error => ({ error: error.message }));
+  const [giverAfter, takerAfter] = await Promise.all([inventory(rpc), inventory(rpc, deskAgent)]);
+  const lost = purse(giver) - purse(giverAfter), gained = purse(takerAfter) - purse(taker);
+  const sameEpoch = giverAfter.last_save_at === giver.last_save_at && takerAfter.last_save_at === taker.last_save_at;
+  if (sameEpoch && lost === 0 && gained === 0 && receipt?.supplied !== true) {
+    report('purse hand-over refused', { amount, reason: receipt?.reason ?? receipt?.error ?? null });
+    return null;
+  }
+  require(sameEpoch && receipt?.supplied === true && lost === amount && gained === amount,
+    `ambiguous purse hand-over to Raphael (asked ${amount}, Zheng lost ${lost}, Raphael gained ${gained}); inspect both purses`);
+  report('purse handed to Raphael', { amount, zheng: purse(giverAfter), raphael: purse(takerAfter) });
+  return amount;
+}
+
 async function handoffNewAxe(rpc, fleet, plan) {
   const purchase = plan.purchaseReceipts[AXE], id = purchase?.ids[0];
   const movement = await moveDeskAxe(rpc, fleet, id, purchase.generation, false);
@@ -776,6 +811,7 @@ export const script = {
       await buySupplies(rpc, plan, 'Morrigan', TOAD, fleet);
       await buySupplies(rpc, plan, 'Tova', TOAD, fleet);
       await collectDeskSpare(rpc, fleet, plan);
+      await depositPurseWithDesk(rpc);           // sale proceeds above the float stay with Raphael
       const stock = await inventory(rpc);
       plan.gear = stock.ids_stale === false && (oceanCanVisitSmith(stock, plan.wanted) || plan.trade.length > 0);
     }), 'sell the ward parcels and stock herbs, elderberries, and food'));

@@ -19,7 +19,7 @@ const {
 } = await import('./m59-ocean-courier-cache.mjs');
 const {
   oceanAxeRecipients, oceanCourierReady, oceanCourierWaiting, oceanDeskReady, oceanDeskStockAxes, oceanWardReady,
-  oceanWardWaiting, sellTradeGoods, setOceanTradeGoods,
+  oceanWardWaiting, sellTradeGoods, setOceanTradeGoods, depositPurseWithDesk, OCEAN_PURSE_FLOAT,
 } = await import('./fleetscripts/ocean-courier.mjs');
 const { noteReceived, readReceived } = await import('./m59-loot-eject.mjs');
 
@@ -208,4 +208,42 @@ test('the acceptance switch pushes only a change and reports whether the keeper 
   assert.equal(pushes.length, 2);
   assert.equal(pushes[1].trade_goods, undefined);
   assert.deepEqual(pushes[1].reagents, ['wand']);
+});
+
+test('Zheng hands his purse above the 2000 float to Raphael in the Toad, judged by both purses', async () => {
+  const toad = zheng({ room: { num: 202 } });
+  const raphael = { character: 'Raphael son of Mephistopheles', in_game: true, connected: true, combat_ready: true,
+    ids_stale: false, room: { num: 202 }, pid: 50, connection_revision: 2, last_save_at: null, next_save_expected_at: null,
+    you: { object_id: 7082 }, hp: { value: 30, max: 30 }, combat: { personal_threat: { level: 'quiet' } },
+    autopilot_status: { mode: 'survive', policy: { assignedRoom: 202, townTrips: false },
+      faculties: { work: 'keeper', movement: 'keeper', economy: 'keeper' } } };
+  const fake = ({ zhengPurse, deliver }) => {
+    const purses = { hk2: zhengPurse, hk3: 6683 };
+    const supplies = [];
+    const rpc = async (tool, args) => {
+      if (tool === 'status') return args.agent === 'hk3' ? raphael : toad;
+      if (tool === 'inventory') return { ids_stale: false, last_save_at: null, ids_as_of: now,
+        items: [{ id: args.agent === 'hk3' ? 11210 : 10786, name: 'shilling', amount: purses[args.agent] }] };
+      assert.equal(tool, 'supply');
+      supplies.push(args);
+      const moved = deliver(args.what[0].amount);
+      purses.hk2 -= moved.lost; purses.hk3 += moved.gained;
+      return { supplied: moved.gained > 0 };
+    };
+    return { rpc, supplies, purses };
+  };
+  const exact = fake({ zhengPurse: 9500, deliver: n => ({ lost: n, gained: n }) });
+  assert.equal(await depositPurseWithDesk(exact.rpc), 9500 - OCEAN_PURSE_FLOAT);
+  assert.deepEqual(exact.supplies[0], { from: 'hk2', to: 'hk3', stationary: true, who_travels: 'neither', no_dropoff: true,
+    ids_as_of: now, what: [{ id: 10786, name: 'shilling', amount: 7500 }] });
+  assert.deepEqual(exact.purses, { hk2: 2000, hk3: 14183 });
+
+  const float = fake({ zhengPurse: 2050, deliver: () => assert.fail('no hand-over under the float') });
+  assert.equal(await depositPurseWithDesk(float.rpc), null);
+
+  const refused = fake({ zhengPurse: 5000, deliver: () => ({ lost: 0, gained: 0 }) });
+  assert.equal(await depositPurseWithDesk(refused.rpc), null);
+
+  const partial = fake({ zhengPurse: 5000, deliver: n => ({ lost: n, gained: n - 100 }) });
+  await assert.rejects(depositPurseWithDesk(partial.rpc), /ambiguous purse hand-over/);
 });

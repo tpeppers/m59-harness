@@ -50,7 +50,7 @@ export const FARM_TOWN_KINDS = Object.freeze(['food', 'weapons', 'armor', 'reage
 // service roles and fighters assigned to other rooms retain their own orders.
 export const usesOceanCourier = policy => policy?.assignedRoom === 552 &&
   policy.townTrips === false && policy.neverAttack !== true;
-const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep', 'sellReserve', 'sellOverflow', 'hall', 'uncurse']);
+const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep', 'sellReserve', 'sellOverflow', 'release', 'reserveOnTop', 'hall', 'uncurse']);
 // The public door to the Barloque guild halls (the reagent coop enters the hall from here, m59-reagent-coop-runtime.mjs) and
 // Frular's room (the rent, m59-tithe.mjs FRULAR_ROOM). A farm town's `hall` road may leave the confinement for these three.
 export const NORTH_BARLOQUE = 101;
@@ -89,7 +89,7 @@ const plain = v => v !== null && typeof v === 'object' && !Array.isArray(v);
  */
 export function normalizeFarmTown(v, { resolveItem = null } = {}) {
   if (v === null || v === undefined) return null;
-  if (!plain(v)) throw new Error('town must be { name?, sell, buy, bank?, keep?, sellReserve?, sellOverflow?, hall?, uncurse? } or null');
+  if (!plain(v)) throw new Error('town must be { name?, sell, buy, bank?, keep?, sellReserve?, sellOverflow?, release?, reserveOnTop?, hall?, uncurse? } or null');
   for (const k of Object.keys(v)) if (!TOP_KEYS.includes(k)) throw new Error(`town: unrecognised key ${k} (known: ${TOP_KEYS.join(', ')})`);
   const out = { name: null, sell: [], buy: {}, bank: null, keep: [], hall: null, uncurse: null };
   if (v.name != null) { if (typeof v.name !== 'string' || !v.name.trim()) throw new Error('town.name must be a word'); out.name = v.name.trim(); }
@@ -143,6 +143,18 @@ export function normalizeFarmTown(v, { resolveItem = null } = {}) {
     const reserved = new Set(Object.keys(out.sellReserve ?? {}).map(itemNameKey));
     if (!out.sellOverflow.every(name => reserved.has(itemNameKey(name))))
       throw new Error('town.sellOverflow requires a sellReserve quantity for every listed item');
+  }
+  // RELEASE AND ON-TOP (operator 2026-11-11, the Great Ocean). `release` names items a roster vaultItems/protectedItems
+  // holds for a hall trip that never happens from this town (blue dragon scales, dark angel feathers): here they are sale
+  // stock above their sellReserve. `reserveOnTop` makes a sellReserve quantity USABLE stock with the reserve book's PvP
+  // spell floor ADDED on top ("keep N" = N usable, the PvP floor is on top), instead of the larger of the two. Both need a
+  // sellReserve quantity and a sellOverflow entry, so the cap is explicit and the surplus passes MARKET_KEEP and wants.
+  for (const key of ['release', 'reserveOnTop']) {
+    if (v[key] == null) continue;
+    out[key] = itemList(`town.${key}`, v[key], resolveItem);
+    const overflow = new Set((out.sellOverflow ?? []).map(itemNameKey));
+    if (!out[key].every(name => overflow.has(itemNameKey(name))))
+      throw new Error(`town.${key} requires a sellReserve quantity and a sellOverflow entry for every listed item`);
   }
   // THE GUILD HALL INSTEAD OF A BANK (operator 2026-11-07: "let them deposit in the guild chest instead of banking").
   if (v.hall != null) {

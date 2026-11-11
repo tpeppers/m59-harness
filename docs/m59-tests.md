@@ -633,12 +633,13 @@ through a nested shelter order.
   empty; `giveItems` counts what left the pack by id and cancels an uncountered offer; the keeper, acceptor, broker and
   strategy bindings.
   Under a farm town the offer is the farm town's own sale plan (`ownSalePlan`: keep list, `sellReserve` minima).
-- `m59-ocean-trade-goods-test.mjs` (11): the Great Ocean courier after 2026-11-11. A save epoch nobody observed
+- `m59-ocean-trade-goods-test.mjs` (12): the Great Ocean courier after 2026-11-11. A save epoch nobody observed
   (`last_save_at: null`) is an epoch, bound to the keeper pid and connection, and a stale or about-to-save one is not;
   the courier and ward say WHY they are not ready; Zheng sells only received trade goods above his working stock, at the
   quote, judged by pack and purse, and a counter that quotes nothing keeps the row; his acceptance keeps his take list and
   drops shillings from it; desk stock is the unworn axes the weapon book reads dedicated; dedicated axes go to automated
-  Ocean farmers without magic, bludgeon wielders first; the acceptance switch pushes only a change.
+  Ocean farmers without magic, bludgeon wielders first; the acceptance switch pushes only a change; the purse above
+  the 2,000 float goes to Raphael only as an exact transfer read back from both purses.
 - `m59-purse-lease-test.mjs` (22): an errand's purse lease (`m59-purse-lease.mjs`). A live lease raises every banking
   float and `bank_above` to its carry and lapses by itself; no keeper part reads `policy.walkingMoney` directly; the
   broker's `purse_lease` and the bank tool's `lease_ms` set it.

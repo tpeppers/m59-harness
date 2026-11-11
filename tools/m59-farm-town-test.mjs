@@ -247,36 +247,61 @@ console.log('\nOcean sale overflow');
 console.log('\nOcean caps for the courier hand-over (2026-11-11)');
 {
   // Kermit's pack at 99% bulk: the capped farm-town plan is what loot ejection hands Zheng.
-  const capped = normalizeFarmTown({ ...MARION,
-    keep: ['herbs', 'orc tooth', 'sapphire', 'inky-cap mushroom'],
-    sellReserve: { mushroom: 48, 'red mushroom': 24, elderberry: 30, 'edible mushroom': 40, 'entroot berry': 10 },
-    sellOverflow: ['elderberry', 'edible mushroom'] }, { resolveItem });
+  const ocean = {
+    keep: ['herbs', 'orc tooth', 'inky-cap mushroom'],
+    sellReserve: { mushroom: 48, 'red mushroom': 24, elderberry: 30, 'edible mushroom': 40, 'entroot berry': 10,
+      sapphire: 20, 'blue dragon scale': 0, 'dark angel feather': 0 },
+    sellOverflow: ['elderberry', 'edible mushroom', 'sapphire', 'blue dragon scale', 'dark angel feather'],
+    reserveOnTop: ['sapphire'], release: ['blue dragon scale', 'dark angel feather'] };
+  const capped = normalizeFarmTown({ ...MARION, ...ocean }, { resolveItem });
+  ok('release and reserveOnTop need a sellReserve quantity and a sellOverflow entry',
+     throws(() => normalizeFarmTown({ ...MARION, ...ocean, release: ['emerald'] }, { resolveItem })) &&
+     throws(() => normalizeFarmTown({ ...MARION, ...ocean, sellOverflow: ['elderberry'] }, { resolveItem })));
   const directory = mkdtempSync(join(tmpdir(), 'm59-ocean-caps-'));
   const reserveFile = join(directory, 'reserve.json'), oldReserveFile = process.env.M59_REAGENT_RESERVE_FILE;
   process.env.M59_REAGENT_RESERVE_FILE = reserveFile;
-  writeFileSync(reserveFile, JSON.stringify({ default: { spells: {}, items: { sapphire: 100000 } } }));
+  // The prod book's shape: PvP casts per known spell, plus the casting guard's blanket sapphire reserve.
+  writeFileSync(reserveFile, JSON.stringify({ default: { spells: { bless: 3, 'magic shield': 4 }, items: { sapphire: 100000 } } }));
   configureInterestStore({ enabled: false });
-  const names = ['elderberry', 'edible mushroom', 'sapphire', 'emerald', 'red mushroom', 'entroot berry', 'Inky-cap mushroom'];
-  const amounts = [79, 71, 47, 125, 111, 9, 6];
+  const names = ['elderberry', 'edible mushroom', 'sapphire', 'emerald', 'red mushroom', 'entroot berry', 'Inky-cap mushroom',
+    'blue dragon scale', 'dark angel feather'];
+  const amounts = [79, 71, 47, 125, 111, 9, 6, 55, 6];
   const wanter = 'fixture-ocean-singer';
-  interest.declare(wanter, { wants: ['elderberry'], wantMatches: new Map([['elderberry', 'exact']]) });
+  interest.declare(wanter, { wants: ['elderberry', 'sapphire'],
+    wantMatches: new Map([['elderberry', 'exact'], ['sapphire', 'exact']]) });
   try {
     const c = { inventory: amounts.map((amount, i) => ({ id: i + 1, nameRsc: i, amount })),
-      rsc: new Map(names.map((name, i) => [i, name])), using: new Set(), spells: [] };
+      rsc: new Map(names.map((name, i) => [i, name])), using: new Set(), spells: [{ name: 'bless' }] };
     const k = Object.assign(Object.create(Autopilot.prototype), {
       s: { name: 'fixture', client: c, need: () => c, world: { room: { num: 552 } },
         reserveWho: { fleet: 'fixture', agent: 'fixture', character: 'Fixture' } },
-      policy: { farmTown: capped }, loadout: () => null, saleProtectedNames: () => [], weaponPriorityNow: () => [],
+      // The roster's vaultItems arrive through saleProtectedNames, as they do live.
+      policy: { farmTown: capped }, loadout: () => null, weaponPriorityNow: () => [],
+      saleProtectedNames: () => ['dark angel feather', 'blue dragon scale', 'arrows'],
       heldBackIds: () => new Set(), saleExcludeIds: () => new Set() });
-    const rows = new Map(k.ownSalePlan().items.map(row => [row.name, row]));
+    const plan = () => new Map(k.ownSalePlan().items.map(row => [row.name, row]));
+    let rows = plan();
     const sells = (name, n) => rows.get(name)?.state === 'sell' && rows.get(name).sale_amount === n;
     ok('elderberries above 30 go, even though the fleet wants elderberries and MARKET_KEEP names them',
        sells('elderberry', 49), JSON.stringify(rows.get('elderberry')));
     ok('edible mushrooms above 40 go', sells('edible mushroom', 31));
     ok('red mushrooms above 24 and every emerald go', sells('red mushroom', 87) && sells('emerald', 125));
-    ok('every sapphire stays (the PvP reserve), and so do inky-caps and entroot under its floor',
-       rows.get('sapphire').state !== 'sell' && rows.get('Inky-cap mushroom').state !== 'sell' &&
+    ok('inky-caps and entroot under its floor stay', rows.get('Inky-cap mushroom').state !== 'sell' &&
        rows.get('entroot berry').state !== 'sell');
+    ok('a Bless caster keeps 20 usable sapphires PLUS the PvP floor of 3 casts x 2, despite the blanket item reserve',
+       sells('sapphire', 47 - 26), JSON.stringify(rows.get('sapphire')));
+    ok('released vault items are sale stock here: every blue dragon scale and dark angel feather',
+       sells('blue dragon scale', 55) && sells('dark angel feather', 6), JSON.stringify(rows.get('blue dragon scale')));
+    c.spells = [{ name: 'zap' }];
+    rows = plan();
+    ok('a character without Bless keeps 20', sells('sapphire', 27));
+    c.spells = [];
+    rows = plan();
+    ok('an unobserved spell list counts every reserved spell on top', sells('sapphire', 21));
+    k.policy.farmTown = normalizeFarmTown({ ...MARION, ...ocean, release: undefined,
+      sellOverflow: ['elderberry', 'edible mushroom', 'sapphire', 'blue dragon scale', 'dark angel feather'] }, { resolveItem });
+    rows = plan();
+    ok('without release the roster vault hold still wins', rows.get('blue dragon scale').blocked === 'protected item');
   } finally {
     interest.forget(wanter);
     if (oldReserveFile === undefined) delete process.env.M59_REAGENT_RESERVE_FILE;

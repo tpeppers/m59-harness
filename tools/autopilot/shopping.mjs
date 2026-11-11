@@ -213,9 +213,20 @@ export class ShoppingPart {
         if (town.sellOverflow.some(name => reagentKey(name) === key)) spellFloors.set(item, retained.get(key) ?? 0);
       }
     }
+    // ON TOP (town.reserveOnTop, operator 2026-11-11): the sellReserve quantity is usable stock and the PvP spell floor
+    // (the reserve book's casts of the spells this character knows, times their reagent cost) is added to it. The book's
+    // blanket item reserve (items.sapphire) is the casting guard's rule, not a sale floor, so it is not counted here. An
+    // unobserved spell list counts every reserved spell, as the overflow branch above does.
+    for (const item of town.reserveOnTop ?? []) {
+      const spells = reserve?.spells ?? {};
+      const pvp = floorsFor({ spells, items: {} }, known.length ? known : Object.keys(spells)).get(reagentKey(item)) ?? 0;
+      spellFloors.set(item, (town.sellReserve?.[item] ?? 0) + pvp);
+    }
+    // RELEASED (town.release): a roster vault/protect name this town sells, because no hall trip leaves from here.
+    const released = new Set((town.release ?? []).map(name => String(name).toLowerCase()));
     return {
       keep: MARKET_KEEP,
-      protect: farmTownKeep(town, this.saleProtectedNames()),
+      protect: farmTownKeep(town, this.saleProtectedNames()).filter(name => !released.has(String(name).toLowerCase())),
       loadout: farmTownSaleLoadout(town, this.saleLoadout ? this.saleLoadout() : this.loadout(), spellFloors),
       maxWeapons: this.policy.maxWeapons,
       weaponPriority: this.weaponPriorityNow(),
