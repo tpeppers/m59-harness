@@ -1,4 +1,4 @@
-// One production courier, with native recovery remaining in control during travel.
+﻿// One production courier, with native recovery remaining in control during travel.
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -12,7 +12,7 @@ import {
   oceanSaleWardPath, renewOceanSaleClaims, writeOceanCache,
 } from './m59-ocean-courier-cache.mjs';
 import {
-  oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanCourierWaiting, oceanWardReady,
+  OCEAN_DEPART_VIGOR, oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanCourierWaiting, oceanWardReady,
   oceanWardScan, oceanWardWaiting, script, setOceanTradeGoods,
 } from './fleetscripts/ocean-courier.mjs';
 
@@ -193,7 +193,7 @@ try {
         await tradeGoods(true);
         const [carrierNow, singer] = await Promise.all([status(agent), status(holder)]);
         const fresh = await restoreCourierVigor(carrierNow);
-        const why = oceanCourierWaiting(fresh, room, 140) ?? (oceanWardWaiting(singer) && `ward: ${oceanWardWaiting(singer)}`);
+        const why = oceanCourierWaiting(fresh, room, OCEAN_DEPART_VIGOR) ?? (oceanWardWaiting(singer) && `ward: ${oceanWardWaiting(singer)}`);
         if (!why && !stopping) {
           waiting(null);
           const steps = await script.steps({ agent });
@@ -208,7 +208,7 @@ try {
         } else waiting(why);
       } else {
         waiting(carrier?.autopilot_status?.faculties?.work !== 'keeper' && oceanCourierReady(carrier, room)
-          ? 'a lease holds Zheng’s work faculty' : `Zheng: ${oceanCourierWaiting(carrier, room)}`);
+          ? 'a lease holds Zhengâ€™s work faculty' : `Zheng: ${oceanCourierWaiting(carrier, room)}`);
       }
     } catch (error) {
       log('courier check deferred', { active, reason: error.message });

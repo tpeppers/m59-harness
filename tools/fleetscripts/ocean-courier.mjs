@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+﻿import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { verify, walk } from '../m59-fleetscript.mjs';
@@ -37,6 +37,10 @@ const corridor = [552, 544, 534, 535, 200, TOAD, SMITH];
 // for the same reason: stranded on a safe spot for 35 minutes. In these rooms arrival is enough; every room where he
 // trades or waits (552, 200, the Toad, the smith) still requires the full quiet, full-health reading.
 export const OCEAN_TRANSIT_ROOMS = Object.freeze([544, 534, 535]);
+// VIGOR FLOORS (2026-11-11). Departure was 140 and town work 95, but resting stops at 80 and only food lifts vigor above it,
+// and the bread is bought ON the lap: a courier with no meal at 135 waited for ever (he had been casting mystic touch for
+// the singer). 110 covers the four-hop walk; 60 keeps town commerce, where Tova sells the bread, reachable.
+export const OCEAN_DEPART_VIGOR = 110, OCEAN_TOWN_VIGOR = 60;
 const saleNames = Object.keys(OCEAN_SALE_PRICE);
 const count = oceanItemCount;
 const purse = pack => count(pack, 'shilling');
@@ -164,7 +168,7 @@ async function waitForBody(rpc, expected, minVigor = 0) {
 export function oceanCourierReturnSteps(s, { fleet, server } = {}) {
   const origin = s?.room?.num;
   // A live fight is the keeper's (survival owns the body); a merely unquiet transit room is not a reason to stay.
-  if (!corridor.includes(origin) || s?.combat?.active || !oceanCourierSettled(s, origin, 95) ||
+  if (!corridor.includes(origin) || s?.combat?.active || !oceanCourierSettled(s, origin, OCEAN_TOWN_VIGOR) ||
       s.autopilot_status.faculties?.work !== 'keeper' ||
       s.autopilot_status.policy.confineRooms?.join(',') !== corridor.join(',')) return null;
   const resumeFrom = origin === 535 ? 534 : origin;
@@ -269,7 +273,7 @@ export async function collectSale(rpc, fleet, plan) {
 }
 
 async function sellParcels(rpc, keeper, plan) {
-  const body = await waitForBody(rpc, TOAD, 95);
+  const body = await waitForBody(rpc, TOAD, OCEAN_TOWN_VIGOR);
   const seller = await merchant(rpc, 'Morrigan', TOAD);
   for (const [itemName, amount] of plan.sales) {
     const before = await inventory(rpc);
@@ -298,7 +302,7 @@ async function sellParcels(rpc, keeper, plan) {
 // weapons and armour): the row stays in plan.trade for the next counter, and whatever no counter takes rides home.
 export async function sellTradeGoods(rpc, keeper, plan, seller, expected) {
   if (!plan.trade?.length) return;
-  const body = await waitForBody(rpc, expected, 95);
+  const body = await waitForBody(rpc, expected, OCEAN_TOWN_VIGOR);
   const merchantId = await merchant(rpc, seller, expected);
   const left = [];
   for (const row of plan.trade) {
@@ -336,7 +340,7 @@ export async function sellTradeGoods(rpc, keeper, plan, seller, expected) {
 async function buySupplies(rpc, plan, seller, expected, fleet) {
   const wanted = OCEAN_SHOPS[seller].filter(supply => plan.wanted[supply.name] > 0);
   if (!wanted.length) return;
-  await waitForBody(rpc, expected, 95);
+  await waitForBody(rpc, expected, OCEAN_TOWN_VIGOR);
   const merchantId = await merchant(rpc, seller, expected);
   for (const supply of wanted) {
     const menu = await rpc('shop', { agent, seller: merchantId }, 20000);
@@ -471,7 +475,7 @@ async function moveDeskAxe(rpc, fleet, id, generation, collecting, { stock = fal
   const desk = readDeskState(fleet);
   const courierCommitment = courier?.autopilot_status?.committed;
   const ownLap = courierCommitment?.kind === 'bot' && courierCommitment.held_by?.by === `fleetscript:${courierScriptName}`;
-  if (!desk || !quietDesk(desk) || !oceanCourierReady(courier, TOAD, 95) || !oceanDeskReady(raphael) ||
+  if (!desk || !quietDesk(desk) || !oceanCourierReady(courier, TOAD, OCEAN_TOWN_VIGOR) || !oceanDeskReady(raphael) ||
       courier.human_held || courier.ridealong?.human_held || courier.job?.busy ||
       courier.autopilot_status?.cast_rite?.active || (courierCommitment && !ownLap) ||
       courier.last_save_at !== generation || raphael.last_save_at !== generation ||
@@ -748,7 +752,7 @@ function verifiedGearStock(floor, singer, fleet) {
 
 export const script = {
   name: courierScriptName,
-  describe: 'Zheng He alone takes verified surplus from Statler’s Ocean ward to Marion and returns with provisions.',
+  describe: 'Zheng He alone takes verified surplus from Statlerâ€™s Ocean ward to Marion and returns with provisions.',
   unsafe: { waives: ['fragileBody'], reason: 'The assigned positive-karma courier walks only the verified Marion corridor.' },
   controls: [agent, deskAgent],
   params: { agents: { type: 'agents', required: true } },
@@ -768,7 +772,7 @@ export const script = {
         read(rpc, agent), read(rpc, medicAgent), read(rpc, holder),
         scan(rpc, ['axe', 'leather armor', 'loaf of bread', 'elderberry']), inventory(rpc),
       ]);
-      require(oceanCourierReady(body, room, 140) && oceanWardReady(singer) && healer.in_game && stock.ok &&
+      require(oceanCourierReady(body, room, OCEAN_DEPART_VIGOR) && oceanWardReady(singer) && healer.in_game && stock.ok &&
         stock.ids_stale === false && pack.ids_stale === false &&
         [stock, singer, pack].every(snapshot => snapshot.last_save_at === body.last_save_at) &&
         body.autopilot_status.policy.confineRooms?.join(',') === String(room), 'courier, healer, or ward is unavailable');
