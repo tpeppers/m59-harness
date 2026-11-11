@@ -350,6 +350,59 @@ const neither = keeperView({ ...STATE, you: undefined }, null, mapFor);
 is(neither.you, null, 'no room view and no state position is null, not undefined');
 ok(neither.you_source === undefined, 'and carries no source');
 
+// ------------------------------------------- a room view nobody refreshed is not a clock
+//
+// Zheng He (hk2), prod 2026-11-11: looked at once in 552 by fleetScript's live start, walked to
+// 544, and from then on every `status` -- which refreshes the state and never the room view --
+// answered `you: null` with `stale_render: "...room 552..."` for twenty minutes and more, until a
+// keeper handoff built a new proxy. The courier gates on the body id, so every lap aborted
+// ("did not settle safely in 544") and he was stranded. `status` composes with the broker's
+// receipt clocks now, and a room view lagging the state is treated as absent.
+{
+  const T = 1_800_000_000_000;
+  const ZHENG = { ...STATE, room: { name: 'Valley of Ileria', num: 150 },
+                  you: { id: 7081, row: 9, col: 4, x: 288, y: 608 } };
+  const away = keeperView(ZHENG, FAMILIARS, mapFor, { stateAt: T, roomViewAt: T - 20 * 60_000 });
+  is(away.you, ZHENG.you,
+    'a room view twenty minutes behind the state is not composed, so the state position stands');
+  is(away.you.id, 7081, 'and the body id the courier binds its epoch to is there');
+  is(away.stale_render, undefined, 'an abandoned room view is not reported as a hop race');
+  is(away.room_view_lag_ms, 20 * 60_000, 'its lag is reported');
+  ok(/room 52/.test(away.room_view_note) && /look/.test(away.room_view_note),
+    'naming the room it described and the call that refreshes it');
+  is(away.objects, [], 'its contents are not composed either');
+
+  // The worse half: walk BACK into the room that was looked at and the abandoned view agrees
+  // again -- it would serve a position from minutes ago and an object id from before any save.
+  const back = keeperView({ ...STATE, you: { id: 9001, row: 2, col: 7 } }, FAMILIARS, mapFor,
+                          { stateAt: T, roomViewAt: T - 20 * 60_000 });
+  is(back.you, { id: 9001, row: 2, col: 7 },
+    'an agreeing but abandoned room view does not resurrect an old position or handle');
+  is(back.objects, [], 'nor the old room contents');
+
+  // In step: the hop race keeps its earned withholding, and a fresh view composes as before.
+  const race = keeperView(ZHENG, FAMILIARS, mapFor, { stateAt: T, roomViewAt: T - 1500 });
+  is(race.you, null, 'a room view one hop behind still withholds the position');
+  ok(/room 52/.test(race.stale_render), 'and still reports the disagreement');
+  const inStep = keeperView(STATE, FAMILIARS, mapFor, { stateAt: T, roomViewAt: T - 1500 });
+  is(inStep.you.col, 4, 'a room view in step with the state composes');
+  is(inStep.room_view_lag_ms, undefined, 'with no lag report');
+  // perception() refreshes only the room view; a NEWER room view than state is never refused.
+  const newer = keeperView(STATE, FAMILIARS, mapFor, { stateAt: T - 60_000, roomViewAt: T });
+  is(newer.objects.length, 4, 'a room view newer than the state composes whatever the gap');
+  // Without clocks (older callers) the behaviour is unchanged.
+  is(keeperView(STATE, FAMILIARS, mapFor).you.col, 4, 'no clocks, no gate');
+}
+
+// The broker must hand the clocks over, or the gate above is dead code. Matched structurally,
+// comments stripped, for the reason given at the arrivalReport check.
+{
+  const src = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8')
+    .split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  ok(/keeperView\(this\._state, this\._roomView,[\s\S]{0,160}\{ stateAt: this\._stateAt, roomViewAt: this\._roomViewAt \}\)/.test(src),
+    'KeeperProxy.view() composes with the state and room-view receipt clocks');
+}
+
 const nothing = keeperView(null, null, mapFor);
 is(nothing.room, null, 'no state and no room view is a shape, not a throw');
 is(nothing.objects, [], 'still an array');

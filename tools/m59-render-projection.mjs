@@ -164,10 +164,36 @@ export function renderProjection(rv, mapRoom = null) {
 // So the composition is a pure function with a test, rather than an expression inside a
 // class that cannot be imported. `mapRoomFor(num)` looks a room up in the world map;
 // it may return null.
-export function keeperView(state, roomView, mapRoomFor = () => null) {
+//
+// A ROOM VIEW THE BROKER STOPPED REFRESHING IS NOT A SECOND CLOCK, IT IS AN ABANDONED CACHE.
+//
+// `clocks` is `{ stateAt, roomViewAt }`: when the broker received each half. The two halves
+// are refreshed by different callers -- every `status` takes a fresh /state, while the room view
+// is re-read only by `look`. So a character that is looked at once and then only `status`ed
+// carries that one room view for ever. Measured on prod 2026-11-11: Zheng He (hk2) was looked
+// at in 552 (fleetScript's live start) and walked to 544, and every `status` from then on
+// answered `you: null` with `stale_render: "...room view is for room 552..."` -- for 20+
+// minutes, until a keeper handoff built a new proxy with no room view at all. The courier gates
+// on the body id, so every lap failed "did not settle safely in 544" and he was stranded.
+// (The same defect read as "room_wire tuples disagree" for Bunsen in 598, 2026-10-07, and was
+// worked around in fleetscript's `statusWithPosition` -- a `look` refreshes the room view.)
+//
+// And the agreeing case is the more dangerous half: walk back into the room that was looked at
+// and the stale view AGREES again, so `you` is served from it -- a position from minutes ago and
+// an `object_id` from before any save that has renumbered it since. So a room view that lags
+// the state by more than ROOM_VIEW_MAX_LAG_MS is treated as ABSENT, which is the case the
+// composition already handles honestly: the state's own room and position, from one read.
+// Only a room view OLDER than the state is refused; a fresher one (perception() refreshes the
+// room view and leaves the state on its own TTL) composes exactly as before.
+export const ROOM_VIEW_MAX_LAG_MS = 5000;
+export function keeperView(state, roomView, mapRoomFor = () => null, clocks = {}) {
   const s = state ?? {};
   const stateRoom = s.room ? { num: s.room.num, name: s.room.name } : null;
-  const rv = roomView && !roomView.error ? roomView : null;
+  const usable = roomView && !roomView.error ? roomView : null;
+  const lagMs = usable && Number.isFinite(clocks?.stateAt) && Number.isFinite(clocks?.roomViewAt)
+    ? clocks.stateAt - clocks.roomViewAt : null;
+  const abandoned = lagMs != null && lagMs > ROOM_VIEW_MAX_LAG_MS;
+  const rv = abandoned ? null : usable;
   const stateWire = canonicalRoomWire(s.room_wire);
   const roomViewWire = canonicalRoomWire(rv?.room_wire);
 
@@ -282,6 +308,12 @@ export function keeperView(state, roomView, mapRoomFor = () => null) {
     ...(rv && !agrees
       ? { stale_render: `the keeper's room view is for room ${rv.room_num ?? '?'} and this ` +
                          `character is in ${stateRoom?.num ?? '?'} — positions withheld` }
+      : {}),
+    ...(abandoned
+      ? { room_view_lag_ms: lagMs,
+          room_view_note: `the broker's room view (room ${usable.room_num ?? '?'}) is ` +
+                          `${Math.round(lagMs / 1000)}s older than the state and was not composed; ` +
+                          'position from the keeper state — `look` refreshes the room view' }
       : {}),
     ...(boundAgrees ? { room_wire: stateWire } : { room_binding_note: roomBindingNote }),
     source: projection

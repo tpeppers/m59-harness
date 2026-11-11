@@ -4048,9 +4048,15 @@ class KeeperProxy {
   // position — it is `arrivalReport` saying what is standing next to you in a room you have
   // left — so the projection is used only when its room number agrees, and `stale_render`
   // says so when it does not.
+  // THE TWO RECEIPT TIMES GO WITH THEM. `status` refreshes the state and never the room view, so
+  // without the clocks a room view from one `look` minutes ago was composed into every status
+  // after it -- `you: null` for as long as the character stayed out of that room (Zheng He,
+  // 2026-11-11), and a stale position and object id the moment it walked back in. keeperView
+  // refuses a room view that lags the state; see ROOM_VIEW_MAX_LAG_MS.
   view() {
     return keeperView(this._state, this._roomView,
-      num => (num != null ? worldMap?.rooms?.[num] ?? null : null));
+      num => (num != null ? worldMap?.rooms?.[num] ?? null : null),
+      { stateAt: this._stateAt, roomViewAt: this._roomViewAt });
   }
   // Awaited by `/rts/v1/read` and by `look projection=render`, so it may refresh first. A
   // renderer reading a frame that is however stale the last unrelated caller left it is the
