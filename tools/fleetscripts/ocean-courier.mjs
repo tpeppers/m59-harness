@@ -51,6 +51,9 @@ export const oceanDepartVigor = s => (s?.items ?? []).some(item => Number(item?.
 const saleNames = Object.keys(OCEAN_SALE_PRICE);
 const count = oceanItemCount;
 const purse = pack => count(pack, 'shilling');
+// Spare pieces of `name` in the courier's own pack. Inventory rows do not mark what is worn, so one leather armour is
+// assumed worn; he wields a hammer, so every axe he carries is a spare.
+export const oceanCarriedSpares = (pack, name) => Math.max(0, count(pack, name) - (name === 'leather armor' ? 1 : 0));
 export const oceanCanVisitSmith = (pack, wanted) => OCEAN_SHOPS.Colhorr.some(supply =>
   wanted[supply.name] > 0 && purse(pack) >= reserve + supply.price && oceanUnitsFit(pack, supply.name) > 0);
 const matches = (item, itemName) => oceanItemName(item.name) === oceanItemName(itemName);
@@ -813,8 +816,10 @@ export const script = {
           fits: oceanUnitsFit(healer, 'herb'), last: readOceanMedicHerbs(fleet) }),
         elderberry: Math.max(0, 32 - count(singer, 'elderberry') - floorCount('elderberry') - count(pack, 'elderberry')),
         [bread]: oceanBreadPlan(floorCount(bread), count(pack, bread)).wanted,
-        axe: stockedGear.some(item => item.name === 'axe') ? 0 : 1,
-        'leather armor': stockedGear.some(item => item.name === 'leather armor') ? 0 : 1,
+        // A SPARE HE ALREADY CARRIES IS STOCK (2026-11-12: 11 leather armours and 3 axes rode in his pack, ~1,900 bulk, because
+        // a bought piece is neither ward stock nor gear cargo until it is delivered, so every lap wanted and bought another).
+        axe: stockedGear.some(item => item.name === 'axe') || oceanCarriedSpares(pack, 'axe') > 0 ? 0 : 1,
+        'leather armor': stockedGear.some(item => item.name === 'leather armor') || oceanCarriedSpares(pack, 'leather armor') > 0 ? 0 : 1,
       };
       // DEDICATED AXES FOR WHOEVER LACKS MAGIC: the desk's stock goes out on this lap; with too little stock, one
       // more Colhorr axe is bought for Raphael to dedicate (handoffNewAxe; the supervisor casts on desk stock).

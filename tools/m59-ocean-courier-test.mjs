@@ -9,7 +9,7 @@ import {
   oceanProvisionRecord, oceanUnitsFit, readOceanGearCargo, readOceanSaleAuthorization, recordOceanGearCargo,
   renewOceanSaleClaims, selectOceanGearCargo, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
-import { collectSale, moveToWard, oceanCanVisitSmith, oceanDepartVigor, OCEAN_DEPART_VIGOR, OCEAN_NO_MEAL_DEPART_VIGOR, oceanCourierArrivedWaiting, oceanCourierSettled, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
+import { collectSale, moveToWard, oceanCanVisitSmith, oceanCarriedSpares, oceanDepartVigor, OCEAN_DEPART_VIGOR, OCEAN_NO_MEAL_DEPART_VIGOR, oceanCourierArrivedWaiting, oceanCourierSettled, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
 const now = 100_000;
 const epoch = 90_000;
@@ -461,4 +461,11 @@ test('a courier with no meal departs at the rest cap, because the lap is where h
     OCEAN_NO_MEAL_DEPART_VIGOR);
   assert.equal(oceanDepartVigor({}), OCEAN_NO_MEAL_DEPART_VIGOR);
   assert.ok(OCEAN_NO_MEAL_DEPART_VIGOR <= 80, 'resting stops at 80, so a mealless courier must be able to leave from it');
+});
+test('a spare the courier already carries is gear stock, so a lap does not buy another', () => {
+  const pack = names => ({ items: names.map((name, i) => ({ id: 100 + i, name, amount: 0 })) });
+  assert.equal(oceanCarriedSpares(pack(['leather armor']), 'leather armor'), 0);          // the one he wears
+  assert.equal(oceanCarriedSpares(pack(['leather armor', 'leather armor']), 'leather armor'), 1);
+  assert.equal(oceanCarriedSpares(pack(['hammer']), 'axe'), 0);
+  assert.equal(oceanCarriedSpares(pack(['hammer', 'axe']), 'axe'), 1);
 });
