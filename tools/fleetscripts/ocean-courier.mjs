@@ -1,4 +1,4 @@
-﻿import { readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { verify, walk } from '../m59-fleetscript.mjs';
@@ -41,6 +41,13 @@ export const OCEAN_TRANSIT_ROOMS = Object.freeze([544, 534, 535]);
 // and the bread is bought ON the lap: a courier with no meal at 135 waited for ever (he had been casting mystic touch for
 // the singer). 110 covers the four-hop walk; 60 keeps town commerce, where Tova sells the bread, reachable.
 export const OCEAN_DEPART_VIGOR = 110, OCEAN_TOWN_VIGOR = 60;
+// NO MEAL ON HIM, THE LAP IS HOW HE EATS (2026-11-12 01:10Z: 80 vigor, no bread, 'vigor 80 under 110' for ever -- resting stops
+// at 80). A courier carrying no bread, meat pie or inky-cap departs at the rest cap, which still clears OCEAN_TOWN_VIGOR at
+// the Toad where Tova sells the bread; one carrying a meal eats up to OCEAN_DEPART_VIGOR first (restoreCourierVigor).
+export const OCEAN_NO_MEAL_DEPART_VIGOR = 75;
+const MEALS = ['loaf of bread', 'meat pie', 'inky-cap mushroom'];
+export const oceanDepartVigor = s => (s?.items ?? []).some(item => Number(item?.amount) > 0 &&
+  MEALS.includes(String(item?.name ?? '').toLowerCase())) ? OCEAN_DEPART_VIGOR : OCEAN_NO_MEAL_DEPART_VIGOR;
 const saleNames = Object.keys(OCEAN_SALE_PRICE);
 const count = oceanItemCount;
 const purse = pack => count(pack, 'shilling');
@@ -784,7 +791,7 @@ export const script = {
         read(rpc, agent), read(rpc, medicAgent), read(rpc, holder),
         scan(rpc, ['axe', 'leather armor', 'loaf of bread', 'elderberry']), inventory(rpc),
       ]);
-      require(oceanCourierReady(body, room, OCEAN_DEPART_VIGOR) && oceanWardReady(singer) && healer.in_game && stock.ok &&
+      require(oceanCourierReady(body, room, oceanDepartVigor(body)) && oceanWardReady(singer) && healer.in_game && stock.ok &&
         stock.ids_stale === false && pack.ids_stale === false &&
         [stock, singer, pack].every(snapshot => snapshot.last_save_at === body.last_save_at) &&
         body.autopilot_status.policy.confineRooms?.join(',') === String(room), 'courier, healer, or ward is unavailable');

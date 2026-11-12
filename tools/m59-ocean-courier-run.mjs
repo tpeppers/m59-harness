@@ -1,4 +1,4 @@
-﻿// One production courier, with native recovery remaining in control during travel.
+// One production courier, with native recovery remaining in control during travel.
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -14,7 +14,7 @@ import {
   oceanProvisionRecord, oceanSaleWardPath, oceanUnitsFit, renewOceanSaleClaims, writeOceanCache,
 } from './m59-ocean-courier-cache.mjs';
 import {
-  OCEAN_DEPART_VIGOR, oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanCourierWaiting, oceanWardReady,
+  oceanDepartVigor, oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanCourierWaiting, oceanWardReady,
   oceanWardScan, oceanWardWaiting, script, setOceanTradeGoods,
 } from './fleetscripts/ocean-courier.mjs';
 
@@ -202,7 +202,7 @@ try {
         await tradeGoods(true);
         const [carrierNow, singer] = await Promise.all([status(agent), status(holder)]);
         const fresh = await restoreCourierVigor(carrierNow);
-        const why = oceanCourierWaiting(fresh, room, OCEAN_DEPART_VIGOR) ?? (oceanWardWaiting(singer) && `ward: ${oceanWardWaiting(singer)}`);
+        const why = oceanCourierWaiting(fresh, room, oceanDepartVigor(fresh)) ?? (oceanWardWaiting(singer) && `ward: ${oceanWardWaiting(singer)}`);
         // A FULL LAP PLAN CLAIMS ZHENG'S FACULTIES, and a farmer whose offer lands in that window backs off for five
         // minutes. So while nothing in his own pack makes the road worth it, the full plan (ward, desk axes, bread)
         // runs at most every LAP_PLAN_EVERY_MS and he stands in the Ocean taking trade goods in between.

@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import {
   oceanProvisionRecord, oceanUnitsFit, readOceanGearCargo, readOceanSaleAuthorization, recordOceanGearCargo,
   renewOceanSaleClaims, selectOceanGearCargo, selectOceanSalePiles,
 } from './m59-ocean-courier-cache.mjs';
-import { collectSale, moveToWard, oceanCanVisitSmith, oceanCourierArrivedWaiting, oceanCourierSettled, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
+import { collectSale, moveToWard, oceanCanVisitSmith, oceanDepartVigor, OCEAN_DEPART_VIGOR, OCEAN_NO_MEAL_DEPART_VIGOR, oceanCourierArrivedWaiting, oceanCourierSettled, oceanCourierReturnSteps, oceanDeskReady, oceanDeskSpareCandidate, oceanWardScan, script } from './fleetscripts/ocean-courier.mjs';
 
 const now = 100_000;
 const epoch = 90_000;
@@ -453,4 +453,12 @@ test('a transit room is crossed, not settled in: arrival is enough in 544, quiet
   assert.match(oceanCourierArrivedWaiting(body(534), 544), /in 534, not 544/);
   assert.match(oceanCourierArrivedWaiting({ ...body(544), hp: { value: 0, max: 23 } }, 544), /dead/);
   assert.match(oceanCourierArrivedWaiting({ ...body(544), autopilot_status: { mode: 'farm', policy: {} } }, 544), /posture/);
+});
+test('a courier with no meal departs at the rest cap, because the lap is where he buys bread', () => {
+  assert.equal(oceanDepartVigor({ items: [{ name: 'loaf of bread', amount: 2 }] }), OCEAN_DEPART_VIGOR);
+  assert.equal(oceanDepartVigor({ items: [{ name: 'Inky-cap mushroom', amount: 1 }] }), OCEAN_DEPART_VIGOR);
+  assert.equal(oceanDepartVigor({ items: [{ name: 'bunch of grapes', amount: 1 }, { name: 'red mushroom', amount: 50 }] }),
+    OCEAN_NO_MEAL_DEPART_VIGOR);
+  assert.equal(oceanDepartVigor({}), OCEAN_NO_MEAL_DEPART_VIGOR);
+  assert.ok(OCEAN_NO_MEAL_DEPART_VIGOR <= 80, 'resting stops at 80, so a mealless courier must be able to leave from it');
 });
