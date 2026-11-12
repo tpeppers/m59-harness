@@ -107,7 +107,9 @@ test('a lap departs only when it is worth the road, and waits in the Ocean other
   assert.match(oceanLapDue({ saleValue: 120 }).why, /waiting in the Ocean/);
   assert.equal(oceanLapDue({ parcels: 1 }).go, true);
   assert.equal(oceanLapDue({ saleValue: OCEAN_LAP.saleValue }).go, true);
-  assert.equal(oceanLapDue({ fullness: 0.6 }).go, true);
+  // Full of something worth selling goes; full of his own kit does not (03:41Z: 'pack 80% full', 50 shillings).
+  assert.equal(oceanLapDue({ fullness: 0.6, saleValue: OCEAN_LAP.minValue }).go, true);
+  assert.equal(oceanLapDue({ fullness: 0.8, saleValue: 50 }).go, false);
   assert.equal(oceanLapDue({ axeWork: true }).go, true);
   assert.equal(oceanLapDue({ breadShort: true }).go, true);
   // The longest wait goes with something to do, never empty-handed.

@@ -109,7 +109,9 @@ export function oceanLapDue({ parcels = 0, saleValue = 0, fullness = 0, axeWork 
   provision = false, sinceLastMs = 0 } = {}) {
   if (parcels > 0) return { go: true, why: 'ward sale parcels to carry' };
   if (saleValue >= OCEAN_LAP.saleValue) return { go: true, why: `about ${saleValue} shillings to sell` };
-  if (fullness >= OCEAN_LAP.fullness) return { go: true, why: `pack ${Math.round(fullness * 100)}% full` };
+  // FULL OF WHAT? His own kit (armour, shield, hammer, axe, the Chalice) alone reads ~80% (2026-11-12 03:41Z: a lap left
+  // 'pack 80% full' with 50 shillings to sell). Fullness counts only when it is worth something at Morrigan.
+  if (fullness >= OCEAN_LAP.fullness && saleValue >= OCEAN_LAP.minValue) return { go: true, why: `pack ${Math.round(fullness * 100)}% full` };
   if (axeWork) return { go: true, why: 'dedicated desk axes for farmers without magic' };
   if (breadShort) return { go: true, why: 'the ward is short of bread' };
   if (sinceLastMs >= OCEAN_LAP.maxWaitMs && (saleValue >= OCEAN_LAP.minValue || provision))
