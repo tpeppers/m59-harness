@@ -319,3 +319,24 @@ test('a confirm the keeper refuses with nothing moved skips that item and the co
   assert.deepEqual(plan.trade, [{ name: 'blue mushroom', amount: 40 }]);          // rides home; the diamonds still sold
   assert.equal(pack.items.find(i => i.name === 'shilling').amount, 600);
 });
+test('a refusal whose pack shows the exact sale is a sale (the 09:36Z ruby), and the counter carries on', async () => {
+  let pack = { ids_stale: false, last_save_at: null, items: [{ id: 1, name: 'shilling', amount: 500 },
+    { id: 7, name: 'ruby', amount: 15 }, { id: 6, name: 'diamond', amount: 4 }] };
+  const body = zheng({ room: { num: 202 } });
+  const rpc = async tool => {
+    if (tool === 'status') return body;
+    if (tool === 'inventory') return pack;
+    if (tool === 'look') return { room: { num: 202 }, objects: [{ id: 99, name: 'Morrigan', can: ['buy'] }] };
+    assert.fail(`unexpected ${tool}`);
+  };
+  const keeper = async (op, args) => {
+    if (!args.confirm) return { sold: false, offered_price: 100 * args.item.amount };
+    const coins = pack.items.find(i => i.name === 'shilling').amount + args.expected_price;
+    pack = { ...pack, items: [{ id: 1, name: 'shilling', amount: coins }, ...pack.items.filter(i => i.name !== 'shilling' && i.id !== args.item.id)] };
+    return args.item.id === 7 ? { sold: false, note: 'sale did not remove the offered quantity' } : { sold: true };
+  };
+  const plan = { trade: [{ name: 'ruby', amount: 15 }, { name: 'diamond', amount: 4 }] };
+  await sellTradeGoods(rpc, keeper, plan, 'Morrigan', 202);
+  assert.deepEqual(plan.trade, []);                                                // both sold, nothing rides home
+  assert.equal(pack.items.find(i => i.name === 'shilling').amount, 500 + 1500 + 400);
+});

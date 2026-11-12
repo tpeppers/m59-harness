@@ -334,18 +334,25 @@ export async function sellTradeGoods(rpc, keeper, plan, seller, expected) {
         samePack.items.some(item => item.id === stack.id && matches(item, row.name) && item.amount === stack.amount),
       `pack changed during ${row.name} quote`);
       const sale = await keeper('sell_one', { ...args, confirm: true, expected_price: price }, 20000);
+      // A REFUSAL IS JUDGED BY THE PACK, NOT THE NOTE (2026-11-12). The keeper's own read-back can race the server's
+      // inventory update: at 09:36Z a ruby sale came back refused while the ruby had in fact gone and the purse had risen,
+      // and the whole Toad visit stopped. So a refusal is re-read after a moment: exactly the sold amount gone and exactly
+      // the quoted price gained is a sale; pack and purse both unchanged skips the item (it rides home for the next lap);
+      // anything else is ambiguous and still stops the visit.
+      let after = await inventory(rpc);
       if (sale?.sold !== true) {
-        // A REFUSAL THAT MOVED NOTHING SKIPS THE ITEM, NOT THE COUNTER (2026-11-12: about a third of laps abandoned the
-        // whole Toad visit -- every other sale and the bread -- over one "item changed during the offer" / "sale did
-        // not remove the offered quantity"). Pack and purse both unchanged: nothing changed hands, so the row rides home
-        // for the next lap. Anything else is ambiguous and still stops the visit.
-        const still = await inventory(rpc);
-        require(still.last_save_at === before.last_save_at && count(still, row.name) === count(before, row.name) &&
-          purse(still) === purse(before), `ambiguous ${row.name} sale after a refusal; inspect pack before any repeat`);
-        report('trade goods sale skipped', { seller, item: row.name, amount, why: sale?.note ?? 'keeper refused the sale' });
-        break;
+        const soldShape = p => p.last_save_at === before.last_save_at && count(before, row.name) - count(p, row.name) === amount &&
+          purse(p) - purse(before) === price;
+        const untouched = p => p.last_save_at === before.last_save_at && count(p, row.name) === count(before, row.name) &&
+          purse(p) === purse(before);
+        if (!soldShape(after) && !untouched(after)) { await sleep(2000); after = await inventory(rpc); }
+        if (!soldShape(after)) {
+          require(untouched(after), `ambiguous ${row.name} sale after a refusal; inspect pack before any repeat`);
+          report('trade goods sale skipped', { seller, item: row.name, amount, why: sale?.note ?? 'keeper refused the sale' });
+          break;
+        }
+        report('trade goods sale confirmed by the pack', { seller, item: row.name, amount, note: sale?.note ?? null });
       }
-      const after = await inventory(rpc);
       require(after.last_save_at === before.last_save_at && count(before, row.name) - count(after, row.name) === amount &&
         purse(after) - purse(before) === price, `ambiguous ${row.name} sale; inspect pack before any repeat`);
       noteGone(agent, [{ name: row.name, amount }]);   // the keeper counts by session name, the agent
