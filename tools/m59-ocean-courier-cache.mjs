@@ -150,11 +150,14 @@ export function oceanMedicOutcome({ amount, verified, reason, now = Date.now() }
   return { delivered: 0, refused: CAPACITY_REFUSAL.test(String(reason ?? '')) ? 'capacity' : 'other', at: now };
 }
 
-// Zheng takes a farmer's sale pile while it leaves 30% of his pack free for the provisions he brings back. The
+// Zheng takes a farmer's sale pile while it leaves 15% of his pack free for the provisions he brings back. The
 // acceptance is his existing accept_donations (the reagent and wand list he already takes) plus trade_goods, or the
 // same without it. Null when the keeper already holds what is asked, so the runner pushes only a change. Shillings
 // come off his shed-for-space list: he now carries the farmers' sale proceeds (live 2026-11-11 the list named them).
-export const OCEAN_TRADE_GOODS = Object.freeze({ keep_free: 0.3 });
+// 15% (2026-11-12): at 30% one courier could not keep up with 20 farmers -- packs averaged 93% with 12 full and the kill
+// rate fell from 24 to 17 a minute while they kept offering and being refused. 15% of 2,700 is ~405 bulk: a lap's bread,
+// the medic's herbs and an axe still fit.
+export const OCEAN_TRADE_GOODS = Object.freeze({ keep_free: 0.15 });
 const shedList = base => Array.isArray(base?.drop_for_space)
   ? base.drop_for_space.filter(name => oceanItemName(name) !== 'shilling') : null;
 export function oceanTradeGoodsAcceptance(current, on) {

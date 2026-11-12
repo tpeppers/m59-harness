@@ -160,15 +160,15 @@ test('a received pile is worth a lap at 500 bulk or a pack 55% full', () => {
 test('trade-goods acceptance keeps Zheng\'s existing take list and pushes only a change', () => {
   const live = { enabled: true, reagents: ['wand', 'entroot berry'], drop_for_space: ['loaf of bread'], min_bulk_free: 40 };
   const on = oceanTradeGoodsAcceptance(live, true);
-  assert.deepEqual(on, { ...live, trade_goods: { keep_free: 0.3 } });
-  assert.equal(oceanTradeGoodsAcceptance({ ...on, trade_goods: { enabled: true, keep_free: 0.3, from: null } }, true), null);
+  assert.deepEqual(on, { ...live, trade_goods: { keep_free: 0.15 } });
+  assert.equal(oceanTradeGoodsAcceptance({ ...on, trade_goods: { enabled: true, keep_free: 0.15, from: null } }, true), null);
   assert.deepEqual(oceanTradeGoodsAcceptance(on, false), live);
   assert.equal(oceanTradeGoodsAcceptance(live, false), null);
-  assert.deepEqual(oceanTradeGoodsAcceptance(null, true), { enabled: true, min_bulk_free: 40, trade_goods: { keep_free: 0.3 } });
+  assert.deepEqual(oceanTradeGoodsAcceptance(null, true), { enabled: true, min_bulk_free: 40, trade_goods: { keep_free: 0.15 } });
   // The live list on 2026-11-11 named shillings among the things he sheds for space; a purse of sale proceeds is not.
   const shedsMoney = { ...live, drop_for_space: ['shilling', 'loaf of bread'] };
   assert.deepEqual(oceanTradeGoodsAcceptance(shedsMoney, true).drop_for_space, ['loaf of bread']);
-  assert.notEqual(oceanTradeGoodsAcceptance({ ...shedsMoney, trade_goods: { keep_free: 0.3 } }, true), null);
+  assert.notEqual(oceanTradeGoodsAcceptance({ ...shedsMoney, trade_goods: { keep_free: 0.15 } }, true), null);
 });
 
 test('desk stock: only unworn axes the weapon book reads as dedicated', () => {
@@ -253,7 +253,7 @@ test('the acceptance switch pushes only a change and reports whether the keeper 
   assert.equal(await setOceanTradeGoods(rpc, true), true);
   assert.equal(await setOceanTradeGoods(rpc, true), true);
   assert.equal(pushes.length, 1);
-  assert.deepEqual(pushes[0].trade_goods, { keep_free: 0.3 });
+  assert.deepEqual(pushes[0].trade_goods, { keep_free: 0.15 });
   assert.equal(await setOceanTradeGoods(rpc, false), true);
   assert.equal(pushes.length, 2);
   assert.equal(pushes[1].trade_goods, undefined);
