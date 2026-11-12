@@ -74,8 +74,10 @@ export function oceanSaveClear(s, margin, now = Date.now()) {
 // else is sold only up to what the ledger says farmers gave him (his own kit, the cup, wands and vault keepsakes stay).
 export const OCEAN_COURIER_KEEP = Object.freeze({ elderberry: 40, herb: 180,
   [OCEAN_BREAD.name]: OCEAN_BREAD.target + OCEAN_BREAD.reserve });
-export const OCEAN_COURIER_SELLS = Object.freeze(['red mushroom', 'blue mushroom', 'emerald', 'diamond', 'ruby', 'sapphire',
-  'blue dragon scale', 'dark angel feather', 'bunch of grapes', 'elderberry', 'edible mushroom']);
+// PURPLE MUSHROOM (2026-11-12): farmers hand it over as trade goods and Morrigan buys reagents, but it was not on this list,
+// so 59 rode in Zheng's pack lap after lap and helped hold his published room at 0.
+export const OCEAN_COURIER_SELLS = Object.freeze(['red mushroom', 'blue mushroom', 'purple mushroom', 'emerald', 'diamond', 'ruby',
+  'sapphire', 'blue dragon scale', 'dark angel feather', 'bunch of grapes', 'elderberry', 'edible mushroom']);
 const NEVER_SOLD = new Set(['shilling', 'axe', 'leather armor', 'chalice of the rain', 'small round shield', 'hammer']);
 export const OCEAN_TRADE_GOODS_DUE = Object.freeze({ bulk: 500, fullness: 0.55 });
 
