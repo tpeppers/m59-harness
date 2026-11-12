@@ -81,16 +81,39 @@ export const OCEAN_COURIER_SELLS = Object.freeze(['red mushroom', 'blue mushroom
 const NEVER_SOLD = new Set(['shilling', 'axe', 'leather armor', 'chalice of the rain', 'small round shield', 'hammer']);
 export const OCEAN_TRADE_GOODS_DUE = Object.freeze({ bulk: 500, fullness: 0.55 });
 
-export function oceanTradeGoodsSale(pack, received = {}) {
+// `withhold` ({ name: amount }): what the fleet's standing requests still lack (oceanRequestShortfall), kept back on top of
+// his working stock so a requested reagent is delivered rather than sold. Empty = the behaviour before requests.
+export function oceanTradeGoodsSale(pack, received = {}, withhold = {}) {
   const owed = new Map(Object.entries(received ?? {}).map(([raw, n]) => [oceanItemName(raw), Number(n)]));
+  const held = oceanCountMap(withhold);
   const names = new Set([...owed.keys(), ...OCEAN_COURIER_SELLS]);
   const out = [];
   for (const name of names) {
     if (!name || NEVER_SOLD.has(name)) continue;
-    const surplus = oceanItemCount(pack, name) - (OCEAN_COURIER_KEEP[name] ?? 0);
+    const surplus = oceanItemCount(pack, name) - (OCEAN_COURIER_KEEP[name] ?? 0) - (held.get(name) ?? 0);
     const amount = OCEAN_COURIER_SELLS.includes(name) ? surplus : Math.min(owed.get(name) ?? 0, surplus);
     if (positive(amount)) out.push({ name, amount });
   }
+  return out;
+}
+
+// THE WARD'S SALE PARCELS UNDER A REQUEST HOLD. Parcels collected from the ward floor are already in `pack`; a requested
+// item's parcel is sold only out of what is left above his working stock and the hold. -> a new Map of name -> amount;
+// an item with nothing held is passed through unchanged.
+export function oceanParcelSale(pack, sales, withhold = {}) {
+  const held = oceanCountMap(withhold), out = new Map();
+  for (const [name, amount] of sales ?? []) {
+    const hold = held.get(oceanItemName(name));
+    const allowed = hold ? Math.min(amount, Math.max(0, oceanItemCount(pack, name) - (OCEAN_COURIER_KEEP[oceanItemName(name)] ?? 0) - hold))
+      : amount;
+    if (allowed > 0) out.set(name, allowed);
+  }
+  return out;
+}
+/** The trade-goods withhold at departure: the request hold plus what the (capped) parcels of a held item will sell. */
+export function oceanDepartureWithhold(withhold = {}, sales = new Map()) {
+  const out = Object.fromEntries(oceanCountMap(withhold));
+  for (const [name, amount] of sales ?? []) if (out[oceanItemName(name)]) out[oceanItemName(name)] += amount;
   return out;
 }
 
@@ -137,6 +160,101 @@ export function oceanMedicHerbWant({ healerHerbs = 0, carried = 0, fits = 0, las
 /** A JSON file that may carry a UTF-8 byte-order mark (PowerShell's Out-File/Set-Content -Encoding utf8 writes one). */
 export function oceanReadJson(file) {
   return JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''));
+}
+
+// THE FLEET'S STANDING REQUESTS (2026-11-12). substrate/courier-requests.json = { "<agent>": { "<item>": <target> } },
+// written by the PLAN tab's courier plan (tools/plans/courier.mjs) and mergeCourierRequests (m59-practice-plan.mjs). Only
+// the retired private Zheng He lap read it, so when the Great Ocean courier took over, Zoot's request for 100 mushrooms,
+// 100 red and 100 purple (Magic Shield 2+1, Free Action 1+1) was read by nobody while Zheng SOLD the red and purple ones
+// the farmers handed him. Item names are whole names: `mushroom` is not `red mushroom`.
+export const oceanCourierRequestsFile = fleet => process.env.M59_COURIER_REQUESTS_FILE ||
+  join(dirname(dirname(stateFileFor(fleet))), 'courier-requests.json');
+/** { name: amount } or a Map -> Map(lowercase whole name -> positive whole amount). */
+export function oceanCountMap(counts) {
+  const entries = counts instanceof Map ? [...counts] : Object.entries(counts ?? {});
+  const out = new Map();
+  for (const [raw, n] of entries) {
+    const name = oceanItemName(raw), amount = Math.floor(Number(n));
+    if (name && Number.isFinite(amount) && amount > 0) out.set(name, (out.get(name) ?? 0) + amount);
+  }
+  return out;
+}
+/**
+ * -> { requests, error, problems, file }. A missing file is no requests. A file that will not parse, or is not an object
+ * of objects, is NOT an empty file: `error` names it and `requests` is {} -- the caller keeps the last good reading and
+ * says so (CLAUDE.md: a file that will not parse is not an empty file). A malformed entry is reported in `problems` and
+ * skipped; the rest of the file still stands.
+ */
+export function oceanCourierRequests(fleet, file = oceanCourierRequestsFile(fleet)) {
+  const out = { requests: {}, error: null, problems: [], file };
+  let text;
+  try { text = readFileSync(file, 'utf8'); }
+  catch (error) {
+    if (error.code !== 'ENOENT') out.error = `cannot read ${file}: ${error.message}`;
+    return out;
+  }
+  let raw;
+  try { raw = JSON.parse(text.replace(/^﻿/, '')); }
+  catch (error) { out.error = `${file} will not parse: ${error.message}`; return out; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    out.error = `${file} is not an object of { agent: { item: count } }`;
+    return out;
+  }
+  for (const [who, wants] of Object.entries(raw)) {
+    if (!wants || typeof wants !== 'object' || Array.isArray(wants)) {
+      out.problems.push(`${who}: not an object of item counts`);
+      continue;
+    }
+    const line = {};
+    for (const [item, target] of Object.entries(wants)) {
+      const name = oceanItemName(item), n = Number(target);
+      if (!name || target === null || typeof target === 'boolean' || !Number.isFinite(n) || n < 0) {
+        out.problems.push(`${who}.${item}: ${JSON.stringify(target)} is not a count`);
+        continue;
+      }
+      if (n >= 1) line[name] = Math.floor(n);
+    }
+    if (Object.keys(line).length) out.requests[who] = line;
+  }
+  return out;
+}
+/** Only the named requesters' lines (the ones standing where the courier can hand them something). */
+export function oceanRequestsFor(requests, agents) {
+  const wanted = new Set(agents ?? []);
+  return Object.fromEntries(Object.entries(requests ?? {}).filter(([who]) => wanted.has(who)));
+}
+/**
+ * Per item, the sum over requesters of max(0, target - what that requester already holds). A requester whose pack is
+ * not in `packsByAgent` counts as holding none (the conservative side: more is held back from sale; nothing is ever
+ * handed over without a fresh read). -> { name: amount }, positive amounts only.
+ */
+export function oceanRequestShortfall(requests, packsByAgent = {}) {
+  const out = {};
+  for (const [who, wants] of Object.entries(requests ?? {})) {
+    const pack = packsByAgent?.[who] ?? { items: [] };
+    for (const [name, target] of oceanCountMap(wants)) {
+      const short = Math.max(0, target - oceanItemCount(pack, name));
+      if (short > 0) out[name] = (out[name] ?? 0) + short;
+    }
+  }
+  return out;
+}
+/**
+ * How many of one requested item to hand over now: never past the requester's target, never below the giver's own
+ * keep, never more than the receiver can carry. A non-finite input is zero, not unlimited.
+ */
+export function oceanRequestDelivery({ target = 0, receiverHolds = 0, giverHolds = 0, giverKeep = 0, fits = 0 } = {}) {
+  const n = Math.min(target - receiverHolds, giverHolds - giverKeep, fits);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+// WHAT A GREAT OCEAN FARMER KEEPS FOR ITSELF: the farm strategy's sellReserve (great-ocean-marion.mjs, private) for the
+// requested reagents it names. A farmer is asked for a request only above this AND above its own request for the item,
+// and an item with no known reserve here is never taken from a farmer at all.
+export const OCEAN_FARMER_RESERVE = Object.freeze({ mushroom: 48, 'red mushroom': 24 });
+export function oceanFarmerSurplus(pack, name, ownTarget = 0) {
+  const item = oceanItemName(name);
+  if (!Object.hasOwn(OCEAN_FARMER_RESERVE, item)) return 0;
+  return Math.max(0, oceanItemCount(pack, item) - Math.max(OCEAN_FARMER_RESERVE[item], Number(ownTarget) || 0));
 }
 
 // The last medic hand-over's outcome, written by the runner and read by the next lap plan (oceanMedicHerbWant).

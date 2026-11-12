@@ -645,6 +645,13 @@ through a nested shelter order.
   farm loot he carries whether or not the ledger recorded it; a lap departs only when it is worth the road
   (`oceanLapDue`); medic herbs are bought only up to what the medic can take; purchases hold back for bread and the
   desk axe; a desk config with a UTF-8 BOM still reads.
+- `m59-ocean-courier-requests-test.mjs` (11): the Great Ocean courier serves `substrate/courier-requests.json`
+  (2026-11-12, Zoot's mushroom / red / purple request). Item names match whole (`mushroom` is not `red mushroom`); the
+  shortfall is the sum of max(0, target - held) over requesters, an unread pack holding none; Zheng's sale withholds
+  only up to that shortfall (ward parcels too) and is unchanged with no requests; a missing file is no requests, a BOM
+  reads, a file that will not parse is loud and the last good reading stands; a hand-over never passes the target, the
+  giver's keep or what fits; a requester outside 552, or not quiet, is named and handed nothing, and nothing walks; when
+  Zheng holds none, a farmer in 552 gives only above its strategy reserve and its own request, never the singer.
 - `m59-purse-lease-test.mjs` (22): an errand's purse lease (`m59-purse-lease.mjs`). A live lease raises every banking
   float and `bank_above` to its carry and lapses by itself; no keeper part reads `policy.walkingMoney` directly; the
   broker's `purse_lease` and the bank tool's `lease_ms` set it.

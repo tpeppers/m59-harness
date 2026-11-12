@@ -15,7 +15,7 @@ import {
 } from './m59-ocean-courier-cache.mjs';
 import {
   oceanDepartVigor, oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanCourierWaiting, oceanWardReady,
-  oceanWardScan, oceanWardWaiting, script, setOceanTradeGoods,
+  oceanLastRequestHold, oceanWardScan, oceanWardWaiting, script, setOceanTradeGoods,
 } from './fleetscripts/ocean-courier.mjs';
 
 const { agent, holder, room } = OCEAN_COURIER;
@@ -207,7 +207,7 @@ try {
         // minutes. So while nothing in his own pack makes the road worth it, the full plan (ward, desk axes, bread)
         // runs at most every LAP_PLAN_EVERY_MS and he stands in the Ocean taking trade goods in between.
         const pack = await call('inventory', { agent, fresh: true }, 9000).catch(() => null);
-        const quick = pack?.ids_stale === false ? oceanLapDue({ saleValue: oceanSaleValue(oceanTradeGoodsSale(pack, readReceived(agent))),
+        const quick = pack?.ids_stale === false ? oceanLapDue({ saleValue: oceanSaleValue(oceanTradeGoodsSale(pack, readReceived(agent), oceanLastRequestHold() ?? {})),
           fullness: (pack.carry?.load?.bulk ?? 0) / Math.max(1, (pack.carry?.load?.bulk ?? 0) + (pack.carry?.room_for?.bulk ?? 0)) })
           : { go: true };
         if (!why && !stopping && !quick.go && Date.now() - lastPlanAt < LAP_PLAN_EVERY_MS) waiting(quick.why);

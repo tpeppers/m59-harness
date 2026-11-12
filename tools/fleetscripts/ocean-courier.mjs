@@ -16,7 +16,9 @@ import {
   OCEAN_BREAD, OCEAN_COURIER, OCEAN_GEAR_NAMES, OCEAN_SALE_PRICE, OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanDistance,
   oceanEpochKnown, oceanHasProvisionBatch, oceanItemCount, oceanItemName, oceanProvisionRecord, oceanSaveClear,
   oceanTradeGoodsAcceptance, OCEAN_LAP, oceanLapDue, oceanMedicHerbWant, oceanReadJson, oceanSaleValue, readOceanMedicHerbs,
-  oceanTradeGoodsSale, oceanUnitsFit,
+  oceanTradeGoodsSale, oceanUnitsFit, OCEAN_COURIER_KEEP, OCEAN_FARMER_RESERVE, oceanCountMap, oceanCourierRequests,
+  oceanDepartureWithhold, oceanFarmerSurplus, oceanParcelSale,
+  oceanRequestDelivery, oceanRequestsFor, oceanRequestShortfall,
   readOceanGearCargo, readOceanSaleAuthorization, readOceanSaleDeposits, recordOceanGearCargo, retireOceanGearCargo,
   selectOceanGearCargo, selectOceanSalePiles, writeOceanCache,
 } from '../m59-ocean-courier-cache.mjs';
@@ -194,6 +196,8 @@ export function oceanCourierReturnSteps(s, { fleet, server } = {}) {
     report('interrupted lap returned');
     if (fleet && server && selectOceanGearCargo(readOceanGearCargo(fleet), server, home, home).some(item => item.source === 'Raphael'))
       await deliverDedicatedAxes(rpc, fleet, server).catch(error => report('axe delivery deferred', { reason: error.message }));
+    if (fleet) await deliverRequestedReagents(rpc, fleet)
+      .catch(error => report('courier request delivery deferred', { reason: error.message }));
     if (fleet && server && selectOceanGearCargo(readOceanGearCargo(fleet), server, home, home).length)
       await stageSupplies(rpc, { server, purchased: {} }, fleet, { carriedOnly: true });
     return true;
@@ -581,6 +585,16 @@ async function collectDeskSpare(rpc, fleet, plan) {
 // walking to the Toad". Never on the floor: a dedication costs elderberries, an orc tooth and a 30 s trance, and a
 // floor pile in a shared room is anybody's. Each axe is LOOKed again first; the receiver must be quiet and whole; the
 // result is read back from both packs. An axe nobody can take this time stays in Zheng's pack for the next return.
+// A FARMER THAT MAY TAKE PART IN A STATIONARY HAND-OVER IN THE OCEAN: in game in 552 with current ids, at least 90%
+// health, no fight, no movement order, nobody piloting or holding it, the keeper holding work/movement/economy, quiet.
+export function oceanFarmerQuiet(s, pack) {
+  const p = s?.autopilot_status, threat = s?.combat?.personal_threat;
+  return !!(s?.in_game && s.connected && s.ids_stale === false && s.room?.num === room &&
+    s.hp?.max > 0 && s.hp.value >= 0.9 * s.hp.max && !s.combat?.active && !s.movement?.order &&
+    !s.ridealong?.piloted && !s.human_held && ['work', 'movement', 'economy'].every(f => p?.faculties?.[f] === 'keeper') &&
+    threat?.level === 'quiet' && pack?.ids_stale === false && Array.isArray(pack.items));
+}
+
 async function deliverDedicatedAxes(rpc, fleet, server) {
   const body = await waitForBody(rpc, room);
   const pack = await inventory(rpc);
@@ -597,11 +611,8 @@ async function deliverDedicatedAxes(rpc, fleet, server) {
       if (!soundAxe(reading) || reading.class !== 'enchanted') { report('carried axe no longer reads dedicated', { id: axe.id }); break; }
       const [giver, takerPack, taker, carrier] = await Promise.all([
         inventory(rpc), inventory(rpc, to.agent), read(rpc, to.agent), read(rpc, agent)]);
-      const p = taker?.autopilot_status, threat = taker?.combat?.personal_threat;
-      const takerQuiet = taker?.in_game && taker.connected && taker.ids_stale === false && taker.room?.num === room &&
-        taker.hp?.max > 0 && taker.hp.value >= 0.9 * taker.hp.max && !taker.combat?.active && !taker.movement?.order &&
-        !taker.ridealong?.piloted && !taker.human_held && ['work', 'movement', 'economy'].every(f => p?.faculties?.[f] === 'keeper') &&
-        threat?.level === 'quiet' && oceanUnitsFit(takerPack, AXE) >= 1 && takerPack.ids_stale === false &&
+      const p = taker?.autopilot_status;
+      const takerQuiet = oceanFarmerQuiet(taker, takerPack) && oceanUnitsFit(takerPack, AXE) >= 1 &&
         p?.weapon_magic?.wielded?.bypasses_nonmagic !== true && !(p?.weapon_magic?.magic_spares > 0);
       if (!takerQuiet || !oceanCourierReady(carrier, room) || !unchanged(body, carrier) || giver.ids_stale !== false ||
           giver.last_save_at !== body.last_save_at || !giver.items.some(item => item.id === axe.id && knownAxe(item))) continue;
@@ -623,6 +634,138 @@ async function deliverDedicatedAxes(rpc, fleet, server) {
       report('dedicated axe delivered', { id: axe.id, to: to.agent, character: to.character, loaves });
     }
   }
+}
+
+// THE FLEET'S STANDING REQUESTS, SERVED IN THE OCEAN (courier-requests.json; oceanCourierRequests). Operator 2026-11-12:
+// Zoot asked for 100 mushrooms, 100 red and 100 purple (Magic Shield, Free Action) while Zheng sold every red and purple
+// mushroom the farmers handed him. Now, once per lap plan and on every return: a requester standing in 552 gets what Zheng
+// holds above his own working stock, up to its target and what it can carry, by stationary supply read back from both
+// packs; what the requesters in 552 still lack is held back from his sale (oceanTradeGoodsSale's withhold). A requester
+// elsewhere is named and skipped -- he does not walk to it, and holds nothing back for it.
+let lastGoodRequests = null;
+let lastRequestHold = null;
+/** What the requesters in the Ocean lacked at the last reading, or null before the first one (the runner's quick check). */
+export const oceanLastRequestHold = () => lastRequestHold;
+const automatedRow = r => !!r && !r.piloted && !r.human_held && r.activity !== 'NOT IN GAME';
+
+export async function oceanRequestPicture(rpc, fleet) {
+  const reading = oceanCourierRequests(fleet);
+  if (reading.error) report('courier requests unreadable', { error: reading.error,
+    using: lastGoodRequests ? 'the last reading that parsed' : 'no requests' });
+  else lastGoodRequests = reading.requests;
+  if (reading.problems.length) report('courier requests entries ignored', { problems: reading.problems });
+  const requests = reading.error ? (lastGoodRequests ?? {}) : reading.requests;
+  const picture = { requests, here: [], away: [], packs: {}, rows: [], hold: {}, error: reading.error };
+  if (!Object.keys(requests).length) { lastRequestHold = {}; return picture; }
+  const rows = await rpc('fleet', {}, 30000).then(r => r?.fleet).catch(() => null);
+  if (!Array.isArray(rows)) {
+    picture.hold = lastRequestHold ?? {};
+    report('courier requests deferred', { why: 'the fleet board did not answer; keeping the last hold', hold: picture.hold });
+    return picture;
+  }
+  picture.rows = rows;
+  for (const who of Object.keys(requests)) {
+    const row = rows.find(r => r?.agent === who);
+    if (row && Number(row.room_num) === room && automatedRow(row) && who !== holder) picture.here.push(who);
+    else {
+      picture.away.push(who);
+      report('courier request waiting', { agent: who, why: !row ? `${who} is not on the fleet board`
+        : Number(row.room_num) !== room ? `${who} not in ${room}` : `${who} is not an automated farmer here` });
+    }
+  }
+  const packs = await Promise.all(picture.here.map(who => inventory(rpc, who).catch(() => null)));
+  picture.here.forEach((who, i) => {
+    if (packs[i]?.ids_stale === false && Array.isArray(packs[i].items)) picture.packs[who] = packs[i];
+  });
+  picture.hold = oceanRequestShortfall(oceanRequestsFor(requests, picture.here), picture.packs);
+  lastRequestHold = picture.hold;
+  return picture;
+}
+
+// One stationary hand-over of one requested item, judged by both packs (or the supply reply's verified line). Nothing
+// moved and refused = 0; anything else that is not exactly `amount` stops the delivery for inspection.
+async function requestTransfer(rpc, { from, to, giver, taker, item, amount }) {
+  const stack = giver.items.filter(row => matches(row, item) && Number.isSafeInteger(row.id) && row.id > 0)
+    .sort((a, b) => (Number(b.amount) || 1) - (Number(a.amount) || 1))[0];
+  const n = stack ? Math.min(amount, Number(stack.amount) > 0 ? stack.amount : 1) : 0;
+  if (!(n > 0)) return 0;
+  const receipt = await rpc('supply', { from, to, stationary: true, who_travels: 'neither', no_dropoff: true,
+    ids_as_of: giver.ids_as_of, what: [{ id: stack.id, name: item, amount: n }] }, 35000)
+    .catch(error => ({ error: error.message }));
+  const [giverAfter, takerAfter] = await Promise.all([inventory(rpc, from), inventory(rpc, to)]);
+  const sameEpoch = giverAfter?.last_save_at === giver.last_save_at && takerAfter?.last_save_at === taker.last_save_at;
+  const lost = count(giver, item) - count(giverAfter, item), gained = count(takerAfter, item) - count(taker, item);
+  const line = receipt?.amounts?.find(row => matches(row, item));
+  if (sameEpoch && lost === 0 && gained === 0 && receipt?.supplied !== true) {
+    report('courier request refused', { agent: to, item, amount: n, from, reason: receipt?.reason ?? receipt?.error ?? null });
+    return 0;
+  }
+  require(sameEpoch && receipt?.supplied === true && (gained === n || line?.received === n) &&
+    (lost === n || line?.giver_lost === n),
+  `ambiguous request hand-over of ${n} ${item} from ${from} to ${to} (lost ${lost}, gained ${gained}); inspect both packs`);
+  report('courier request delivered', { agent: to, item, amount: n, before: count(taker, item),
+    after: count(takerAfter, item), from });
+  return n;
+}
+
+export async function deliverRequestedReagents(rpc, fleet, picture = null) {
+  picture ??= await oceanRequestPicture(rpc, fleet);
+  if (!picture.here.length) return picture;
+  const body = await waitForBody(rpc, room);
+  // A FARMER'S SURPLUS, when Zheng holds none (plain mushrooms are never in a farmer's sale plan, so they never reach
+  // him): only above the farm strategy's reserve and the farmer's own request, both bodies quiet, never walking.
+  const farmers = picture.rows.filter(r => /^t\d+$/.test(r?.agent ?? '') && r.agent !== holder &&
+    Number(r.room_num) === room && automatedRow(r));
+  const farmerPacks = new Map();
+  const settle = (item, moved) => {
+    if (!(moved > 0) || !picture.hold[item]) return;
+    picture.hold[item] = Math.max(0, picture.hold[item] - moved);
+    if (!picture.hold[item]) delete picture.hold[item];
+  };
+  for (const to of picture.here) {
+    for (const [item, target] of oceanCountMap(picture.requests[to])) {
+      const [giver, takerPack, taker, carrier] = await Promise.all([
+        inventory(rpc), inventory(rpc, to), read(rpc, to), read(rpc, agent)]);
+      if (!oceanCourierReady(carrier, room) || !unchanged(body, carrier) || giver?.ids_stale !== false ||
+          giver.last_save_at !== body.last_save_at) {
+        report('courier request delivery deferred', { why: 'Zheng is not quiet in the Ocean in the same save epoch' });
+        lastRequestHold = picture.hold;
+        return picture;
+      }
+      if (!oceanFarmerQuiet(taker, takerPack)) {
+        report('courier request waiting', { agent: to, why: `${to} is not quiet and keeper-held in ${room}` });
+        break;
+      }
+      const before = count(takerPack, item);
+      if (before >= target) continue;
+      const fromCourier = oceanRequestDelivery({ target, receiverHolds: before, giverHolds: count(giver, item),
+        giverKeep: OCEAN_COURIER_KEEP[item] ?? 0, fits: oceanUnitsFit(takerPack, item) });
+      const moved = fromCourier > 0
+        ? await requestTransfer(rpc, { from: agent, to, giver, taker: takerPack, item, amount: fromCourier }) : 0;
+      settle(item, moved);
+      let remaining = target - before - moved;
+      if (remaining <= 0 || moved > 0 || !Object.hasOwn(OCEAN_FARMER_RESERVE, item)) continue;
+      for (const farmer of farmers) {
+        if (remaining <= 0 || farmer.agent === to) continue;
+        const ownTarget = picture.requests[farmer.agent]?.[item] ?? 0;
+        if (!farmerPacks.has(farmer.agent)) farmerPacks.set(farmer.agent, await inventory(rpc, farmer.agent).catch(() => null));
+        const seen = farmerPacks.get(farmer.agent);
+        if (seen?.ids_stale !== false || oceanFarmerSurplus(seen, item, ownTarget) <= 0) continue;
+        const [gPack, gBody, tPack, tBody] = await Promise.all([
+          inventory(rpc, farmer.agent), read(rpc, farmer.agent), inventory(rpc, to), read(rpc, to)]);
+        if (!oceanFarmerQuiet(gBody, gPack) || !oceanFarmerQuiet(tBody, tPack)) continue;
+        const amount = oceanRequestDelivery({ target, receiverHolds: count(tPack, item),
+          giverHolds: oceanFarmerSurplus(gPack, item, ownTarget), giverKeep: 0, fits: oceanUnitsFit(tPack, item) });
+        if (amount <= 0) continue;
+        const got = await requestTransfer(rpc, { from: farmer.agent, to, giver: gPack, taker: tPack, item, amount });
+        farmerPacks.delete(farmer.agent);
+        settle(item, got);
+        remaining -= got;
+      }
+    }
+  }
+  lastRequestHold = picture.hold;
+  return picture;
 }
 
 // ZHENG'S PURSE GOES TO RAPHAEL (operator 2026-11-11: "when he is in the Limping Toad on a lap ... hand his purse above
@@ -829,6 +972,16 @@ export const script = {
         pack = await inventory(rpc);
         require(pack.ids_stale === false && pack.last_save_at === body.last_save_at, 'courier pack changed epoch during delivery');
       }
+      // STANDING REQUESTS: hand requesters in the Ocean what he holds for them, then hold back what they still lack.
+      const requestPicture = await oceanRequestPicture(rpc, fleet)
+        .catch(error => { report('courier requests deferred', { reason: error.message }); return null; });
+      if (requestPicture?.here.length) {
+        await deliverRequestedReagents(rpc, fleet, requestPicture)
+          .catch(error => report('courier request delivery deferred', { reason: error.message }));
+        pack = await inventory(rpc);
+        require(pack.ids_stale === false && pack.last_save_at === body.last_save_at, 'courier pack changed epoch during request delivery');
+      }
+      plan.requestHold = requestPicture?.hold ?? lastRequestHold ?? {};
       if (oceanBreadPlan(floorCount(bread), count(pack, bread)).stage > 0 || heldGear().some(item => item.source !== 'Raphael')) {
         ({ singer, stock, pack } = await stageSupplies(rpc, plan, fleet, { carriedOnly: true }));
       }
@@ -856,7 +1009,7 @@ export const script = {
         w.class === 'mundane' && w.wielded !== true && !w.broken).length;
       if (plan.axeNeed > deskReady + deskBlanks) plan.wanted[AXE] = 1;
       // THE FARMERS' SALE PILES, handed over as trade goods while Zheng waited in the Ocean.
-      plan.trade = oceanTradeGoodsSale(pack, readReceived(agent));
+      plan.trade = oceanTradeGoodsSale(pack, readReceived(agent), plan.requestHold);
       await collectSale(rpc, fleet, plan);
       const spare = plan.wanted[AXE] > 0 && await oceanReadyDeskSpare(rpc, fleet, pack.last_save_at);
       const saleValue = oceanSaleValue(plan.trade);
@@ -877,7 +1030,9 @@ export const script = {
         const settled = await inventory(rpc);
         require(settled.ids_stale === false && settled.last_save_at === body.last_save_at,
           'courier pack changed save epoch before departure');
-        plan.trade = oceanTradeGoodsSale(settled, readReceived(agent));
+        // A requested item is not sold twice over: its ward parcels only out of what the hold leaves, the trade goods after.
+        plan.sales = oceanParcelSale(settled, plan.sales, plan.requestHold);
+        plan.trade = oceanTradeGoodsSale(settled, readReceived(agent), oceanDepartureWithhold(plan.requestHold, plan.sales));
         await setCorridor(rpc, corridor);
       }
       report('lap plan', { departing: plan.go, why: plan.why, sale_value: saleValue, wanted: plan.wanted, sales: Object.fromEntries(plan.sales),
@@ -938,6 +1093,8 @@ export const script = {
       if (!plan.go) return true;
       await setCorridor(rpc, [room]);
       await bounded('axe delivery', () => deliverDedicatedAxes(rpc, fleet, plan.server));
+      if (!plan.problem) await deliverRequestedReagents(rpc, fleet)
+        .catch(error => report('courier request delivery deferred', { reason: error.message }));
       await stageSupplies(rpc, plan, fleet);
       report('returned', { purchased: plan.purchased, problem: plan.problem });
       return plan.problem ? { ok: false, why: plan.problem } : true;

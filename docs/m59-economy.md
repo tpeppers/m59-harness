@@ -1266,6 +1266,13 @@ default (and first eject) of using spare space for sell-gear 'trade goods'"*. `t
   hold can only name a stack, and 29 elderberries from two fleet-mates held Kermit's whole stack of 167 out of every
   offer for three hours. A capped (`sellReserve`) stackable held because some of it arrived keeps its cap plus the
   arrived amount, and the rest is offered; anything else held stays held.
+- **The Ocean courier serves the standing requests** (`substrate/courier-requests.json`, 2026-11-12). Each lap plan
+  and each return, a requester standing in 552 (automated, quiet) is handed what Zheng holds above his working stock,
+  up to its target and what fits, by stationary `supply` read back from both packs (`deliverRequestedReagents`); when
+  he holds none, a farmer in 552 may give its surplus above the farm strategy's reserve (`OCEAN_FARMER_RESERVE`). What
+  the requesters in 552 still lack is withheld from his sale (`oceanTradeGoodsSale`'s `withhold`, parcels included). A
+  requester elsewhere is logged `courier request waiting` and skipped: nothing walks and nothing is held for it. A file
+  that will not parse is logged every lap and the last reading that parsed stands. `m59-ocean-courier-requests-test.mjs`.
 - **A station passes it on the same way.** It carries `loot_eject: { to: [courier] }`; the courier carries
   `trade_goods` and no `loot_eject`, or goods circulate.
 - **Counted by what left the pack**, by id (`giveItems`), like every gift here: a handshake that moves nothing is not a
