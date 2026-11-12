@@ -2,7 +2,7 @@
 // sold in Marion, and the desk's dedicated axes are handed to the farmers without magic. Offline; fakes only.
 //   node tools/m59-ocean-trade-goods-test.mjs
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -15,7 +15,8 @@ test.after(() => rmSync(dir, { recursive: true, force: true }));
 
 const {
   OCEAN_COURIER_KEEP, oceanSaveClear, oceanSaveEpoch, oceanTradeGoodsAcceptance, oceanTradeGoodsDue, oceanTradeGoodsSale,
-  readOceanGearCargo, recordOceanGearCargo, selectOceanGearCargo,
+  readOceanGearCargo, recordOceanGearCargo, selectOceanGearCargo, OCEAN_LAP, oceanLapDue, oceanSaleValue,
+  oceanMedicHerbWant, oceanMedicOutcome, oceanBuyQuantity, oceanReadJson,
 } = await import('./m59-ocean-courier-cache.mjs');
 const {
   oceanAxeRecipients, oceanCourierReady, oceanCourierWaiting, oceanDeskReady, oceanDeskStockAxes, oceanWardReady,
@@ -84,18 +85,65 @@ test('gear cargo in an unknown epoch is bound to the keeper process and connecti
   assert.deepEqual(selectOceanGearCargo(record, server, zheng({ last_save_at: now }), { ...pack, last_save_at: now }), []);
 });
 
-test('only what farmers handed over is sold, above the courier working stock, never gear or money', () => {
+test('the farm loot Zheng carries is sold above his working stock, ledger or not; never gear, money or keepsakes', () => {
   const pack = { items: [
     { name: 'emerald', amount: 125 }, { name: 'red mushroom', amount: 80 }, { name: 'elderberry', amount: 70 },
     { name: 'shilling', amount: 900 }, { name: 'axe', amount: 0 }, { name: 'diamond', amount: 3 }, { name: 'herb', amount: 20 },
+    { name: 'wand of healing', amount: 0 }, { name: 'Jewel of Froz', amount: 0 }, { name: 'entroot berry', amount: 9 },
   ] };
-  const sale = oceanTradeGoodsSale(pack, { emerald: 125, 'red mushroom': 60, elderberry: 50, shilling: 300, axe: 1,
-    diamond: 10, herb: 40, sapphire: 4 });
-  assert.deepEqual(sale, [
-    { name: 'emerald', amount: 125 }, { name: 'red mushroom', amount: 60 },
-    { name: 'elderberry', amount: 70 - OCEAN_COURIER_KEEP.elderberry }, { name: 'diamond', amount: 3 },
-  ]);
-  assert.deepEqual(oceanTradeGoodsSale(pack, {}), []);
+  const byName = rows => Object.fromEntries(rows.map(row => [row.name, row.amount]));
+  const sale = byName(oceanTradeGoodsSale(pack, { emerald: 125, 'red mushroom': 60, elderberry: 50, shilling: 300, axe: 1,
+    diamond: 10, herb: 40, sapphire: 4, 'entroot berry': 4 }));
+  // red mushroom: all 80 go, not the 60 the ledger knows; entroot only as far as the ledger says farmers gave it.
+  assert.deepEqual(sale, { emerald: 125, 'red mushroom': 80, elderberry: 70 - OCEAN_COURIER_KEEP.elderberry, diamond: 3,
+    'entroot berry': 4 });
+  // 2026-11-12, the live backlog: an empty ledger still sells the farm's loot, never the wand, the jewel or the entroot.
+  assert.deepEqual(byName(oceanTradeGoodsSale(pack, {})), { emerald: 125, 'red mushroom': 80,
+    elderberry: 70 - OCEAN_COURIER_KEEP.elderberry, diamond: 3 });
+});
+
+test('a lap departs only when it is worth the road, and waits in the Ocean otherwise', () => {
+  assert.equal(oceanLapDue({}).go, false);
+  assert.match(oceanLapDue({ saleValue: 120 }).why, /waiting in the Ocean/);
+  assert.equal(oceanLapDue({ parcels: 1 }).go, true);
+  assert.equal(oceanLapDue({ saleValue: OCEAN_LAP.saleValue }).go, true);
+  assert.equal(oceanLapDue({ fullness: 0.6 }).go, true);
+  assert.equal(oceanLapDue({ axeWork: true }).go, true);
+  assert.equal(oceanLapDue({ breadShort: true }).go, true);
+  // The longest wait goes with something to do, never empty-handed.
+  assert.equal(oceanLapDue({ sinceLastMs: OCEAN_LAP.maxWaitMs, saleValue: 50 }).go, false);
+  assert.equal(oceanLapDue({ sinceLastMs: OCEAN_LAP.maxWaitMs, saleValue: 300 }).go, true);
+  assert.equal(oceanLapDue({ sinceLastMs: OCEAN_LAP.maxWaitMs - 1, saleValue: 300 }).go, false);
+  assert.equal(oceanLapDue({ sinceLastMs: OCEAN_LAP.maxWaitMs, provision: true }).go, true);
+  // Morrigan pays 0.7 of the book's estimate.
+  assert.equal(oceanSaleValue([{ name: 'dark angel feather', amount: 4 }], () => 105), 294);
+  assert.ok(oceanSaleValue([{ name: 'red mushroom', amount: 234 }]) >= OCEAN_LAP.saleValue);
+});
+
+test('medic herbs: never more than he can take, nothing after a capacity refusal, capped by the last delivery', () => {
+  assert.equal(oceanMedicHerbWant({ healerHerbs: 100 }), 0);
+  assert.equal(oceanMedicHerbWant({ healerHerbs: 0, carried: 0, fits: 400 }), 180);
+  assert.equal(oceanMedicHerbWant({ healerHerbs: 0, carried: 25, fits: 60 }), 40);
+  assert.equal(oceanMedicHerbWant({ healerHerbs: 0, fits: 400, last: { refused: 'capacity' } }), 0);
+  assert.equal(oceanMedicHerbWant({ healerHerbs: 0, fits: 400, last: { delivered: 84 } }), 84);
+  assert.equal(oceanMedicHerbWant({ healerHerbs: 0, fits: 400, last: { refused: 'other' } }), 180);
+  assert.equal(oceanMedicOutcome({ amount: 88, verified: false,
+    reason: 'the receiver cannot hold it — the server refused the offer on weight or bulk' }).refused, 'capacity');
+  assert.equal(oceanMedicOutcome({ amount: 85, verified: false, reason: 'the offer never reached them' }).refused, 'other');
+  assert.deepEqual({ ...oceanMedicOutcome({ amount: 84, verified: true, now: 5 }) }, { delivered: 84, refused: null, at: 5 });
+});
+
+test('purchases hold back for a higher priority, and desk files may carry a byte-order mark', () => {
+  const pack = { carry: { load: { exact: true }, room_for: { bulk: 2000, weight: 2000 } }, items: [{ name: 'shilling', amount: 2000 }] };
+  const herb = { id: 1, name: 'herb', cost: 20 };
+  const supply = { name: 'herb', limit: 180, price: 20 };
+  assert.equal(oceanBuyQuantity(pack, herb, supply, 180), 80);           // (2000 - 400 reserve) / 20
+  assert.equal(oceanBuyQuantity(pack, herb, supply, 180, 960), 32);      // the Colhorr axe held back
+  const file = join(dir, 'bom.json');
+  writeFileSync(file, '﻿{"exclude":["hk1","hk2"]}');
+  assert.deepEqual(oceanReadJson(file), { exclude: ['hk1', 'hk2'] });
+  const source = readFileSync(new URL('./fleetscripts/ocean-courier.mjs', import.meta.url), 'utf8');
+  assert.match(source, /function readDeskState[\s\S]{0,700}oceanReadJson\(files\.state\)[\s\S]{0,80}oceanReadJson\(files\.conf\)/);
 });
 
 test('a received pile is worth a lap at 500 bulk or a pack 55% full', () => {

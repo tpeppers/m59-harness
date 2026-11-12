@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { dibsFile, itemKey, liveClaims, normalizeBook } from './m59-dibs.mjs';
 import { ledgerDirForRoster, stateFileFor } from './m59-fleetpath.mjs';
 import { ITEM_RARITY, weighItem } from './m59-items.mjs';
+import { estimateItemSellValue } from './m59-item-value.mjs';
 
 export const OCEAN_COURIER = Object.freeze({
   room: 552, agent: 'hk2', name: 'Zheng He', holder: 't3', holderName: 'Statler',
@@ -63,22 +64,88 @@ export function oceanSaveClear(s, margin, now = Date.now()) {
 // WHAT ZHENG SELLS THAT THE FARMERS HANDED HIM. Operator 2026-11-11: "farmers hand their sellable loot to Zheng He,
 // Zheng sells in Marion, money accumulates instead of items occupying packs". The farmers' keepers offer their own
 // farm-town sale plan (lootEject in great-ocean-marion.mjs); Zheng's keeper takes it as trade goods and counts it by
-// name (m59-loot-eject.mjs noteReceived). Only what was RECEIVED is sold, never below the courier's own working stock
-// of what he buys for the ward; gear, money and the cup are never sold.
+// name (m59-loot-eject.mjs noteReceived). Never below the courier's own working stock of what he buys for the ward;
+// gear, money and the cup are never sold.
+//
+// AND HIS OWN SURPLUS OF THE FARM'S LOOT, LEDGER OR NOT (2026-11-12). Zheng stood at 84% with red mushrooms (~234),
+// scales, feathers, gems and 61 elderberries that predate the received ledger, so a sale of "only what was received"
+// sold a bunch of grapes per lap -- and his 30%-free acceptance refused every farmer. OCEAN_COURIER_SELLS is the
+// courier's own sale list: everything of those names above his working stock goes, whoever handed it over. Anything
+// else is sold only up to what the ledger says farmers gave him (his own kit, the cup, wands and vault keepsakes stay).
 export const OCEAN_COURIER_KEEP = Object.freeze({ elderberry: 40, herb: 180,
   [OCEAN_BREAD.name]: OCEAN_BREAD.target + OCEAN_BREAD.reserve });
+export const OCEAN_COURIER_SELLS = Object.freeze(['red mushroom', 'blue mushroom', 'emerald', 'diamond', 'ruby', 'sapphire',
+  'blue dragon scale', 'dark angel feather', 'bunch of grapes', 'elderberry', 'edible mushroom']);
 const NEVER_SOLD = new Set(['shilling', 'axe', 'leather armor', 'chalice of the rain', 'small round shield', 'hammer']);
 export const OCEAN_TRADE_GOODS_DUE = Object.freeze({ bulk: 500, fullness: 0.55 });
 
 export function oceanTradeGoodsSale(pack, received = {}) {
+  const owed = new Map(Object.entries(received ?? {}).map(([raw, n]) => [oceanItemName(raw), Number(n)]));
+  const names = new Set([...owed.keys(), ...OCEAN_COURIER_SELLS]);
   const out = [];
-  for (const [raw, owed] of Object.entries(received ?? {})) {
-    const name = oceanItemName(raw);
-    if (!name || NEVER_SOLD.has(name) || !positive(Number(owed))) continue;
-    const amount = Math.min(Number(owed), oceanItemCount(pack, name) - (OCEAN_COURIER_KEEP[name] ?? 0));
+  for (const name of names) {
+    if (!name || NEVER_SOLD.has(name)) continue;
+    const surplus = oceanItemCount(pack, name) - (OCEAN_COURIER_KEEP[name] ?? 0);
+    const amount = OCEAN_COURIER_SELLS.includes(name) ? surplus : Math.min(owed.get(name) ?? 0, surplus);
     if (positive(amount)) out.push({ name, amount });
   }
   return out;
+}
+
+// WHAT A SALE IS WORTH AT MORRIGAN. The item book's estimate at a normal merchant, times what Morrigan actually paid
+// against it on 2026-11-11 (feathers 75 of 105, blue mushroom 25 of 35, scale 50 of 70, ruby 100 of 140, diamond 50 of
+// 70, emerald 15 of 21, elderberry 10 of 14: 0.7). A planning number only; every sale is still quoted first.
+export const OCEAN_MORRIGAN_RATIO = 0.7;
+export function oceanSaleValue(sale, estimate = name => estimateItemSellValue(name, { quantity: 1 })?.sell_value ?? 0) {
+  return Math.round(sale.reduce((t, row) => t + (Number(estimate(row.name)) || 0) * OCEAN_MORRIGAN_RATIO * row.amount, 0));
+}
+
+// WHEN A LAP IS WORTH THE ROAD (2026-11-12). Every 8 minutes Zheng left with sales {} and a bunch of grapes, so farmers
+// had about a minute between laps to hand him anything, and a refused farmer backs off for five. He now waits in the
+// Ocean taking trade goods until there is a reason: ward parcels, sale value or a full pack, dedicated axes waiting at
+// the desk for farmers who lack magic, bread running low (and affordable), or the longest wait with anything to do.
+export const OCEAN_LAP = Object.freeze({ saleValue: 1500, fullness: 0.55, breadLow: 8, maxWaitMs: 20 * 60_000, minValue: 200 });
+export function oceanLapDue({ parcels = 0, saleValue = 0, fullness = 0, axeWork = false, breadShort = false,
+  provision = false, sinceLastMs = 0 } = {}) {
+  if (parcels > 0) return { go: true, why: 'ward sale parcels to carry' };
+  if (saleValue >= OCEAN_LAP.saleValue) return { go: true, why: `about ${saleValue} shillings to sell` };
+  if (fullness >= OCEAN_LAP.fullness) return { go: true, why: `pack ${Math.round(fullness * 100)}% full` };
+  if (axeWork) return { go: true, why: 'dedicated desk axes for farmers without magic' };
+  if (breadShort) return { go: true, why: 'the ward is short of bread' };
+  if (sinceLastMs >= OCEAN_LAP.maxWaitMs && (saleValue >= OCEAN_LAP.minValue || provision))
+    return { go: true, why: `waited ${Math.round(sinceLastMs / 60_000)} min with work to do` };
+  return { go: false, why: `waiting in the Ocean for trade goods (about ${saleValue} shillings so far)` };
+}
+
+// THE MEDIC'S HERBS, AT MOST WHAT HE CAN TAKE (2026-11-12: 94 and 21 bought on two laps for Loial while every hand-over
+// read "the receiver cannot hold it", and bread then went unbought). The want is capped by the healer's free capacity
+// less what Zheng already carries for him, and by the last hand-over's outcome: a capacity refusal buys nothing until a
+// delivery succeeds; a verified delivery caps the next purchase at that amount.
+export function oceanMedicHerbWant({ healerHerbs = 0, carried = 0, fits = 0, last = null } = {}) {
+  const onHand = healerHerbs + Math.max(0, carried - 5);
+  if (onHand >= 90) return 0;
+  let want = Math.min(180 - onHand, Math.max(0, fits - Math.max(0, carried - 5)));
+  if (last?.refused === 'capacity') return 0;
+  if (positive(last?.delivered)) want = Math.min(want, last.delivered);
+  return Math.max(0, want);
+}
+
+/** A JSON file that may carry a UTF-8 byte-order mark (PowerShell's Out-File/Set-Content -Encoding utf8 writes one). */
+export function oceanReadJson(file) {
+  return JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''));
+}
+
+// The last medic hand-over's outcome, written by the runner and read by the next lap plan (oceanMedicHerbWant).
+export const oceanMedicHerbsFile = fleet => process.env.M59_OCEAN_MEDIC_HERBS_FILE ||
+  join(dirname(dirname(stateFileFor(fleet))), 'scratch', `ocean-medic-herbs-${fleet}.json`);
+export function readOceanMedicHerbs(fleet) {
+  try { return oceanReadJson(oceanMedicHerbsFile(fleet)); } catch { return null; }
+}
+const CAPACITY_REFUSAL = /cannot hold|receiver_full|can't carry|weight or bulk/i;
+/** -> { delivered, refused, at } for a verified amount, or the kind of refusal ('capacity' or 'other'). */
+export function oceanMedicOutcome({ amount, verified, reason, now = Date.now() }) {
+  if (verified) return { delivered: amount, refused: null, at: now };
+  return { delivered: 0, refused: CAPACITY_REFUSAL.test(String(reason ?? '')) ? 'capacity' : 'other', at: now };
 }
 
 // Zheng takes a farmer's sale pile while it leaves 30% of his pack free for the provisions he brings back. The
@@ -276,16 +343,17 @@ export function oceanUnitsFit(pack, name) {
     free.bulk / Math.max(1, unit.bulk))));
 }
 
-export function oceanBuyQuantity(pack, offer, supply, wanted) {
+// `holdBack`: shillings kept for a higher-priority purchase later in the lap (bread > the desk's axe > herbs).
+export function oceanBuyQuantity(pack, offer, supply, wanted, holdBack = 0) {
   const price = Number(offer?.cost ?? offer?.price);
   if (!positive(offer?.id) || oceanItemName(offer.name) !== supply.name || !positive(price) ||
       price > supply.price || !positive(wanted)) return 0;
-  return oceanQuantityAtPrice(pack, supply, wanted, price);
+  return oceanQuantityAtPrice(pack, supply, wanted, price, holdBack);
 }
 
-function oceanQuantityAtPrice(pack, supply, wanted, price) {
+function oceanQuantityAtPrice(pack, supply, wanted, price, holdBack = 0) {
   return Math.max(0, Math.min(wanted, supply.limit, oceanUnitsFit(pack, supply.name),
-    Math.floor((oceanItemCount(pack, 'shilling') - OCEAN_COURIER.reserve) / price)));
+    Math.floor((oceanItemCount(pack, 'shilling') - OCEAN_COURIER.reserve - Math.max(0, holdBack)) / price)));
 }
 
 export function oceanHasProvisionBatch(pack, wanted) {

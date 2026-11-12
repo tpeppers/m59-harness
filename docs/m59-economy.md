@@ -1257,6 +1257,10 @@ default (and first eject) of using spare space for sell-gear 'trade goods'"*. `t
   Ocean keeps 20 sapphires plus 6 for a Bless caster). Both need a sellReserve quantity and a sellOverflow entry.
   Above a 2,000-shilling float the courier hands his purse to Raphael at the Toad (`depositPurseWithDesk`), judged by
   both purses.
+- **A delivered stack is held as an amount under a farm town** (`townHeldBackIds`, 2026-11-12). The received-by-trade
+  hold can only name a stack, and 29 elderberries from two fleet-mates held Kermit's whole stack of 167 out of every
+  offer for three hours. A capped (`sellReserve`) stackable held because some of it arrived keeps its cap plus the
+  arrived amount, and the rest is offered; anything else held stays held.
 - **A station passes it on the same way.** It carries `loot_eject: { to: [courier] }`; the courier carries
   `trade_goods` and no `loot_eject`, or goods circulate.
 - **Counted by what left the pack**, by id (`giveItems`), like every gift here: a handshake that moves nothing is not a

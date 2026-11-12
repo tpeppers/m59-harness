@@ -15,8 +15,8 @@ import { noteGone, readReceived } from '../m59-loot-eject.mjs';
 import {
   OCEAN_BREAD, OCEAN_COURIER, OCEAN_GEAR_NAMES, OCEAN_SALE_PRICE, OCEAN_SHOPS, oceanBreadPlan, oceanBuyQuantity, oceanDistance,
   oceanEpochKnown, oceanHasProvisionBatch, oceanItemCount, oceanItemName, oceanProvisionRecord, oceanSaveClear,
-  oceanTradeGoodsAcceptance,
-  oceanTradeGoodsDue, oceanTradeGoodsSale, oceanUnitsFit,
+  oceanTradeGoodsAcceptance, OCEAN_LAP, oceanLapDue, oceanMedicHerbWant, oceanReadJson, oceanSaleValue, readOceanMedicHerbs,
+  oceanTradeGoodsSale, oceanUnitsFit,
   readOceanGearCargo, readOceanSaleAuthorization, readOceanSaleDeposits, recordOceanGearCargo, retireOceanGearCargo,
   selectOceanGearCargo, selectOceanSalePiles, writeOceanCache,
 } from '../m59-ocean-courier-cache.mjs';
@@ -337,7 +337,7 @@ export async function sellTradeGoods(rpc, keeper, plan, seller, expected) {
   plan.trade = left;
 }
 
-async function buySupplies(rpc, plan, seller, expected, fleet) {
+async function buySupplies(rpc, plan, seller, expected, fleet, holdBack = 0) {
   const wanted = OCEAN_SHOPS[seller].filter(supply => plan.wanted[supply.name] > 0);
   if (!wanted.length) return;
   await waitForBody(rpc, expected, OCEAN_TOWN_VIGOR);
@@ -346,7 +346,7 @@ async function buySupplies(rpc, plan, seller, expected, fleet) {
     const menu = await rpc('shop', { agent, seller: merchantId }, 20000);
     const listing = menu.items?.find(item => matches(item, supply.name));
     const before = await inventory(rpc);
-    const amount = oceanBuyQuantity(before, listing, supply, plan.wanted[supply.name]);
+    const amount = oceanBuyQuantity(before, listing, supply, plan.wanted[supply.name], holdBack);
     if (!amount) { report('purchase deferred', { item: supply.name }); continue; }
     const body = await read(rpc, agent);
     require(oceanCourierReady(body, expected) && body.last_save_at === before.last_save_at,
@@ -378,8 +378,11 @@ function deskFiles(fleet) {
 function readDeskState(fleet) {
   try {
     const files = deskFiles(fleet);
-    const state = JSON.parse(readFileSync(files.state, 'utf8'));
-    const conf = JSON.parse(readFileSync(files.conf, 'utf8'));
+    // A BYTE-ORDER MARK IS NOT A BROKEN FILE. great-ocean.json was rewritten from PowerShell with a UTF-8 BOM on
+    // 2026-11-11 (14:11 local); JSON.parse threw, this answered null, and for five laps every desk-axe path returned
+    // without a word while Raphael held six dedicated axes and seventeen farmers fought without magic.
+    const state = oceanReadJson(files.state);
+    const conf = oceanReadJson(files.conf);
     if (!Array.isArray(state.deskCustody) || !conf || typeof conf !== 'object' || Array.isArray(conf) ||
         (conf.deskSpareIntake !== undefined && !Array.isArray(conf.deskSpareIntake))) return null;
     return { files, state, conf };
@@ -506,13 +509,18 @@ async function moveDeskAxe(rpc, fleet, id, generation, collecting, { stock = fal
 // Collect up to OCEAN_AXES_PER_LAP dedicated axes for the farmers who lack magic (plan.axeNeed, read at the ward):
 // a receipt-bound spare first, then the desk's own stock. The Colhorr spare path (plan.wanted.axe) is unchanged.
 export const OCEAN_AXES_PER_LAP = 3;
+// When the courier last left the Ocean (this process): the longest wait counts from here (OCEAN_LAP.maxWaitMs).
+let lastDeparture = Date.now();
 async function collectDeskSpare(rpc, fleet, plan) {
   const want = Math.min(OCEAN_AXES_PER_LAP, Math.max(plan.axeNeed ?? 0, plan.wanted[AXE] ? 1 : 0));
   for (let collected = 0; collected < want; collected++) {
     const desk = readDeskState(fleet);
-    if (!desk || !quietDesk(desk)) return;
+    if (!desk || !quietDesk(desk)) {
+      report('desk axes not collected', { why: desk ? 'the desk holds a customer weapon or a pending restore' : 'desk state or config unreadable' });
+      return;
+    }
     const raphael = await read(rpc, deskAgent).catch(() => null);
-    if (!oceanDeskReady(raphael)) return;
+    if (!oceanDeskReady(raphael)) { report('desk axes not collected', { why: 'Raphael is not quiet and keeper-held in the Toad' }); return; }
     const spare = oceanDeskSpareCandidate(desk, raphael);
     const candidates = spare ? [{ id: spare.id, generation: spare.generation, stock: false }]
       : oceanDeskStockAxes(raphael).slice(0, 4).map(id => ({ id, generation: raphael.last_save_at, stock: true }));
@@ -521,7 +529,11 @@ async function collectDeskSpare(rpc, fleet, plan) {
       movement = await moveDeskAxe(rpc, fleet, candidate.id, candidate.generation, true, { stock: candidate.stock });
       if (movement) { chosen = candidate; break; }
     }
-    if (!movement) return;
+    if (!movement) {
+      report('desk axes not collected', { why: 'no candidate passed the exact LOOK and stationary hand-over checks',
+        candidates: candidates.map(candidate => candidate.id) });
+      return;
+    }
     const { carrier, receipt } = movement;
     recordOceanGearCargo(fleet, plan.server, carrier, { id: chosen.id, name: AXE, source: 'Raphael', receipt });
     plan.purchased[AXE] = (plan.purchased[AXE] ?? 0) + 1;
@@ -752,7 +764,7 @@ function verifiedGearStock(floor, singer, fleet) {
 
 export const script = {
   name: courierScriptName,
-  describe: 'Zheng He alone takes verified surplus from Statlerâ€™s Ocean ward to Marion and returns with provisions.',
+  describe: 'Zheng He alone takes verified surplus from the Ocean ward of Statler to Marion and returns with provisions.',
   unsafe: { waives: ['fragileBody'], reason: 'The assigned positive-karma courier walks only the verified Marion corridor.' },
   controls: [agent, deskAgent],
   params: { agents: { type: 'agents', required: true } },
@@ -789,9 +801,9 @@ export const script = {
       }
       const gearStock = verifiedGearStock(stock, singer, fleet);
       const stockedGear = [...gearStock, ...heldGear()];
-      const herbsOnHand = count(healer, 'herb') + Math.max(0, count(pack, 'herb') - 5);
       plan.wanted = {
-        herb: herbsOnHand < 90 ? 180 - herbsOnHand : 0,
+        herb: oceanMedicHerbWant({ healerHerbs: count(healer, 'herb'), carried: count(pack, 'herb'),
+          fits: oceanUnitsFit(healer, 'herb'), last: readOceanMedicHerbs(fleet) }),
         elderberry: Math.max(0, 32 - count(singer, 'elderberry') - floorCount('elderberry') - count(pack, 'elderberry')),
         [bread]: oceanBreadPlan(floorCount(bread), count(pack, bread)).wanted,
         axe: stockedGear.some(item => item.name === 'axe') ? 0 : 1,
@@ -803,7 +815,8 @@ export const script = {
         rpc('fleet', {}, 30000).then(r => r?.fleet ?? []).catch(() => [])]);
       const carriedAxes = heldGear().filter(item => item.source === 'Raphael').length;
       plan.axeNeed = Math.max(0, oceanAxeRecipients(rows).length - carriedAxes);
-      const deskReady = oceanDeskStockAxes(raphael).length;
+      const deskState = readDeskState(fleet);
+      const deskReady = deskState && quietDesk(deskState) ? oceanDeskStockAxes(raphael).length : 0;
       const deskBlanks = (raphael?.autopilot_status?.weapon_magic?.weapons ?? []).filter(w => w.name === AXE &&
         w.class === 'mundane' && w.wielded !== true && !w.broken).length;
       if (plan.axeNeed > deskReady + deskBlanks) plan.wanted[AXE] = 1;
@@ -811,8 +824,17 @@ export const script = {
       plan.trade = oceanTradeGoodsSale(pack, readReceived(agent));
       await collectSale(rpc, fleet, plan);
       const spare = plan.wanted[AXE] > 0 && await oceanReadyDeskSpare(rpc, fleet, pack.last_save_at);
-      plan.go = plan.sales.size > 0 || !!spare || (plan.axeNeed > 0 && deskReady > 0) ||
-        oceanTradeGoodsDue(pack, plan.trade) || oceanHasProvisionBatch(pack, plan.wanted);
+      const saleValue = oceanSaleValue(plan.trade);
+      const have = pack.carry?.load?.bulk, free = pack.carry?.room_for?.bulk;
+      const breadStock = floorCount(bread) + count(pack, bread);
+      const due = oceanLapDue({ parcels: plan.sales.size, saleValue,
+        fullness: Number.isFinite(have) && Number.isFinite(free) && have + free > 0 ? have / (have + free) : 0,
+        axeWork: plan.axeNeed > 0 && (deskReady > 0 || !!spare),
+        breadShort: breadStock < OCEAN_LAP.breadLow && (purse(pack) - reserve + saleValue) >= OCEAN_BREAD.target * 120 / 4,
+        provision: oceanHasProvisionBatch(pack, plan.wanted), sinceLastMs: Date.now() - lastDeparture });
+      plan.go = due.go;
+      plan.why = due.why;
+      if (plan.go) lastDeparture = Date.now();
       if (plan.go) {
         // DEPARTING: no more trade goods until he is home (the runner switches them back on), then sell what arrived.
         require(await setOceanTradeGoods(rpc, false), 'trade goods acceptance did not switch off before departure');
@@ -823,7 +845,7 @@ export const script = {
         plan.trade = oceanTradeGoodsSale(settled, readReceived(agent));
         await setCorridor(rpc, corridor);
       }
-      report('lap plan', { departing: plan.go, wanted: plan.wanted, sales: Object.fromEntries(plan.sales),
+      report('lap plan', { departing: plan.go, why: plan.why, sale_value: saleValue, wanted: plan.wanted, sales: Object.fromEntries(plan.sales),
         trade: plan.trade, axe_need: plan.axeNeed, desk_dedicated: deskReady, desk_blanks: deskBlanks });
       return true;
     }, 'verify Zheng and collect only ledger-bound surplus at the ward')];
@@ -838,9 +860,11 @@ export const script = {
     steps.push(verify(async ({ call: rpc, keeper }) => !plan.go || bounded('Toad commerce', async () => {
       await sellParcels(rpc, keeper, plan);
       await sellTradeGoods(rpc, keeper, plan, 'Morrigan', TOAD);
-      await buySupplies(rpc, plan, 'Morrigan', TOAD, fleet);
+      // PRIORITY: bread > the desk's axe > herbs (operator 2026-11-12; five laps bought medic herbs and deferred bread).
       await buySupplies(rpc, plan, 'Tova', TOAD, fleet);
       await collectDeskSpare(rpc, fleet, plan);
+      const axeHold = plan.wanted[AXE] > 0 ? OCEAN_SHOPS.Colhorr.find(supply => supply.name === AXE).price : 0;
+      await buySupplies(rpc, plan, 'Morrigan', TOAD, fleet, axeHold);
       await depositPurseWithDesk(rpc);           // sale proceeds above the float stay with Raphael
       const stock = await inventory(rpc);
       plan.gear = stock.ids_stale === false && (oceanCanVisitSmith(stock, plan.wanted) || plan.trade.length > 0);

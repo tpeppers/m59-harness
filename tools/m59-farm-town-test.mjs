@@ -292,6 +292,19 @@ console.log('\nOcean caps for the courier hand-over (2026-11-11)');
        sells('sapphire', 47 - 26), JSON.stringify(rows.get('sapphire')));
     ok('released vault items are sale stock here: every blue dragon scale and dark angel feather',
        sells('blue dragon scale', 55) && sells('dark angel feather', 6), JSON.stringify(rows.get('blue dragon scale')));
+    // 2026-11-12, Kermit: 29 elderberries handed over by two fleet-mates held his whole stack of 167 out of every offer
+    // (heldBackIds can only name a stack). Under the farm town a capped stack follows its cap; anything else stays held.
+    k.heldBackIds = () => new Set([1, 4]);
+    k.receivedProtection = () => new Map([['elderberry', 29], ['emerald', 5]]);
+    rows = plan();
+    ok('a received capped stack keeps its cap PLUS what arrived, and the rest goes (79 - 30 - 29)',
+       sells('elderberry', 20), JSON.stringify(rows.get('elderberry')));
+    ok('an uncapped received stack is still held out of the offer', rows.get('emerald').blocked === 'held out of the offer by the caller');
+    k.receivedProtection = () => new Map();
+    rows = plan();
+    ok('a capped stack held for any other reason stays held', rows.get('elderberry').blocked === 'held out of the offer by the caller');
+    k.heldBackIds = () => new Set();
+    delete k.receivedProtection;
     c.spells = [{ name: 'zap' }];
     rows = plan();
     ok('a character without Bless keeps 20', sells('sapphire', 27));

@@ -9,7 +9,7 @@
 // the `@part` markers are what it splices on.
 //
 // 18 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
-//   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, townSaleOptions, ownSalePlan, salePlanView,
+//   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, townSaleOptions, townHeldBackIds, townReceivedOnTop, ownSalePlan, salePlanView,
 //   makeSpaceNow, postShoppingPlan,
 //   ensurePurchaseFunds, bankRun, walkingFloat, bankAboveNow, purseLeaseStatus
 import { readBankerLine } from '../m59-bank.mjs';
@@ -23,6 +23,7 @@ import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
 import { farmTownKeep, farmTownMenu, farmTownSaleLoadout, usesOceanCourier } from '../m59-farm-town.mjs';
 import { floorsFor, keptCastsFor, readReserve, reagentKey, reserveFile, resolveReserve } from '../m59-reagent-reserve.mjs';
+import { protectedReceived } from '../m59-received.mjs';
 import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
 import { countsOf, overlayRequests } from '../m59-reagent-autobalance.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -222,6 +223,13 @@ export class ShoppingPart {
       const pvp = floorsFor({ spells, items: {} }, known.length ? known : Object.keys(spells)).get(reagentKey(item)) ?? 0;
       spellFloors.set(item, (town.sellReserve?.[item] ?? 0) + pvp);
     }
+    // RECEIVED, AS AN AMOUNT (townHeldBackIds): a capped stack released from the stack-wide hold keeps what arrived by
+    // trade within the window ON TOP of its cap, so a delivery is still not handed straight back.
+    const arrived = this.townReceivedOnTop(town, c);
+    for (const item of spellFloors.keys()) {
+      const extra = arrived.get(String(item).toLowerCase()) ?? 0;
+      if (extra > 0) spellFloors.set(item, Math.max(spellFloors.get(item) ?? 0, town.sellReserve?.[item] ?? 0) + extra);
+    }
     // RELEASED (town.release): a roster vault/protect name this town sells, because no hall trip leaves from here.
     const released = new Set((town.release ?? []).map(name => String(name).toLowerCase()));
     return {
@@ -230,8 +238,39 @@ export class ShoppingPart {
       loadout: farmTownSaleLoadout(town, this.saleLoadout ? this.saleLoadout() : this.loadout(), spellFloors),
       maxWeapons: this.policy.maxWeapons,
       weaponPriority: this.weaponPriorityNow(),
-      exclude: new Set([...(this.heldBackIds?.() ?? []), ...(this.saleExcludeIds?.() ?? [])]),
+      exclude: new Set([...this.townHeldBackIds(town, c), ...(this.saleExcludeIds?.() ?? [])]),
     };
+  }
+
+  // WHAT A FARM TOWN'S SALE HOLDS BACK. heldBackIds protects what just arrived by trade, and it can only name a STACK:
+  // 29 elderberries handed to Kermit by two fleet-mates held his whole stack of 167 out of every offer for three hours
+  // (prod 2026-11-12, sale_plan "held out of the offer by the caller"), cap or no cap. Under a farm town, a stackable
+  // item the town caps (sellReserve) that is held BECAUSE some of it arrived by trade is released from the stack-wide
+  // hold, and townSaleOptions keeps the arrived amount on top of the cap instead. Weapons, enchanted items, hall cargo,
+  // uncapped stacks and a capped stack held for any other reason stay held exactly as before.
+  townHeldBackIds(town, c = this.s?.client) {
+    const held = this.heldBackIds?.() ?? new Set();
+    const arrived = this.townReceivedOnTop(town, c);
+    if (!arrived.size) return held;
+    const out = new Set();
+    for (const id of held) {
+      const o = (c?.inventory ?? []).find(item => Number(item.id) === Number(id));
+      const name = String(c?.rsc?.get?.(o?.nameRsc) ?? o?.name ?? '').toLowerCase();
+      if (o && Number(o.amount) > 0 && arrived.has(name)) continue;
+      out.add(id);
+    }
+    return out;
+  }
+
+  /** name -> units received by trade within the protection window, for the names this farm town caps. */
+  townReceivedOnTop(town, c = this.s?.client) {
+    const capped = new Set(Object.keys(town?.sellReserve ?? {}).map(name => String(name).toLowerCase()));
+    const out = new Map();
+    if (!capped.size) return out;
+    let received;
+    try { received = this.receivedProtection?.() ?? protectedReceived(this.s?.name ?? ''); } catch { return out; }
+    for (const [name, amount] of received ?? []) if (capped.has(name) && amount > 0) out.set(name, amount);
+    return out;
   }
 
   ownSalePlan() {

@@ -5,11 +5,13 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { call, fleetScript } from './m59-fleetscript.mjs';
 import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
 import { dibsFile } from './m59-dibs.mjs';
+import { readReceived } from './m59-loot-eject.mjs';
 import { farmFoodCacheFile } from './m59-farm-food-cache-record.mjs';
 import { farmGearCacheFile } from './m59-farm-gear-cache-record.mjs';
 import {
-  OCEAN_COURIER, oceanCourierReserveFood, oceanDistance, oceanItemCount, oceanProvisionRecord,
-  oceanSaleWardPath, renewOceanSaleClaims, writeOceanCache,
+  OCEAN_COURIER, oceanCourierReserveFood, oceanDistance, oceanItemCount, oceanLapDue, oceanMedicHerbsFile, oceanMedicOutcome,
+  oceanSaleValue, oceanTradeGoodsSale,
+  oceanProvisionRecord, oceanSaleWardPath, oceanUnitsFit, renewOceanSaleClaims, writeOceanCache,
 } from './m59-ocean-courier-cache.mjs';
 import {
   OCEAN_DEPART_VIGOR, oceanCourierIdentity, oceanCourierReady, oceanCourierReturnSteps, oceanCourierWaiting, oceanWardReady,
@@ -102,6 +104,9 @@ async function maintainWard(server) {
   await refreshManifest(server, ward, seen, 'gear', farmGearCacheFile(fleet));
 }
 
+// A capacity refusal halves the next offer until one is verified (2026-11-12: 88, 87, 85 herbs offered to a Loial who
+// could not hold them, three laps running); the outcome is written for the lap plan, which buys no more than he takes.
+let medicCap = Infinity;
 async function deliverHerbs(carrier) {
   const before = await status(medic);
   const healer = before.autopilot_status;
@@ -113,8 +118,7 @@ async function deliverHerbs(carrier) {
       healer.faculties?.work !== 'keeper' || before.movement?.order || before.combat?.active ||
       carrier.last_save_at !== before.last_save_at || stock >= 165) return;
   const herb = carrier.items.find(item => item.name === 'herb');
-  const amount = Math.min((herb?.amount ?? 0) - reserve, 180 - stock,
-    Math.floor((before.carry?.room_for?.bulk ?? 0) / 4), Math.floor((before.carry?.room_for?.weight ?? 0) / 2));
+  const amount = Math.min((herb?.amount ?? 0) - reserve, 180 - stock, oceanUnitsFit(before, 'herb'), medicCap);
   if (amount < 5) return;
   const receipt = await call('supply', { from: agent, to: medic, stationary: true,
     who_travels: 'neither', no_dropoff: true, ids_as_of: carrier.ids_as_of,
@@ -124,7 +128,10 @@ async function deliverHerbs(carrier) {
     bodyId(sender) === bodyId(carrier) && bodyId(receiver) === bodyId(before) &&
     oceanItemCount(carrier, 'herb') - oceanItemCount(sender, 'herb') === amount &&
     oceanItemCount(receiver, 'herb') >= stock + amount - 3;
-  log('medic supply', { amount, verified, reason: receipt.reason ?? receipt.error ?? null });
+  const outcome = oceanMedicOutcome({ amount, verified, reason: receipt.reason ?? receipt.error ?? null });
+  medicCap = outcome.refused === 'capacity' ? Math.max(5, Math.floor(amount / 2)) : verified ? Infinity : medicCap;
+  try { writeOceanCache(oceanMedicHerbsFile(fleet), outcome); } catch { /* the plan then buys by capacity alone */ }
+  log('medic supply', { amount, verified, reason: receipt.reason ?? receipt.error ?? null, next_cap: medicCap });
 }
 
 let nextMealCheck = 0;
@@ -164,6 +171,8 @@ process.on('SIGTERM', stop);
 // epoch for hours with "courier online" as its only line. A changed reason is logged at once, an unchanged one every
 // ten minutes.
 let waitingWhy = null, waitingAt = 0;
+const LAP_PLAN_EVERY_MS = 5 * 60_000;
+let lastPlanAt = 0;
 function waiting(why) {
   if (why === waitingWhy && Date.now() - waitingAt < 10 * 60_000) return;
   waitingWhy = why;
@@ -194,8 +203,17 @@ try {
         const [carrierNow, singer] = await Promise.all([status(agent), status(holder)]);
         const fresh = await restoreCourierVigor(carrierNow);
         const why = oceanCourierWaiting(fresh, room, OCEAN_DEPART_VIGOR) ?? (oceanWardWaiting(singer) && `ward: ${oceanWardWaiting(singer)}`);
-        if (!why && !stopping) {
+        // A FULL LAP PLAN CLAIMS ZHENG'S FACULTIES, and a farmer whose offer lands in that window backs off for five
+        // minutes. So while nothing in his own pack makes the road worth it, the full plan (ward, desk axes, bread)
+        // runs at most every LAP_PLAN_EVERY_MS and he stands in the Ocean taking trade goods in between.
+        const pack = await call('inventory', { agent, fresh: true }, 9000).catch(() => null);
+        const quick = pack?.ids_stale === false ? oceanLapDue({ saleValue: oceanSaleValue(oceanTradeGoodsSale(pack, readReceived(agent))),
+          fullness: (pack.carry?.load?.bulk ?? 0) / Math.max(1, (pack.carry?.load?.bulk ?? 0) + (pack.carry?.room_for?.bulk ?? 0)) })
+          : { go: true };
+        if (!why && !stopping && !quick.go && Date.now() - lastPlanAt < LAP_PLAN_EVERY_MS) waiting(quick.why);
+        else if (!why && !stopping) {
           waiting(null);
+          lastPlanAt = Date.now();
           const steps = await script.steps({ agent });
           active = true;
           try {
@@ -208,7 +226,7 @@ try {
         } else waiting(why);
       } else {
         waiting(carrier?.autopilot_status?.faculties?.work !== 'keeper' && oceanCourierReady(carrier, room)
-          ? 'a lease holds Zhengâ€™s work faculty' : `Zheng: ${oceanCourierWaiting(carrier, room)}`);
+          ? 'a lease holds the work faculty of Zheng' : `Zheng: ${oceanCourierWaiting(carrier, room)}`);
       }
     } catch (error) {
       log('courier check deferred', { active, reason: error.message });

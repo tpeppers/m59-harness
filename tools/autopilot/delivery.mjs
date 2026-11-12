@@ -507,7 +507,9 @@ export class DeliveryPart {
       : skills.inventorySalePlan(this.s, { keep: MARKET_KEEP, protect: this.protectedItemNames(),
         loadout: this.loadout(), maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
     if (plan?.error) return false;
-    const heldBack = this.heldBackIds?.(c) ?? new Set();
+    // The farm town's own hold-back (townHeldBackIds): a capped stack is not held whole because some of it just arrived.
+    const heldBack = (farmTown && typeof this.townHeldBackIds === 'function' ? this.townHeldBackIds(farmTown, c)
+      : this.heldBackIds?.(c)) ?? new Set();
     const items = (plan?.items ?? []).filter(i => !heldBack.has(Number(i.id)));
     const me = String(this.s.name ?? '');
     const received = cfg.only_received ? readReceived(me) : null;
