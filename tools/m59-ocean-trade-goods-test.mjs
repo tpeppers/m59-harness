@@ -340,3 +340,30 @@ test('a refusal whose pack shows the exact sale is a sale (the 09:36Z ruby), and
   assert.deepEqual(plan.trade, []);                                                // both sold, nothing rides home
   assert.equal(pack.items.find(i => i.name === 'shilling').amount, 500 + 1500 + 400);
 });
+test('a pack that moves during a quote is re-quoted, not a stopped counter (the 09:41Z feather)', async () => {
+  let pack = { ids_stale: false, last_save_at: null, items: [{ id: 1, name: 'shilling', amount: 500 },
+    { id: 8, name: 'dark angel feather', amount: 3 }] };
+  const body = zheng({ room: { num: 202 } });
+  let reads = 0;
+  const rpc = async tool => {
+    if (tool === 'status') return body;
+    if (tool === 'look') return { room: { num: 202 }, objects: [{ id: 99, name: 'Morrigan', can: ['buy'] }] };
+    if (tool === 'inventory') {
+      reads++;
+      // The second read (the post-quote check) sees a late purse update from the previous sale; then it settles.
+      if (reads === 2) return { ...pack, items: [{ id: 1, name: 'shilling', amount: 520 }, ...pack.items.slice(1)] };
+      if (reads >= 3 && pack.items[0].amount === 500) pack = { ...pack, items: [{ id: 1, name: 'shilling', amount: 520 }, ...pack.items.slice(1)] };
+      return pack;
+    }
+    assert.fail(`unexpected ${tool}`);
+  };
+  const keeper = async (op, args) => {
+    if (!args.confirm) return { sold: false, offered_price: 75 * args.item.amount };
+    pack = { ...pack, items: [{ id: 1, name: 'shilling', amount: pack.items[0].amount + args.expected_price }] };
+    return { sold: true };
+  };
+  const plan = { trade: [{ name: 'dark angel feather', amount: 3 }] };
+  await sellTradeGoods(rpc, keeper, plan, 'Morrigan', 202);
+  assert.deepEqual(plan.trade, []);
+  assert.equal(pack.items[0].amount, 520 + 225);
+});

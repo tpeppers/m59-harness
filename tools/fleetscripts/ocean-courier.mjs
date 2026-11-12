@@ -316,7 +316,7 @@ export async function sellTradeGoods(rpc, keeper, plan, seller, expected) {
   const merchantId = await merchant(rpc, seller, expected);
   const left = [];
   for (const row of plan.trade) {
-    let owed = row.amount;
+    let owed = row.amount, requotes = 0;
     while (owed > 0) {
       const before = await inventory(rpc);
       const stack = before.items.filter(item => matches(item, row.name))
@@ -329,10 +329,16 @@ export async function sellTradeGoods(rpc, keeper, plan, seller, expected) {
       const price = Number(quote?.offered_price);
       if (quote?.sold !== false || !Number.isSafeInteger(price) || price <= 0) break;
       const [sameBody, samePack] = await Promise.all([read(rpc, agent), inventory(rpc)]);
-      require(oceanCourierReady(sameBody, expected) && unchanged(body, sameBody) &&
-        before.last_save_at === samePack.last_save_at && purse(before) === purse(samePack) &&
-        samePack.items.some(item => item.id === stack.id && matches(item, row.name) && item.amount === stack.amount),
-      `pack changed during ${row.name} quote`);
+      require(oceanCourierReady(sameBody, expected) && unchanged(body, sameBody), `courier changed during ${row.name} quote`);
+      // A PACK THAT MOVED DURING A QUOTE IS USUALLY THE LAST SALE'S UPDATE LANDING LATE (2026-11-12 09:41Z, a dark angel
+      // feather quote after the previous sale stopped the whole Toad visit). Nothing is confirmed yet, so re-quote after
+      // a moment, twice at most, then leave this row for the next lap.
+      if (!(before.last_save_at === samePack.last_save_at && purse(before) === purse(samePack) &&
+          samePack.items.some(item => item.id === stack.id && matches(item, row.name) && item.amount === stack.amount))) {
+        if (++requotes > 2) { report('trade goods sale skipped', { seller, item: row.name, amount, why: 'pack kept changing during the quote' }); break; }
+        await sleep(2000);
+        continue;
+      }
       const sale = await keeper('sell_one', { ...args, confirm: true, expected_price: price }, 20000);
       // A REFUSAL IS JUDGED BY THE PACK, NOT THE NOTE (2026-11-12). The keeper's own read-back can race the server's
       // inventory update: at 09:36Z a ruby sale came back refused while the ruby had in fact gone and the purse had risen,
