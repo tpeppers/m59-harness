@@ -334,7 +334,17 @@ export async function sellTradeGoods(rpc, keeper, plan, seller, expected) {
         samePack.items.some(item => item.id === stack.id && matches(item, row.name) && item.amount === stack.amount),
       `pack changed during ${row.name} quote`);
       const sale = await keeper('sell_one', { ...args, confirm: true, expected_price: price }, 20000);
-      require(sale?.sold === true, sale?.note ?? `keeper refused ${row.name} sale`);
+      if (sale?.sold !== true) {
+        // A REFUSAL THAT MOVED NOTHING SKIPS THE ITEM, NOT THE COUNTER (2026-11-12: about a third of laps abandoned the
+        // whole Toad visit -- every other sale and the bread -- over one "item changed during the offer" / "sale did
+        // not remove the offered quantity"). Pack and purse both unchanged: nothing changed hands, so the row rides home
+        // for the next lap. Anything else is ambiguous and still stops the visit.
+        const still = await inventory(rpc);
+        require(still.last_save_at === before.last_save_at && count(still, row.name) === count(before, row.name) &&
+          purse(still) === purse(before), `ambiguous ${row.name} sale after a refusal; inspect pack before any repeat`);
+        report('trade goods sale skipped', { seller, item: row.name, amount, why: sale?.note ?? 'keeper refused the sale' });
+        break;
+      }
       const after = await inventory(rpc);
       require(after.last_save_at === before.last_save_at && count(before, row.name) - count(after, row.name) === amount &&
         purse(after) - purse(before) === price, `ambiguous ${row.name} sale; inspect pack before any repeat`);

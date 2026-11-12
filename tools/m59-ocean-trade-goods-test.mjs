@@ -297,3 +297,25 @@ test('Zheng hands his purse above the 2000 float to Raphael in the Toad, judged 
   const partial = fake({ zhengPurse: 5000, deliver: n => ({ lost: n, gained: n - 100 }) });
   await assert.rejects(depositPurseWithDesk(partial.rpc), /ambiguous purse hand-over/);
 });
+
+test('a confirm the keeper refuses with nothing moved skips that item and the counter carries on', async () => {
+  let pack = { ids_stale: false, last_save_at: null, items: [{ id: 1, name: 'shilling', amount: 500 },
+    { id: 5, name: 'blue mushroom', amount: 40 }, { id: 6, name: 'diamond', amount: 4 }] };
+  const body = zheng({ room: { num: 202 } });
+  const rpc = async tool => {
+    if (tool === 'status') return body;
+    if (tool === 'inventory') return pack;
+    if (tool === 'look') return { room: { num: 202 }, objects: [{ id: 99, name: 'Morrigan', can: ['buy'] }] };
+    assert.fail(`unexpected ${tool}`);
+  };
+  const keeper = async (op, args) => {
+    if (!args.confirm) return { sold: false, offered_price: 25 * args.item.amount };
+    if (args.item.id === 5) return { sold: false, note: 'sale did not remove the offered quantity' };   // nothing moved
+    pack = { ...pack, items: [{ id: 1, name: 'shilling', amount: 500 + args.expected_price }, { id: 5, name: 'blue mushroom', amount: 40 }] };
+    return { sold: true };
+  };
+  const plan = { trade: [{ name: 'blue mushroom', amount: 40 }, { name: 'diamond', amount: 4 }] };
+  await sellTradeGoods(rpc, keeper, plan, 'Morrigan', 202);
+  assert.deepEqual(plan.trade, [{ name: 'blue mushroom', amount: 40 }]);          // rides home; the diamonds still sold
+  assert.equal(pack.items.find(i => i.name === 'shilling').amount, 600);
+});
