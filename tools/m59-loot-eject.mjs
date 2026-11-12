@@ -177,6 +177,37 @@ export function noteGone(agent, items = [], dir = RECEIVED_DIR) {
   return c;
 }
 
+/** The room a receiver has left for trade goods after `keepFree`: { bulk, weight }, or null when its pack is not weighed. */
+export function tradeGoodsRoom(cap, keepFree = 0.25) {
+  if (!cap?.known || !cap.load?.exact || !(cap.bulk_max > 0) || !(cap.weight_max > 0)) return null;
+  const limit = 1 - keepFree;
+  return { bulk: Math.max(0, Math.floor(cap.bulk_max * limit - cap.load.bulk)),
+           weight: Math.max(0, Math.floor(cap.weight_max * limit - cap.load.weight)) };
+}
+
+/**
+ * SIZE THE OFFER TO WHAT THE RECEIVER SAID IT HAS ROOM FOR (its published `room`, publishAccepts). Rows in the order
+ * given (best value first), whole while they fit, then the last stack cut to the units that fit; an unweighed row is
+ * left out (the receiver would refuse the whole offer for it). 2026-11-12: with whole stacks offered by amount, one
+ * farmer's eight best rows ran to ~1,300 bulk, and an offer the courier cannot hold is refused whole and backs the
+ * farmer off for five minutes. `share` keeps a margin for a room reading up to 30 s old. -> rows, possibly fewer/smaller.
+ */
+export function fitToRoom(rows, room, { share = 0.9, weigh = weighItem } = {}) {
+  if (!room || !Number.isFinite(room.bulk) || !Number.isFinite(room.weight)) return rows;
+  let bulk = Math.floor(room.bulk * share), weight = Math.floor(room.weight * share);
+  const out = [];
+  for (const r of rows) {
+    const w = weigh(r.name);
+    if (!w) continue;
+    const units = Math.min(r.amount, Math.floor(bulk / Math.max(1, w.bulk)), Math.floor(weight / Math.max(1, w.weight)));
+    if (units <= 0) continue;
+    out.push(units === r.amount ? r : { ...r, amount: units, whole: false });
+    bulk -= units * w.bulk;
+    weight -= units * w.weight;
+  }
+  return out;
+}
+
 /**
  * Does an offer fit, leaving `keepFree` of the pack empty? `cap` is skills.carryCapacity(c).
  * Unknown (no might, or an unweighed item on either side) is NOT a yes: the station's own service needs the room.

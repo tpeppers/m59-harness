@@ -1257,6 +1257,11 @@ default (and first eject) of using spare space for sell-gear 'trade goods'"*. `t
   Ocean keeps 20 sapphires plus 6 for a Bless caster). Both need a sellReserve quantity and a sellOverflow entry.
   Above a 2,000-shilling float the courier hands his purse to Raphael at the Toad (`depositPurseWithDesk`), judged by
   both purses.
+- **A stack is offered by amount, and the offer is sized to the receiver** (2026-11-12). `giveItems` sent whole stacks
+  as bare ids, which the server reads as ONE, so every ejection moved one or two of each kind while Waldorf stood at
+  100% with 120 blue mushrooms. And with real amounts, an offer the receiver cannot hold is refused whole: the receiver
+  now publishes its room for trade goods beside its `trade_goods` record (`publishAccepts ... room`), and the giver cuts
+  its batch to 90% of it (`fitToRoom`), offering nothing while the courier is full.
 - **A delivered stack is held as an amount under a farm town** (`townHeldBackIds`, 2026-11-12). The received-by-trade
   hold can only name a stack, and 29 elderberries from two fleet-mates held Kermit's whole stack of 167 out of every
   offer for three hours. A capped (`sellReserve`) stackable held because some of it arrived keeps its cap plus the

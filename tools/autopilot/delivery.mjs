@@ -19,7 +19,7 @@ import { OF, affordances, buyLines } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
 import { MARKET_KEEP } from '../m59-items.mjs';
 import * as party from '../m59-party.mjs';
-import { BACKOFF_MS, ejectBatch, ejectTarget, normalizeLootEject, noteGone, overflowDrops, readReceived } from '../m59-loot-eject.mjs';
+import { BACKOFF_MS, ejectBatch, ejectTarget, fitToRoom, normalizeLootEject, noteGone, overflowDrops, readReceived } from '../m59-loot-eject.mjs';
 import * as autobalance from '../m59-reagent-autobalance.mjs';
 import { floorDrop, sessionFloorIo, overflowVerdict, readAccepts, readRefusal } from '../m59-floor-cache.mjs';
 import { addStashClaim, dibsFile } from '../m59-dibs.mjs';
@@ -520,8 +520,17 @@ export class DeliveryPart {
     this._ejectBackoff ??= new Map();
     const target = cfg.to.length ? ejectTarget({ present, to: cfg.to, backoff: this._ejectBackoff, now }) : null;
     if (target) {
-      const rows = ejectBatch(items, { batch: cfg.batch, extra: cfg.extra, received, merchant: cfg.merchant });
+      // SIZED TO THE RECEIVER'S PUBLISHED ROOM (fitToRoom): an offer it cannot hold is refused whole and costs a
+      // five-minute back-off; a receiver with no room left is simply not offered anything this time.
+      const accepts = readAccepts(target);
+      const room = accepts?.room && Date.now() - Number(accepts.at) < 120_000 ? accepts.room : null;
+      const rows = fitToRoom(ejectBatch(items, { batch: cfg.batch, extra: cfg.extra, received, merchant: cfg.merchant }), room);
+      if (room && !rows.length && this._ejectFull !== target) {
+        this._ejectFull = target;
+        this.note('loot ejection waits: the courier has no room', { to: target, room });
+      }
       if (rows.length) {
+        this._ejectFull = null;
         this.doing = 'trading';
         const r = await this.giveItems(target, rows);
         if (r.moved.length) {
@@ -602,7 +611,14 @@ export class DeliveryPart {
     if (!them) return { moved: [], why: `${character} is not in the room` };
     const held = id => { const o = (c.inventory || []).find(x => x.id === id); return o ? (o.amount > 0 ? o.amount : 1) : 0; };
     const before = new Map(rows.map(r => [r.id, held(r.id)]));
-    const offers = rows.map(r => (r.whole ? r.id : { id: r.id, amount: r.amount }));
+    // A STACK IS OFFERED BY AMOUNT, WHOLE OR NOT. The server reads "is there a quantity here" from the tag nibble alone,
+    // so a bare id hands over ONE (m59-supply.mjs, "one shilling out of 1,647"). This sent whole stacks as bare ids, and
+    // on prod 2026-11-12 every ejection moved one or two of each kind -- Waldorf's 120 blue mushrooms went one lap at a
+    // time while his pack stood at 100%. A bare id only for a single item (a weapon, armour), which has no amount.
+    const offers = rows.map(r => {
+      const live = (c.inventory || []).find(x => x.id === r.id);
+      return Number(live?.amount) > 0 ? { id: r.id, amount: Math.min(r.amount, live.amount) } : r.id;
+    });
     const at = c.evSeq, offeredAt = Date.now();
     // WHAT THE SERVER SAID about this offer: the capacity sentence is one of the two affirmative 'full' signals.
     const heard = async () => ((await c.waitFor({ since: at, kinds: ['message', 'said'], timeoutMs: 300 }).catch(() => null))?.events ?? [])

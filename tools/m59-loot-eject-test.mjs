@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 process.env.M59_TRADE_GOODS_DIR = mkdtempSync(join(tmpdir(), 'm59-trade-goods-'));
 const { normalizeLootEject, normalizeTradeGoods, ejectTarget, ejectBatch, overflowDrops, tradeGoodsFit, BACKOFF_MS,
-        noteReceived, noteGone, readReceived } = await import('./m59-loot-eject.mjs');
+        noteReceived, noteGone, readReceived, fitToRoom, tradeGoodsRoom } = await import('./m59-loot-eject.mjs');
 
 let pass = 0, fail = 0;
 const ok = (label, cond, detail = '') => {
@@ -109,6 +109,26 @@ ok('refused when it would eat the station\'s reserve, and says how full', over.f
 ok('an unweighed pack is a no', tradeGoodsFit({ offered: [{ name: 'long sword' }], cap: { ...cap, load: { ...cap.load, exact: false } }, weigh: wp }).fits === false);
 ok('an unweighed offer is a no', tradeGoodsFit({ offered: [{ name: 'mystery' }], cap, weigh: wp }).fits === false);
 
+console.log('the offer is sized to the room the receiver published');
+{
+  const weigh = n => ({ 'blue mushroom': { bulk: 5, weight: 2 }, emerald: { bulk: 1, weight: 1 }, 'long sword': { bulk: 75, weight: 80 } })[n] ?? null;
+  const rows = [{ id: 1, name: 'emerald', amount: 76, whole: true }, { id: 2, name: 'blue mushroom', amount: 120, whole: true },
+    { id: 3, name: 'mystery', amount: 4, whole: true }, { id: 4, name: 'long sword', amount: 1, whole: true }];
+  const fit = fitToRoom(rows, { bulk: 400, weight: 2000 }, { weigh, share: 1 });
+  ok('best rows first, the last stack cut to what fits, an unweighed row left out',
+     JSON.stringify(fit) === JSON.stringify([{ id: 1, name: 'emerald', amount: 76, whole: true },
+       { id: 2, name: 'blue mushroom', amount: 64, whole: false }]), JSON.stringify(fit));
+  ok('no published room: the offer is unchanged', fitToRoom(rows, null) === rows);
+  ok('a full receiver is offered nothing', fitToRoom(rows, { bulk: 0, weight: 0 }, { weigh }).length === 0);
+  ok('the room is what keep_free leaves', JSON.stringify(tradeGoodsRoom({ known: true, bulk_max: 2700, weight_max: 2700,
+    load: { exact: true, bulk: 1200, weight: 900 } }, 0.15)) === JSON.stringify({ bulk: 1095, weight: 1395 }));
+  ok('an unweighed pack publishes no room', tradeGoodsRoom({ known: true, load: { exact: false } }, 0.15) === null);
+  const { publishAccepts, readAccepts } = await import('./m59-floor-cache.mjs');
+  const sig = mkdtempSync(join(tmpdir(), 'm59-accepts-'));
+  publishAccepts('Zheng He', { keep_free: 0.15 }, { dir: sig, room: { bulk: 900, weight: 1200 } });
+  ok('the receiver publishes its room beside its trade goods', readAccepts('Zheng He', { dir: sig })?.room?.bulk === 900);
+}
+
 console.log('the hand-over counts what left the pack');
 const { Autopilot } = await import('./m59-autopilot.mjs');
 function fakeKeeper({ counter = true, moves = true } = {}) {
@@ -118,7 +138,7 @@ function fakeKeeper({ counter = true, moves = true } = {}) {
     get evSeq() { return seq; }, inventory: inv, selfId: 99,
     rsc: { get: k => k },
     room: { objects: new Map([[7, { id: 7, nameRsc: 'Loial', flags: 0x80 }]]) },
-    offer: async () => { events.push({ seq: ++seq, kind: counter ? 'countered' : 'trade-ended' }); },
+    offer: async (_to, items) => { c.offered = items; events.push({ seq: ++seq, kind: counter ? 'countered' : 'trade-ended' }); },
     cancelOffer: async () => { c.cancelled = true; },
     acceptOffer: async () => { if (moves) { inv.splice(inv.findIndex(i => i.id === 2), 1); inv.find(i => i.id === 6).amount = 5; }
                                events.push({ seq: ++seq, kind: 'trade-ended' }); },
@@ -143,6 +163,10 @@ function fakeKeeper({ counter = true, moves = true } = {}) {
   f = fakeKeeper();
   r = await f.keeper.giveItems('Loial', rows);
   ok('a receiver not in the room is not offered anything', r.moved.length === 0 && /not in the room/.test(r.why));
+  // 2026-11-12: a whole stack went out as a bare id, which the server reads as ONE, so each ejection moved one of each.
+  f = fakeKeeper(); f.c.room.objects.get(7).flags = OF.PLAYER;
+  await f.keeper.giveItems('Loial', [{ id: 2, name: 'long sword', amount: 1, whole: true }, { id: 6, name: 'ruby', amount: 9, whole: true }]);
+  ok('a whole stack is offered by amount, a single item by bare id', JSON.stringify(f.c.offered) === JSON.stringify([2, { id: 6, amount: 9 }]), JSON.stringify(f.c.offered));
 }
 
 console.log('the bindings');
@@ -158,6 +182,8 @@ console.log('the bindings');
   ok('a station never overflow-drops (it refuses instead)', /cfg\.overflow_at == null \|\| cfg\.only_received/.test(src));
   // 2026-11-11, the Ocean farmers: under a farm town the offer is the farm town's OWN sale plan (its keep list and
   // sellReserve minima), never the generic plan that would hand over every reserved sapphire and the buff mushrooms.
+  ok('ejectLoot sizes its batch to the receiver published room', /fitToRoom\(ejectBatch\(/.test(src) && /readAccepts\(target\)/.test(src));
+  ok('the receiver publishes its trade-goods room', /publishAccepts\(meName, tg, \{ room:/.test(src));
   ok('under a farm town ejectLoot offers ownSalePlan()', /async ejectLoot\(\)[\s\S]{0,1600}townTable\([^)]*\)\.farmTown[\s\S]{0,200}this\.ownSalePlan\(\)/.test(src));
   const { fieldFor } = await import('./m59-strategy-schema.mjs');
   ok('a farm strategy may carry lootEject, under economy', fieldFor('lootEject')?.faculty === 'economy');

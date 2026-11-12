@@ -339,9 +339,12 @@ const writeJson = (file, v) => { mkdirSync(dirname(file), { recursive: true }); 
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
 
 /** The receiver says what it accepts as trade goods (null: nothing). `tradeGoods` is normalizeTradeGoods' answer. */
-export function publishAccepts(receiver, tradeGoods, { dir = SIGNAL_DIR, now = Date.now() } = {}) {
+// `room`: the space this receiver has left for trade goods after its keep_free, { bulk, weight }, so a giver can size
+// its offer instead of being refused whole and backing off (m59-loot-eject.mjs fitToRoom). Null when not weighed.
+export function publishAccepts(receiver, tradeGoods, { dir = SIGNAL_DIR, now = Date.now(), room = null } = {}) {
   const rec = { receiver: String(receiver), at: now,
-                trade_goods: tradeGoods ? { from: tradeGoods.from ?? null, keep_free: tradeGoods.keep_free ?? null } : null };
+                trade_goods: tradeGoods ? { from: tradeGoods.from ?? null, keep_free: tradeGoods.keep_free ?? null } : null,
+                ...(tradeGoods && room ? { room } : {}) };
   writeJson(join(dir, `accepts-${fileKey(receiver)}.json`), rec);
   return rec;
 }

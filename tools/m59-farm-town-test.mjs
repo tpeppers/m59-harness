@@ -324,6 +324,57 @@ console.log('\nOcean caps for the courier hand-over (2026-11-11)');
   }
 }
 
+console.log('\nOcean guild holds released (Waldorf, 2026-11-12)');
+{
+  // Waldorf's pack at 2400/2400 bulk. guildWants on: the guild plan, the fleet stockpile and the chest-sourced rule
+  // name his mushrooms, elderberries, gems, sapphires and entroot, and his sale plan read them all 'protected item'.
+  const town = normalizeFarmTown({ ...MARION,
+    keep: ['herbs', 'orc tooth', 'inky-cap mushroom'],
+    sellReserve: { mushroom: 48, 'red mushroom': 24, elderberry: 30, 'edible mushroom': 40, 'entroot berry': 10,
+      sapphire: 20, 'blue dragon scale': 0, 'dark angel feather': 0, emerald: 0, diamond: 0, ruby: 0 },
+    sellOverflow: ['red mushroom', 'elderberry', 'edible mushroom', 'entroot berry', 'sapphire', 'blue dragon scale',
+      'dark angel feather', 'emerald', 'diamond', 'ruby'],
+    reserveOnTop: ['sapphire'],
+    release: ['blue dragon scale', 'dark angel feather', 'red mushroom', 'elderberry', 'edible mushroom', 'entroot berry',
+      'sapphire', 'emerald', 'diamond', 'ruby'] }, { resolveItem });
+  const directory = mkdtempSync(join(tmpdir(), 'm59-ocean-guild-'));
+  const reserveFile = join(directory, 'reserve.json'), oldReserveFile = process.env.M59_REAGENT_RESERVE_FILE;
+  process.env.M59_REAGENT_RESERVE_FILE = reserveFile;
+  writeFileSync(reserveFile, JSON.stringify({ default: { spells: { bless: 3 }, items: { sapphire: 100000 } } }));
+  configureInterestStore({ enabled: false });
+  const pack = [['elderberry', 77], ['red mushroom', 133], ['edible mushroom', 90], ['emerald', 76], ['diamond', 26],
+    ['blue mushroom', 120], ['entroot berry', 8], ['ruby', 6], ['purple mushroom', 6], ['sapphire', 16],
+    ['blue dragon scale', 13], ['dark angel feather', 1], ['Inky-cap mushroom', 8]];
+  try {
+    const c = { inventory: pack.map(([, amount], i) => ({ id: i + 1, nameRsc: i, amount })),
+      rsc: new Map(pack.map(([name], i) => [i, name])), using: new Set(), spells: [] };
+    const guildHolds = ['elderberry', 'red mushroom', 'edible mushroom', 'emerald', 'diamond', 'entroot berry', 'ruby',
+      'purple mushroom', 'sapphire'];
+    const k = Object.assign(Object.create(Autopilot.prototype), {
+      s: { name: 'fixture', client: c, need: () => c, world: { room: { num: 552 } },
+        reserveWho: { fleet: 'fixture', agent: 'fixture', character: 'Fixture' } },
+      policy: { farmTown: town }, loadout: () => null, weaponPriorityNow: () => [],
+      saleProtectedNames: () => ['dark angel feather', 'Inky-cap mushroom', 'blue dragon scale', 'arrows', ...guildHolds],
+      heldBackIds: () => new Set(), saleExcludeIds: () => new Set(), receivedProtection: () => new Map() });
+    const rows = new Map(k.ownSalePlan().items.map(row => [row.name, row]));
+    const sells = (name, n) => rows.get(name)?.state === 'sell' && rows.get(name).sale_amount === n;
+    ok('released guild holds sell down to their caps: elderberry 47, red mushroom 109, edible mushroom 50',
+       sells('elderberry', 47) && sells('red mushroom', 109) && sells('edible mushroom', 50),
+       JSON.stringify(['elderberry', 'red mushroom', 'edible mushroom'].map(n => rows.get(n))));
+    ok('every emerald, diamond and ruby goes; blue mushrooms, scales and the feather too',
+       sells('emerald', 76) && sells('diamond', 26) && sells('ruby', 6) && sells('blue mushroom', 120) &&
+       sells('blue dragon scale', 13) && sells('dark angel feather', 1));
+    ok('sapphires under 20 + the Bless floor, entroot under its cap, and the unreleased purple mushroom and inky-caps stay',
+       rows.get('sapphire').state !== 'sell' && rows.get('entroot berry').state !== 'sell' &&
+       rows.get('purple mushroom').blocked === 'protected item' && rows.get('Inky-cap mushroom').state !== 'sell');
+  } finally {
+    if (oldReserveFile === undefined) delete process.env.M59_REAGENT_RESERVE_FILE;
+    else process.env.M59_REAGENT_RESERVE_FILE = oldReserveFile;
+    unlinkSync(reserveFile);
+    rmdirSync(directory);
+  }
+}
+
 console.log('\nselling without a banking threshold');
 {
   const limited = normalizeFarmTown({ ...MARION, sellReserve: { mushroom: 48 },

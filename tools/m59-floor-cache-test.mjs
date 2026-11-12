@@ -321,7 +321,8 @@ section('AFFIRMATIVE ONLY: LOOT EJECTION NEEDS "WILLING" AND "FULL"');
   FC.publishAccepts('Zheng He', null, { dir });
   ok('a receiver that stops taking trade goods says so: no drop', !V({ accepts: FC.readAccepts('Zheng He', { dir }), refusal: FC.readRefusal('Zheng He', 'Piggy', { dir }), giver: 'Piggy', since }).drop);
   const so = src('autopilot/social.mjs');
-  ok('receiver: publishes its trade_goods every 30 s from acceptDonations', /publishAccepts\(meName, tg\)/.test(so));
+  ok('receiver: publishes its trade_goods (and its room for them) every 30 s from acceptDonations',
+     /publishAccepts\(meName, tg[,)]/.test(so));
   ok('receiver: only a weighed over-full trade-goods refusal is kind capacity; unweighed is not',
      /refuse\(`no room for trade goods: \$\{fit\.why\}`, fit\.after != null \? 'capacity' : 'unweighed'/.test(so));
   ok('receiver: every other refusal defaults to not_accepting, recorded before the cancel',

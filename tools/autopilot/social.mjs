@@ -26,7 +26,7 @@ import { OF, dropSpec } from '../m59-parse.mjs';
 import { KOCATAN_SMITHY, gateClearPlan, gateStation } from '../m59-kocatan-gate.mjs';
 import * as party from '../m59-party.mjs';
 import { GATE_LIMITS, KOCATAN_VAULT, POOL_OF_VIGOR, POOL_DRINK_SAID, inPool, jungleStashPlan, jungleItemClassifier } from '../m59-island-chalice.mjs';
-import { normalizeTradeGoods, noteReceived, tradeGoodsFit } from '../m59-loot-eject.mjs';
+import { normalizeTradeGoods, noteReceived, tradeGoodsFit, tradeGoodsRoom } from '../m59-loot-eject.mjs';
 import { publishAccepts, noteRefusal } from '../m59-floor-cache.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
@@ -515,7 +515,7 @@ export class SocialPart {
     if (meName && Date.now() - (this._acceptsAt ?? 0) >= 30_000) {
       this._acceptsAt = Date.now();
       let tg = null; try { tg = normalizeTradeGoods(cfg.trade_goods); } catch { tg = null; }
-      try { publishAccepts(meName, tg); } catch {}
+      try { publishAccepts(meName, tg, { room: tg ? tradeGoodsRoom(skills.carryCapacity(c), tg.keep_free) : null }); } catch {}
     }
     const t = c?.trade;
     if (!t || t.role !== 'recipient') return;              // nobody is offering us anything
