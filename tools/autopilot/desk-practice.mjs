@@ -230,7 +230,7 @@ export class DeskPracticePart {
                                   keep: this.chaliceReagentFloor() });
     const mana = ignoreMana && v?.mana?.max > 0 ? { value: v.mana.max, max: v.mana.max } : v?.mana;
     const choice = choosePractice({ practice: one, spells, mana, reserve, now,
-                                    karma: c.stat?.('karma'),
+                                    karma: c.stat?.('karma'), cursedWorn: this.cursedWornCount?.() ?? null,
                                     have: (item) => this.reagentOnHand(item),
                                     refusedUntil: this._practiceRefused ?? new Map() });
     if (!ignoreMana) this.practiceSessionState = { at: now, entry: entry.name, room: entry.room, why: choice.why };
@@ -315,7 +315,7 @@ export class DeskPracticePart {
     // SHORT OF A REAGENT A COUNTER IN THIS ROOM SELLS: BUY IT HERE (buy_here), then practise from the next pass.
     if (!session && cfg.buy_here && await this.practiceBuyHere(cfg, spells, reserve, now)) return true;
     const choice = choosePractice({ practice: cfg, spells, mana: v?.mana, reserve, now, vigor: v?.vigor?.value ?? null,
-                                    karma: c.stat?.('karma'),
+                                    karma: c.stat?.('karma'), cursedWorn: this.cursedWornCount?.() ?? null,
                                     have: (item) => this.reagentOnHand(item),
                                     refusedUntil: this._practiceRefused });
     this.practiceState = { at: now, reserve: reserve.mana, reserve_why: reserve.why,

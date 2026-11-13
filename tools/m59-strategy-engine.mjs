@@ -693,7 +693,10 @@ export class FarmStrategyEngine {
     const req = this.host.s?.joints?.effects?.request;
     if (typeof req !== 'function') return { ...out, error: 'no service board in this process' };
     try {
-      req({ service, target: this.agentName(), from: this.agentName(), room: this.host.s?.world?.room?.num ?? null,
+      // `character` beside the agent slot: a desk finds its customer in the ROOM, where only the character's name is
+      // visible (m59-uncurse-service.mjs uncurseCustomers).
+      req({ service, target: this.agentName(), from: this.agentName(), character: this.host.s?.client?.me?.name ?? null,
+        room: this.host.s?.world?.room?.num ?? null,
         why, pak: `strategy:${this.assigned}`, joint: 'farm.escalation', ttl_ms: ttlMin * 60_000 });
       this.requestedAt = now;
       return { ...out, posted_at: now };

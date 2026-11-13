@@ -40,6 +40,7 @@ import { identifiedAs } from './m59-item-signature.mjs';
 import { normalizeMagicFor } from './m59-magic-for.mjs';
 import { normalizeFarmTown, usesOceanCourier } from './m59-farm-town.mjs';
 import { normalizeTravelHunt } from './m59-travel-hunt.mjs';
+import { normalizeUncurseDesk, normalizeRewearCursed } from './m59-uncurse-service.mjs';
 import { normalizeCookFood } from './m59-cook-food.mjs';
 import {exactDrop,executeExactDrop} from './m59-inventory-drop.mjs';
 import {declaredJumpMoveOptions,prepareDeclaredJump} from './m59-jump-takeoff.mjs';
@@ -12780,6 +12781,13 @@ const TOOLS = [
       mollusk_cover_recovery: { type: 'boolean', description: 'In 552 only, allow a healthy farmer to keep a verified wall ' +
         'when every visible caster is a mollusk and its rock throw cannot reach the wall. Default off' },
       never_attack: { type: 'boolean', description: 'Disallow physical attacks and known offensive casts or items for this character in every room. Keeps support and survival available. Default off' },
+      uncurse_desk: { type: ['object', 'null'], description: 'A REMOVE-CURSE DESK (m59-uncurse-service.mjs): { enabled: true, room, ' +
+        'reserve, cooldown_ms } or null. While this character stands in `room` able to cast remove curse (spell, karma 20, 9 mana, ' +
+        'an emerald over its floor plus `reserve`) it publishes an uncurse-only service-board record -- which opens farmers\' ' +
+        'loot_unrevealed_weapons "desk" -- and casts remove curse on fleet-mates here who post an uncurse request. Default null (off)' },
+      rewear_cursed: { type: ['array', 'null'], items: { type: 'string' }, description: 'Cursed items this character wears ON PURPOSE ' +
+        '(e.g. ["amulet of shadows"] for remove curse practice): after a remove curse takes one off, the keeper puts it back on at ' +
+        'the next safe moment, and a remove-curse practice cast on self is made only while one is worn. Rings are refused. Default null' },
       cook_food: { description: 'COOK FROM THE ROAD (m59-cook-food.mjs): true | false | { first, reserveCasts }. Cast create food ' +
         'from carried elderberry and herbs before eating carried food while below the vigor ceiling. Default off' },
       second_wind_farming: { description: 'SECOND WIND FARMING (m59-second-wind.mjs): "off" (default), "auto", "on"/true, "off"/false, or ' +
@@ -13894,6 +13902,14 @@ const TOOLS = [
       if (a.mollusk_cover_recovery !== undefined)
         p.policy.molluskCoverRecovery = a.mollusk_cover_recovery === true;
       if (a.never_attack !== undefined) p.policy.neverAttack = a.never_attack === true;
+      if (a.uncurse_desk !== undefined) {
+        try { p.policy.uncurseDesk = normalizeUncurseDesk(a.uncurse_desk); }
+        catch (e) { return { started: false, reason: `uncurse_desk refused: ${e.message}`, note: 'nothing was changed' }; }
+      }
+      if (a.rewear_cursed !== undefined) {
+        try { p.policy.rewearCursed = normalizeRewearCursed(a.rewear_cursed); }
+        catch (e) { return { started: false, reason: `rewear_cursed refused: ${e.message}`, note: 'nothing was changed' }; }
+      }
       if (a.cook_food !== undefined) {
         try { p.policy.cookFood = normalizeCookFood(a.cook_food); }
         catch (e) { return { started: false, reason: `cook_food refused: ${e.message}`, note: 'nothing was changed' }; }

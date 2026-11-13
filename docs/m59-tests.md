@@ -142,6 +142,22 @@ strategy answering, no unidentified ring is ever picked up. The gate needs remov
 A worn amulet does not shut the gate, and is put back on after the cast.
 A worn cursed ring is uncursed before it is dropped, never dropped while worn.
 
+`m59-uncurse-service-test.mjs` (60) pins the non-chalice remove-curse desk and the amulet re-wear
+(`policy.uncurseDesk`, `policy.rewearCursed`; m59-uncurse-service.mjs; operator 2026-11-13, the Great Ocean
+desks). The desk record is `ok` only while the body can cast in its room (spell, karma 20, 9 mana, an emerald
+over its floor and reserve) and is republished `ok: false` at once when it cannot; a fresh record from a
+NON-holder opens the farmers' `lootUnrevealedWeapons: 'desk'` gate; `uncurse` and `remove curse` are one
+service on the board (asked in either spelling, refreshed rather than doubled); the desk casts on the oldest
+asker standing in its room, leaves a request the other desk claimed, and closes what it served; a chalice
+holder's own desk record is never overwritten; a farmer asks only for a curse it did not choose and only with a
+desk in its room; an Amulet of Shadows named in `rewearCursed` goes back on after a remove curse, nothing
+unlisted does; and a remove-curse practice cast on self is chosen only while something cursed is worn.
+
+`m59-hall-courier-test.mjs` (8) pins `fleetscripts/hall-courier.mjs`: cargo is the farm town's hall-bound
+weapon rule (unidentified or magic, single, not worn) or named substrings, and never an Amulet of Shadows;
+farmers are those actually in the courier's room, never piloted or absent; a hand-over is believed only off
+the courier's pack; the deposit goes BY ID so the courier's own gear stays; nothing carried walks nowhere.
+
 `m59-unrevealed-weapons-test.mjs` (63) pins `policy.lootUnrevealedWeapons`: a cursed weapon wields itself
 on pickup (item.kod:508-514). Unset loots an unidentified weapon exactly as before; `never` refuses it;
 `desk` refuses it unless a fresh service-board desk lists uncurse ok (stale, not-ok, unreadable: refused);

@@ -401,7 +401,7 @@ export function deskReserve({ practice = PRACTICE_DEFAULTS, services = [], known
  */
 export function choosePractice({ practice, spells = [], mana = null, have = () => 0,
                                  reserve, refusedUntil = new Map(), now = 0, vigor = null, karma = null,
-                                 catalogue = loadCatalogue() } = {}) {
+                                 cursedWorn = null, catalogue = loadCatalogue() } = {}) {
   if (!practice) return { cast: null, why: 'practice is off', blocked: 'off' };
   if (!(mana && Number.isFinite(mana.value)))
     return { cast: null, why: 'mana is unreadable, so the reserve cannot be honoured', blocked: 'unreadable' };
@@ -433,6 +433,13 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
     // one is practised as before.
     if (Number(s.ability) >= 99) { tried.push(`${want.name}: at ${s.ability}, nothing left to learn`); continue; }
     if ((refusedUntil.get(want.name) ?? 0) > now) { tried.push(`${want.name}: refused recently`); continue; }
+    // REMOVE CURSE ON SELF NEEDS A CURSE TO REMOVE. remcurse.kod CanPayCosts refuses a target with nothing cursed worn
+    // (RemoveCurse_bad_target), so the drill would only set the spell aside. A trainee wears an Amulet of Shadows for it,
+    // and the keeper puts it back on after each cast (policy.rewearCursed; operator, 2026-11-13). `cursedWorn` is how many
+    // cursed items are worn now; null (unread) practises as before.
+    if (want.name === 'remove curse' && (want.target ?? 'self') === 'self' && cursedWorn != null && !(Number(cursedWorn) > 0)) {
+      tried.push(`${want.name}: nothing cursed is worn to practise on`); continue;
+    }
     // A FLEET-MATE SPELL SPENDS THE CASTER'S OWN VIGOR (relay): only with min_vigor to spare.
     if (want.target === 'fleetmate' && !(Number(vigor) >= (want.min_vigor ?? 150))) {
       tried.push(`${want.name}: vigor ${vigor ?? '?'} under the ${want.min_vigor ?? 150} it may give from`); continue;

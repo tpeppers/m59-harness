@@ -82,6 +82,9 @@ export class StatusPart {
       // WHETHER AN UNIDENTIFIED WEAPON IS PICKED UP THIS PASS (policy.lootUnrevealedWeapons), and why:
       // the mode, the verdict, the remove-curse desk it rests on, and a policy value it refused.
       unrevealed_weapons: this.unrevealedWeaponStatus?.() ?? null,
+      // A REMOVE-CURSE DESK (policy.uncurseDesk, m59-uncurse-service.mjs): whether it can cast here now, why not, and how
+      // many curses it has lifted. Null when this character is not a desk.
+      uncurse_desk: this.uncurseDeskStatus?.() ?? null,
       // THE FARMING STRATEGY: which file, applied or yielded per key, what it shadows, its hooks.
       // Null when none is assigned. And WHO SET EACH KEY, whichever writer it was.
       farm_strategy: this.farmStrategyStatus(),

@@ -889,6 +889,24 @@ and every refusal are in `tools/m59-curse-cycle.mjs`, which cites the kod for ea
 `node tools/m59-curse-cycle-test.mjs` (52) pins the gate, the one-ring rule, the amulet refusal, the
 wiring into `lootFloor`, `passOnce` and the hall run, and the stage itself against a stub body.
 
+### A remove-curse desk without the chalice, and the amulet that goes back on
+
+Operator, 2026-11-13: Pepe and Sweetums, karma-locked Shal'ille casters who never attack, stand in the Great
+Ocean (552) as remove-curse desks so its farmers may loot unidentified weapons again. Two autopilot settings
+(`m59-uncurse-service.mjs`, the keeper half in `autopilot/curse-cycle.mjs`):
+
+- **`uncurse_desk: { enabled: true, room: 552, reserve, cooldown_ms }`** publishes an uncurse-only record on the
+  service board (the chalice desk's shape) -- `ok` only while the body can cast there, `ok: false` the moment it
+  cannot -- which is what `loot_unrevealed_weapons: "desk"` waits for. A farmer wearing a curse it did not choose
+  posts `uncurse` on the request board (`tools/rpg/requests.mjs`, where `uncurse` and `remove curse` are now one
+  service) while a desk offers in its room, and the desk casts Remove Curse on it through the keeper's own cast
+  path. A chalice holder never runs one (its own desk already offers uncurse).
+- **`rewear_cursed: ["amulet of shadows"]`** puts the named cursed item back on after a remove curse took it off
+  (remcurse.kod unuses it and leaves it cursed), so `practice_spells` with `{ name: "remove curse", target: "self" }`
+  always has something to practise on; that practice is chosen only while something cursed is worn.
+
+Carrying what the farmers then loot is `fleetscripts/hall-courier.mjs` (`hall-courier agents=t2 from=room`).
+
 ## Standing orders: one-time tasks for the next town stop
 
 `tools/m59-standing-orders.mjs`. An order in `substrate/town-orders.json` (private, it names

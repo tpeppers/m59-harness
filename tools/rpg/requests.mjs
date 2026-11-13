@@ -6,7 +6,7 @@
 // any pak can RUN a desk without knowing who asked.
 //
 //   substrate/requests-<fleet>.jsonl, append-only, one row per event:
-//     { ev: 'request', id, service, target, from, room, at, ttl_ms, why, pak }
+//     { ev: 'request', id, service, target, from, room, at, ttl_ms, why, pak, character? }
 //     { ev: 'claim',   id, by, at }      a provider is on it (a claim lapses after CLAIM_MS)
 //     { ev: 'done',    id, by, at, outcome }
 //     { ev: 'cancel',  id, by, at, why }
@@ -21,6 +21,13 @@ import { appendFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+
+// ONE SERVICE, SEVERAL SPELLINGS. The farm strategy engine asks for `uncurse` (the chalice desk's word, m59-chalice.mjs
+// DESK_SERVICES), while the joints and the private service desks ask for `remove curse` (the spell's own name). A desk
+// that read one board for one spelling never saw the other's customers (operator, 2026-11-13: the Great Ocean
+// remove-curse desks). So a service is compared by its KEY, and a request keeps the spelling its asker wrote.
+export const SERVICE_ALIASES = Object.freeze({ 'remove curse': 'uncurse', remcurse: 'uncurse', 'remove-curse': 'uncurse' });
+export const serviceKey = s => { const k = String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' '); return SERVICE_ALIASES[k] ?? k; };
 
 const SUBSTRATE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'substrate');
 export const CLAIM_MS = 60_000;
@@ -55,12 +62,13 @@ export function board({ fleet = null, file = requestsFile(fleet), now = Date.now
 }
 
 export function openRequests({ service = null, fleet = null, file, now = Date.now(), unclaimed = false } = {}) {
-  return board({ fleet, file, now }).filter(q => q.state === 'open' && (!service || q.service === service)
+  return board({ fleet, file, now }).filter(q => q.state === 'open' && (!service || serviceKey(q.service) === serviceKey(service))
     && (!unclaimed || !q.claimed_by));
 }
 
 /** Ask for a service. Returns the request (refreshed if one was already open). */
 export function postRequest({ service, target = null, from = null, room = null, ttl_ms = 5 * 60_000, why = null, pak = null,
+                              character = null,
                               fleet = null, file = requestsFile(fleet), now = Date.now() } = {}) {
   if (!service) throw new Error('a request names a service');
   const same = openRequests({ service, file, now }).find(q => String(q.target ?? '').toLowerCase() === String(target ?? '').toLowerCase());
@@ -69,7 +77,8 @@ export function postRequest({ service, target = null, from = null, room = null, 
     appendFileSync(file, JSON.stringify({ ev: 'refresh', id: same.id, at: now, ttl_ms }) + '\n');
     return { ...same, at: now, ttl_ms, refreshed: true };
   }
-  const row = { ev: 'request', id: randomUUID(), service: String(service).toLowerCase(), target, from, room, at: now, ttl_ms, why, pak };
+  const row = { ev: 'request', id: randomUUID(), service: String(service).toLowerCase(), target, from, room, at: now, ttl_ms, why, pak,
+                ...(character ? { character } : {}) };
   appendFileSync(file, JSON.stringify(row) + '\n');
   return { ...row, state: 'open' };
 }
