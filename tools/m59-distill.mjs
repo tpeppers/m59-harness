@@ -442,7 +442,13 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
   };
 
   const decisions = [];
-  const sorted = [...characters].sort((a, b) => String(a.agent).localeCompare(String(b.agent)));
+  // AWAY SLOTS GO TO WHOEVER HAS WAITED LONGEST. Decided in alphabetical order, the greedy grant gave both slots to
+  // t1..t4 every pass and Bunsen (t5) waited for herbs through five passes in a row (2026-11-13). So characters are
+  // considered oldest-last-road-trip first (never = first); the decisions are still reported alphabetically.
+  const lastRoad = new Map();
+  for (const h of history) if (h.phase === 'start' && h.action?.road) lastRoad.set(h.agent, Math.max(lastRoad.get(h.agent) ?? 0, h.at ?? 0));
+  const sorted = [...characters].sort((a, b) => (lastRoad.get(a.agent) ?? 0) - (lastRoad.get(b.agent) ?? 0)
+    || String(a.agent).localeCompare(String(b.agent)));
   for (const o of sorted) {
     const d = { agent: o.agent, character: o.character, action: null, why: null, notes: [], proposals: [] };
     decisions.push(d);
@@ -650,6 +656,7 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
     }
     if (!d.why) d.why = d.notes.length ? 'nothing actionable this pass' : 'nothing to do: the plan has no gap this pass';
   }
+  decisions.sort((x, y) => String(x.agent).localeCompare(String(y.agent)));
   return { decisions, away: { now: awayNow, granted: awayGranted, limit: c.away_limit, home: c.home } };
 }
 

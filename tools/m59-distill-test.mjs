@@ -537,3 +537,19 @@ console.log(`\n${n} passed`);
   if (!/needs keeper handoff: light reads null/.test(n)) { console.log('FAIL a null-level spell must be named for a handoff: ' + n); process.exitCode = 1; }
   else console.log('ok - null-level spell named for a keeper handoff');
 }
+
+// Away slots go to whoever waited longest: with one slot, the character whose last road trip is older gets it.
+{
+  const { decide } = await import('./m59-distill.mjs');
+  const now = Date.parse('2026-11-13T12:00:00Z');
+  const ch = a => ({ agent: a, character: a, in_game: true, in_roster: true, room: 153, hp: 50, hp_max: 50, pack: [], spells: [],
+    learning: { planned: { configured: true, active: [], next: { kind: 'spell', name: 'haste', price: 10, level: 2, expected_buyable: true,
+      teacher: { name: 'T', room: 371 } } } }, policy: {}, purse: 5000 });
+  const history = [{ phase: 'start', agent: 't1', kind: 'learn', key: 'x', at: now - 60_000, action: { road: true } },
+                   { phase: 'outcome', agent: 't1', kind: 'learn', key: 'x', ok: false, at: now - 59_000 }];
+  const out = decide({ characters: [ch('t1'), ch('t5')], config: { home: 153, away_limit: 1 }, data: {}, history, now });
+  const got = Object.fromEntries(out.decisions.map(x => [x.agent, x.action?.kind ?? null]));
+  if (out.decisions[0].agent !== 't1') { console.log('FAIL decisions must still be reported alphabetically'); process.exitCode = 1; }
+  else if (got.t5 !== 'learn' || got.t1 === 'learn') { console.log('FAIL the slot must go to the longer-waiting t5: ' + JSON.stringify(got)); process.exitCode = 1; }
+  else console.log('ok - away slot goes to the longest-waiting character');
+}
