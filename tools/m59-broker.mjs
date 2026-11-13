@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { rawIntellect } from './m59-learners.mjs';
 import { isVaultmanName, vaultsSaid, isBankerLine } from './m59-vaults.mjs';
 import {renderArrivals} from './m59-arrivals-page.mjs';
 import {movementRegionSpec} from './m59-movement-region.mjs';
@@ -893,13 +894,23 @@ function learningViewCached(c) {
   return view;
 }
 
+// THE INTELLECT PlayerCanLearn READS, NOT THE ONE THE STATUS BAR SHOWS. The Princess' army shield adds up to +5 to the
+// displayed intellect (prinshld.kod) and the server's learn check reads raw piIntellect, so a planner fed the displayed
+// value promises abilities the teacher then refuses (2026-11-13: Pepe spiritual hammer, Piggy scimitar wielding --
+// wasted trips). rawIntellect (m59-learners.mjs) takes the bonus back out; unreadable equipment leaves it as it was.
+function learnIntellect(c) {
+  let equipped = [];
+  try { const e = c.equipment?.(); if (e && e.known !== false) equipped = e.equipped ?? []; } catch { /* unread */ }
+  return rawIntellect({ intellect: c.stat('intellect'), equipment: equipped });
+}
+
 function learningView(c) {
   if (!learningCatalogue || !c?.me?.name) return null;
   const known = cachedLearningRows(c);
   const plan = loadoutFor(c.me.name)?.plan ?? null;
   const args = {
     known, catalogue: learningCatalogue.abilities,
-    intellect: c.stat('intellect'), karma: c.stat('karma'),
+    intellect: learnIntellect(c), karma: c.stat('karma'),
     constants: learningCatalogue.constants,
   };
   const progress = PointsToNextLevelOfTarget({ ...args, plan });
@@ -16047,7 +16058,7 @@ const TOOLS = [
 
       const result = RemainingRequiredToLearnNewSkills({
         known, catalogue: learningCatalogue.abilities,
-        intellect: c.stat('intellect'), karma: c.stat('karma'),
+        intellect: learnIntellect(c), karma: c.stat('karma'),
         constants: learningCatalogue.constants,
         kind: a.kind || 'both', name: targetName,
       });
