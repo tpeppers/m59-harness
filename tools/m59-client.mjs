@@ -277,6 +277,9 @@ function keepaliveClock(source = SYSTEM_KEEPALIVE_CLOCK) {
   });
 }
 
+// How long after our accept, with nothing from the server, a trade counts as over (see acceptOffer).
+export const ACCEPT_SETTLE_MS = 15_000;
+
 export class M59Client {
   constructor({
     host = '127.0.0.1', port = 5959, verbose = true, resources = null,
@@ -1355,7 +1358,27 @@ export class M59Client {
     this.send(BP.REQ_OFFER, u32(id), encodeIdList([].concat(items)));
   }
   counterOffer(items = []) { this.send(BP.REQ_COUNTEROFFER, encodeIdList([].concat(items))); }
-  acceptOffer()         { this.send(BP.ACCEPT_OFFER); }
+  // THE ACCEPTING SIDE IS TOLD NOTHING ON SUCCESS (OFFER_CANCELED goes to the other side), so without this the trade
+  // stayed open in this client for ever: make_space refused "a trade is open" on Kermit and Bunsen (2026-11-13) with
+  // no trade anywhere. A failed accept is still closed by the server's OFFER_CANCELED; a quiet one is closed here.
+  acceptOffer() {
+    this.send(BP.ACCEPT_OFFER);
+    if (!this.trade) return;
+    const stamp = Date.now(), rev = this.tradeRevision;
+    this.trade = { ...this.trade, acceptedAt: stamp };
+    const t = setTimeout(() => this.settleAccepted(rev), ACCEPT_SETTLE_MS);
+    t.unref?.();
+  }
+  /** Close a trade we accepted that the server never closed for us (it does not, on success). */
+  settleAccepted(rev) {
+    if (!this.trade?.acceptedAt || this.tradeRevision !== rev) return;
+    const was = this.trade;
+    if (was.withName) this.lastTradeWith = { name: was.withName, at: Date.now() };
+    this.tradeRevision++;
+    this.trade = null;
+    this.pendingOfferTo = null;
+    this.emit('trade-ended', { was, note: 'accepted; the server tells the accepting side nothing on success' });
+  }
   cancelOffer()         { this.send(BP.CANCEL_OFFER); }
 
   // BP_USERCOMMAND is a second dispatch table (sprocket.c usercommand_def_table):
