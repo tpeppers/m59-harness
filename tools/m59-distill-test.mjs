@@ -485,3 +485,15 @@ function node(args, env) {
 }
 
 console.log(`\n${n} passed`);
+
+// 2026-11-13: in a creature-free room a fleet-mate drill target becomes self, and a target change is a different drill.
+{
+  const mod = await import('./m59-distill.mjs');
+  const same = mod.sameDrill;
+  const live = { enabled: true, rooms: [153], mana_floor: 0, spells: [{ name: 'free action', target: 'fleetmate' }] };
+  const want = { enabled: true, rooms: [153], mana_floor: 0, spells: [{ name: 'free action', target: 'self' }] };
+  if (same(live, want) !== false) { console.log('FAIL a fleet-mate -> self target change must count as a different drill'); process.exitCode = 1; }
+  else console.log('ok - a target change is a different drill');
+  if (same(want, want) !== true) { console.log('FAIL identical drills must be the same'); process.exitCode = 1; }
+  else console.log('ok - identical drills are the same');
+}

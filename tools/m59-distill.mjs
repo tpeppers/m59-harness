@@ -299,6 +299,10 @@ const SAME_DRILL = (live, want) => {
   const names = p => new Set((p?.spells ?? []).map(e => lc(e?.name ?? e)));
   const a = names(live), b = names(want);
   if (a.size !== b.size || [...b].some(n => !a.has(n))) return false;
+  // The TARGET is part of the drill: a fleet-mate entry and a self entry of one spell are different drills.
+  const targets = p => new Map((p?.spells ?? []).map(e => [lc(e?.name ?? e), e?.target ?? null]));
+  const ta = targets(live), tb = targets(want);
+  if ([...tb].some(([n, t]) => (ta.get(n) ?? null) !== t)) return false;
   if (Number(live.mana_floor ?? live.manaFloor ?? 0) !== Number(want.mana_floor ?? 0)) return false;
   const rooms = p => JSON.stringify([...(p?.rooms ?? [])].map(Number).sort((x, y) => x - y));
   return rooms(live) === rooms(want);
@@ -360,7 +364,11 @@ export function practiceFor(o, c, catalogue, { creatures = true } = {}) {
   });
   if (!plan.ok) return { ...plan, gated };
   // Creature entries last (and in a creature-less room there are none: planPractice left them undrillable).
-  const spells = [...plan.practice.spells.filter(e => !isCreatureEntry(e)), ...plan.practice.spells.filter(isCreatureEntry)];
+  let spells = [...plan.practice.spells.filter(e => !isCreatureEntry(e)), ...plan.practice.spells.filter(isCreatureEntry)];
+  // IN A CREATURE-FREE ROOM (an inn) A FLEET-MATE TARGET IS REFUSED: measured 2026-11-13 at the Cibilo Creek Inn,
+  // Zoot's free action on fleet-mates was refused 91 of 91, then 17 completed / 10 failed rolls of 28 on himself.
+  // So there the drill casts on self.
+  if (!creatures) spells = spells.map(e => (e && typeof e === 'object' && e.target === 'fleetmate') ? { ...e, target: 'self' } : e);
   const order = spells.map(e => lc(e?.name ?? e));
   // The floor: never above max mana less the dearest listed spell; 0 where there is nothing to fight.
   const cost = n => plan.spells.find(s => lc(s.name) === n)?.mana ?? 0;
