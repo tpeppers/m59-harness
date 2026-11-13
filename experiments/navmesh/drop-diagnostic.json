@@ -1,0 +1,2657 @@
+{
+  "schema": "m59-single-drop-diagnostic/1",
+  "created_at": "2026-11-13T00:30:06.008Z",
+  "room": 2505,
+  "caveat": "One directed link is fitted using a known native route. Diagnostic explains a representation gap; it is not unbiased benchmark improvement.",
+  "config": {
+    "cs": 0.0625,
+    "ch": 0.03125,
+    "walkableHeight": 24,
+    "walkableClimb": 12,
+    "walkableRadius": 4,
+    "walkableSlopeAngle": 89,
+    "minRegionArea": 0,
+    "mergeRegionArea": 0,
+    "maxSimplificationError": 0.5,
+    "maxEdgeLen": 128,
+    "maxVertsPerPoly": 6,
+    "detailSampleDist": 6,
+    "detailSampleMaxError": 1
+  },
+  "from": {
+    "x": 59904,
+    "y": 5632
+  },
+  "goal": {
+    "x": 1536,
+    "y": 73216
+  },
+  "reference": {
+    "proof": {
+      "valid": true,
+      "checks": 2352,
+      "distance_squares": 263.5391052433937,
+      "wire_points": 2353
+    },
+    "waypoints": 1937,
+    "drops": [
+      {
+        "index": 1068,
+        "from": {
+          "x": 65152,
+          "y": 26624,
+          "f": 15040
+        },
+        "to": {
+          "x": 65024,
+          "y": 26496,
+          "f": 12391
+        },
+        "from_floor": 15040,
+        "to_floor": 12391,
+        "drop": 2649
+      }
+    ]
+  },
+  "baseline": {
+    "found": false,
+    "reason": "partial_mesh_path",
+    "last_ref": 13917,
+    "goal_ref": 14630,
+    "corridor_polys": 402,
+    "build_ms": 836.2285,
+    "attachment": null
+  },
+  "closed_baseline": {
+    "found": false,
+    "reason": "partial_mesh_path",
+    "last_ref": 8338,
+    "goal_ref": 14628,
+    "corridor_polys": 2,
+    "build_ms": 681.2458999999999,
+    "attachment": null
+  },
+  "trials": [
+    {
+      "before": 0,
+      "after": 0,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 63.625,
+          "y": 14.6875,
+          "z": 26
+        },
+        "endPosition": {
+          "x": 63.5,
+          "y": 12.1005859375,
+          "z": 25.875
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 2,
+        "distance_squares": 0.1767766952966369,
+        "wire_points": 3
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 682.2272000000003,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9846,
+            "nearestPoint": {
+              "x": 63.81201171875,
+              "y": 14.71875,
+              "z": 26
+            },
+            "isOverPoly": false
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9920,
+            "nearestPoint": {
+              "x": 63.43701171875,
+              "y": 12.125,
+              "z": 25.749536514282227
+            },
+            "isOverPoly": false
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9846,
+            "polys": 252
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9846,
+            "end_ref": 9920,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9920,
+            "end_ref": 14630,
+            "polys": 461
+          }
+        }
+      },
+      "closed_control": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 8338,
+        "goal_ref": 14628,
+        "corridor_polys": 2,
+        "build_ms": 681.9522999999999,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9844,
+            "nearestPoint": {
+              "x": 63.81201171875,
+              "y": 14.71875,
+              "z": 26
+            },
+            "isOverPoly": false
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9918,
+            "nearestPoint": {
+              "x": 63.43701171875,
+              "y": 12.125,
+              "z": 25.749536514282227
+            },
+            "isOverPoly": false
+          },
+          "approach": {
+            "complete": false,
+            "start_ref": 8346,
+            "end_ref": 9844,
+            "polys": 4
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9844,
+            "end_ref": 9918,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9918,
+            "end_ref": 14628,
+            "polys": 461
+          }
+        }
+      }
+    },
+    {
+      "before": 0,
+      "after": 0,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 63.625,
+          "y": 14.6875,
+          "z": 26
+        },
+        "endPosition": {
+          "x": 63.5,
+          "y": 12.1005859375,
+          "z": 25.875
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 2,
+        "distance_squares": 0.1767766952966369,
+        "wire_points": 3
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 649.3892999999998,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9846,
+            "nearestPoint": {
+              "x": 63.81201171875,
+              "y": 14.71875,
+              "z": 26
+            },
+            "isOverPoly": false
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9920,
+            "nearestPoint": {
+              "x": 63.43701171875,
+              "y": 12.125,
+              "z": 25.749536514282227
+            },
+            "isOverPoly": false
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9846,
+            "polys": 252
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9846,
+            "end_ref": 9920,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9920,
+            "end_ref": 14630,
+            "polys": 461
+          }
+        }
+      }
+    },
+    {
+      "before": 0,
+      "after": 2,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 63.625,
+          "y": 14.6875,
+          "z": 26
+        },
+        "endPosition": {
+          "x": 63.25,
+          "y": 12.1005859375,
+          "z": 25.625
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 5,
+        "distance_squares": 0.5303300858899107,
+        "wire_points": 6
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 633.0128999999997,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9846,
+            "nearestPoint": {
+              "x": 63.81201171875,
+              "y": 14.71875,
+              "z": 26
+            },
+            "isOverPoly": false
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9917,
+            "nearestPoint": {
+              "x": 63.25,
+              "y": 12.125,
+              "z": 25.625
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9846,
+            "polys": 252
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9846,
+            "end_ref": 9917,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9917,
+            "end_ref": 14630,
+            "polys": 463
+          }
+        }
+      }
+    },
+    {
+      "before": 0,
+      "after": 2,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 63.625,
+          "y": 14.6875,
+          "z": 26
+        },
+        "endPosition": {
+          "x": 63.25,
+          "y": 12.1005859375,
+          "z": 25.625
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 5,
+        "distance_squares": 0.5303300858899107,
+        "wire_points": 6
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 677.5565000000006,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9846,
+            "nearestPoint": {
+              "x": 63.81201171875,
+              "y": 14.71875,
+              "z": 26
+            },
+            "isOverPoly": false
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9917,
+            "nearestPoint": {
+              "x": 63.25,
+              "y": 12.125,
+              "z": 25.625
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9846,
+            "polys": 252
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9846,
+            "end_ref": 9917,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9917,
+            "end_ref": 14630,
+            "polys": 463
+          }
+        }
+      }
+    },
+    {
+      "before": 0,
+      "after": 4,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 63.625,
+          "y": 14.6875,
+          "z": 26
+        },
+        "endPosition": {
+          "x": 63,
+          "y": 12.1005859375,
+          "z": 25.375
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 8,
+        "distance_squares": 0.8838834764831844,
+        "wire_points": 9
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 678.6034999999993,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9846,
+            "nearestPoint": {
+              "x": 63.81201171875,
+              "y": 14.71875,
+              "z": 26
+            },
+            "isOverPoly": false
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 63,
+              "y": 12.125,
+              "z": 25.375
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9846,
+            "polys": 252
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9846,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 0,
+      "after": 4,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 63.625,
+          "y": 14.6875,
+          "z": 26
+        },
+        "endPosition": {
+          "x": 63,
+          "y": 12.1005859375,
+          "z": 25.375
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 8,
+        "distance_squares": 0.8838834764831844,
+        "wire_points": 9
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 651.1660000000002,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9846,
+            "nearestPoint": {
+              "x": 63.81201171875,
+              "y": 14.71875,
+              "z": 26
+            },
+            "isOverPoly": false
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 63,
+              "y": 12.125,
+              "z": 25.375
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9846,
+            "polys": 252
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9846,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 0,
+      "after": 8,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 63.625,
+          "y": 14.6875,
+          "z": 26
+        },
+        "endPosition": {
+          "x": 62.5,
+          "y": 12.1005859375,
+          "z": 24.875
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 13,
+        "distance_squares": 1.590990257669732,
+        "wire_points": 14
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 612.6351999999997,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9846,
+            "nearestPoint": {
+              "x": 63.81201171875,
+              "y": 14.71875,
+              "z": 26
+            },
+            "isOverPoly": false
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 62.5,
+              "y": 12.125,
+              "z": 24.875
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9846,
+            "polys": 252
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9846,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 0,
+      "after": 8,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 63.625,
+          "y": 14.6875,
+          "z": 26
+        },
+        "endPosition": {
+          "x": 62.5,
+          "y": 12.1005859375,
+          "z": 24.875
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 13,
+        "distance_squares": 1.590990257669732,
+        "wire_points": 14
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 625.4588000000003,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9846,
+            "nearestPoint": {
+              "x": 63.81201171875,
+              "y": 14.71875,
+              "z": 26
+            },
+            "isOverPoly": false
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 62.5,
+              "y": 12.125,
+              "z": 24.875
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9846,
+            "polys": 252
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9846,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 2,
+      "after": 0,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 63.875,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.5,
+          "y": 12.1005859375,
+          "z": 25.875
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 5,
+        "distance_squares": 0.5303300858899107,
+        "wire_points": 6
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 621.6738000000005,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9847,
+            "nearestPoint": {
+              "x": 63.875,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9920,
+            "nearestPoint": {
+              "x": 63.43701171875,
+              "y": 12.125,
+              "z": 25.749536514282227
+            },
+            "isOverPoly": false
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9847,
+            "polys": 251
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9847,
+            "end_ref": 9920,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9920,
+            "end_ref": 14630,
+            "polys": 461
+          }
+        }
+      }
+    },
+    {
+      "before": 2,
+      "after": 0,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 63.875,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.5,
+          "y": 12.1005859375,
+          "z": 25.875
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 5,
+        "distance_squares": 0.5303300858899107,
+        "wire_points": 6
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 626.6257000000005,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9847,
+            "nearestPoint": {
+              "x": 63.875,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9920,
+            "nearestPoint": {
+              "x": 63.43701171875,
+              "y": 12.125,
+              "z": 25.749536514282227
+            },
+            "isOverPoly": false
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9847,
+            "polys": 251
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9847,
+            "end_ref": 9920,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9920,
+            "end_ref": 14630,
+            "polys": 461
+          }
+        }
+      }
+    },
+    {
+      "before": 2,
+      "after": 2,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 63.875,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.25,
+          "y": 12.1005859375,
+          "z": 25.625
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 8,
+        "distance_squares": 0.8838834764831844,
+        "wire_points": 9
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 674.300299999999,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9847,
+            "nearestPoint": {
+              "x": 63.875,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9917,
+            "nearestPoint": {
+              "x": 63.25,
+              "y": 12.125,
+              "z": 25.625
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9847,
+            "polys": 251
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9847,
+            "end_ref": 9917,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9917,
+            "end_ref": 14630,
+            "polys": 463
+          }
+        }
+      }
+    },
+    {
+      "before": 2,
+      "after": 2,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 63.875,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.25,
+          "y": 12.1005859375,
+          "z": 25.625
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 8,
+        "distance_squares": 0.8838834764831844,
+        "wire_points": 9
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 697.5030000000006,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9847,
+            "nearestPoint": {
+              "x": 63.875,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9917,
+            "nearestPoint": {
+              "x": 63.25,
+              "y": 12.125,
+              "z": 25.625
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9847,
+            "polys": 251
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9847,
+            "end_ref": 9917,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9917,
+            "end_ref": 14630,
+            "polys": 463
+          }
+        }
+      }
+    },
+    {
+      "before": 2,
+      "after": 4,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 63.875,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63,
+          "y": 12.1005859375,
+          "z": 25.375
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 10,
+        "distance_squares": 1.2374368670764582,
+        "wire_points": 11
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 658.8633000000009,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9847,
+            "nearestPoint": {
+              "x": 63.875,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 63,
+              "y": 12.125,
+              "z": 25.375
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9847,
+            "polys": 251
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9847,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 2,
+      "after": 4,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 63.875,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63,
+          "y": 12.1005859375,
+          "z": 25.375
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 10,
+        "distance_squares": 1.2374368670764582,
+        "wire_points": 11
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 620.2964000000011,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9847,
+            "nearestPoint": {
+              "x": 63.875,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 63,
+              "y": 12.125,
+              "z": 25.375
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9847,
+            "polys": 251
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9847,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 2,
+      "after": 8,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 63.875,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 62.5,
+          "y": 12.1005859375,
+          "z": 24.875
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 16,
+        "distance_squares": 1.9445436482630056,
+        "wire_points": 17
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 682.3194000000003,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9847,
+            "nearestPoint": {
+              "x": 63.875,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 62.5,
+              "y": 12.125,
+              "z": 24.875
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9847,
+            "polys": 251
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9847,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 2,
+      "after": 8,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 63.875,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 62.5,
+          "y": 12.1005859375,
+          "z": 24.875
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 16,
+        "distance_squares": 1.9445436482630056,
+        "wire_points": 17
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 692.9376999999986,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9847,
+            "nearestPoint": {
+              "x": 63.875,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 62.5,
+              "y": 12.125,
+              "z": 24.875
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9847,
+            "polys": 251
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9847,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 4,
+      "after": 0,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 64.125,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.5,
+          "y": 12.1005859375,
+          "z": 25.875
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 6,
+        "distance_squares": 0.7292380639851587,
+        "wire_points": 7
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 636.2928999999986,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.125,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9920,
+            "nearestPoint": {
+              "x": 63.43701171875,
+              "y": 12.125,
+              "z": 25.749536514282227
+            },
+            "isOverPoly": false
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9920,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9920,
+            "end_ref": 14630,
+            "polys": 461
+          }
+        }
+      }
+    },
+    {
+      "before": 4,
+      "after": 0,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 64.125,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.5,
+          "y": 12.1005859375,
+          "z": 25.875
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 6,
+        "distance_squares": 0.7292380639851587,
+        "wire_points": 7
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 604.8575000000001,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.125,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9920,
+            "nearestPoint": {
+              "x": 63.43701171875,
+              "y": 12.125,
+              "z": 25.749536514282227
+            },
+            "isOverPoly": false
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9920,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9920,
+            "end_ref": 14630,
+            "polys": 461
+          }
+        }
+      }
+    },
+    {
+      "before": 4,
+      "after": 2,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 64.125,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.25,
+          "y": 12.1005859375,
+          "z": 25.625
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 9,
+        "distance_squares": 1.0781065914532446,
+        "wire_points": 10
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 635.3662000000004,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.125,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9917,
+            "nearestPoint": {
+              "x": 63.25,
+              "y": 12.125,
+              "z": 25.625
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9917,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9917,
+            "end_ref": 14630,
+            "polys": 463
+          }
+        }
+      }
+    },
+    {
+      "before": 4,
+      "after": 2,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 64.125,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.25,
+          "y": 12.1005859375,
+          "z": 25.625
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 9,
+        "distance_squares": 1.0781065914532446,
+        "wire_points": 10
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 638.4124000000011,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.125,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9917,
+            "nearestPoint": {
+              "x": 63.25,
+              "y": 12.125,
+              "z": 25.625
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9917,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9917,
+            "end_ref": 14630,
+            "polys": 463
+          }
+        }
+      }
+    },
+    {
+      "before": 4,
+      "after": 4,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 64.125,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63,
+          "y": 12.1005859375,
+          "z": 25.375
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 12,
+        "distance_squares": 1.4269751189213307,
+        "wire_points": 13
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 718.9744999999984,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.125,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 63,
+              "y": 12.125,
+              "z": 25.375
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 4,
+      "after": 4,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 64.125,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63,
+          "y": 12.1005859375,
+          "z": 25.375
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 12,
+        "distance_squares": 1.4269751189213307,
+        "wire_points": 13
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 623.2535000000025,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.125,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 63,
+              "y": 12.125,
+              "z": 25.375
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 4,
+      "after": 8,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 64.125,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 62.5,
+          "y": 12.1005859375,
+          "z": 24.875
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 18,
+        "distance_squares": 2.1317105071905895,
+        "wire_points": 19
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 646.5161000000007,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.125,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 62.5,
+              "y": 12.125,
+              "z": 24.875
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 4,
+      "after": 8,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 64.125,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 62.5,
+          "y": 12.1005859375,
+          "z": 24.875
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 18,
+        "distance_squares": 2.1317105071905895,
+        "wire_points": 19
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 612.6859000000004,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.125,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 62.5,
+              "y": 12.125,
+              "z": 24.875
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 8,
+      "after": 0,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 64.625,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.5,
+          "y": 12.1005859375,
+          "z": 25.875
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 10,
+        "distance_squares": 1.1886867887976307,
+        "wire_points": 11
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 637.2101000000002,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.625,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9920,
+            "nearestPoint": {
+              "x": 63.43701171875,
+              "y": 12.125,
+              "z": 25.749536514282227
+            },
+            "isOverPoly": false
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9920,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9920,
+            "end_ref": 14630,
+            "polys": 461
+          }
+        }
+      }
+    },
+    {
+      "before": 8,
+      "after": 0,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 64.625,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.5,
+          "y": 12.1005859375,
+          "z": 25.875
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 10,
+        "distance_squares": 1.1886867887976307,
+        "wire_points": 11
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 629.7556000000004,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.625,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9920,
+            "nearestPoint": {
+              "x": 63.43701171875,
+              "y": 12.125,
+              "z": 25.749536514282227
+            },
+            "isOverPoly": false
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9920,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9920,
+            "end_ref": 14630,
+            "polys": 461
+          }
+        }
+      }
+    },
+    {
+      "before": 8,
+      "after": 2,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 64.625,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.25,
+          "y": 12.1005859375,
+          "z": 25.625
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 13,
+        "distance_squares": 1.5122693980400908,
+        "wire_points": 14
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 662.8796000000002,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.625,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9917,
+            "nearestPoint": {
+              "x": 63.25,
+              "y": 12.125,
+              "z": 25.625
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9917,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9917,
+            "end_ref": 14630,
+            "polys": 463
+          }
+        }
+      }
+    },
+    {
+      "before": 8,
+      "after": 2,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 64.625,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63.25,
+          "y": 12.1005859375,
+          "z": 25.625
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 13,
+        "distance_squares": 1.5122693980400908,
+        "wire_points": 14
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 663.6948999999986,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.625,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9917,
+            "nearestPoint": {
+              "x": 63.25,
+              "y": 12.125,
+              "z": 25.625
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9917,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9917,
+            "end_ref": 14630,
+            "polys": 463
+          }
+        }
+      }
+    },
+    {
+      "before": 8,
+      "after": 4,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 64.625,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63,
+          "y": 12.1005859375,
+          "z": 25.375
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 15,
+        "distance_squares": 1.8483870696463922,
+        "wire_points": 16
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 689.5348999999987,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.625,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 63,
+              "y": 12.125,
+              "z": 25.375
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 8,
+      "after": 4,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 64.625,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 63,
+          "y": 12.1005859375,
+          "z": 25.375
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 15,
+        "distance_squares": 1.8483870696463922,
+        "wire_points": 16
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 620.588499999998,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.625,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 63,
+              "y": 12.125,
+              "z": 25.375
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 8,
+      "after": 8,
+      "radius": 0.5,
+      "link": {
+        "startPosition": {
+          "x": 64.625,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 62.5,
+          "y": 12.1005859375,
+          "z": 24.875
+        },
+        "radius": 0.5,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 21,
+        "distance_squares": 2.534736481728731,
+        "wire_points": 22
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 636.7366000000002,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.625,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 62.5,
+              "y": 12.125,
+              "z": 24.875
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    },
+    {
+      "before": 8,
+      "after": 8,
+      "radius": 1,
+      "link": {
+        "startPosition": {
+          "x": 64.625,
+          "y": 14.6875,
+          "z": 26.25
+        },
+        "endPosition": {
+          "x": 62.5,
+          "y": 12.1005859375,
+          "z": 24.875
+        },
+        "radius": 1,
+        "bidirectional": false,
+        "flags": 1,
+        "area": 0,
+        "userId": 2505001
+      },
+      "native_link_proof": {
+        "valid": true,
+        "checks": 21,
+        "distance_squares": 2.534736481728731,
+        "wire_points": 22
+      },
+      "open": {
+        "found": false,
+        "reason": "partial_mesh_path",
+        "last_ref": 13917,
+        "goal_ref": 14630,
+        "corridor_polys": 402,
+        "build_ms": 671.9879999999976,
+        "attachment": {
+          "offmesh_count": 1,
+          "start_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9848,
+            "nearestPoint": {
+              "x": 64.625,
+              "y": 14.71875,
+              "z": 26.25
+            },
+            "isOverPoly": true
+          },
+          "end_nearest": {
+            "success": true,
+            "status": 1073741824,
+            "nearestRef": 9926,
+            "nearestPoint": {
+              "x": 62.5,
+              "y": 12.125,
+              "z": 24.875
+            },
+            "isOverPoly": true
+          },
+          "approach": {
+            "complete": true,
+            "start_ref": 8346,
+            "end_ref": 9848,
+            "polys": 246
+          },
+          "across": {
+            "complete": true,
+            "start_ref": 9848,
+            "end_ref": 9926,
+            "polys": 3
+          },
+          "departure": {
+            "complete": false,
+            "start_ref": 9926,
+            "end_ref": 14630,
+            "polys": 464
+          }
+        }
+      }
+    }
+  ],
+  "source_revision": "d72d89eb18b28c89ac97194a7fd4b1ad383ba2b5",
+  "map_sha256": "f1c6708f4f78715c6c5d99133ee1b0624f242d45468c7d082f2de80bdaaee965"
+}
