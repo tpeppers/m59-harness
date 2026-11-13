@@ -827,7 +827,7 @@ through a nested shelter order.
   still section 4; from r11c4 the doors are worked 3, 53, 55, 59; and a crossing that stops in
   the doorway throws `guild door 3 could not be crossed` rather than reporting success and
   failing at door 53's trigger (Camilla, prod 2026-10-01).
-- `m59-ceiling-doors-test.mjs` (15): the halls' ceiling doors and `guildPassage`. Live ceiling packets
+- `m59-ceiling-doors-test.mjs` (21): the halls' ceiling doors and `guildPassage`. Live ceiling packets
   open and shut the mover's geometry; a seated body on a trigger stands and leaves; a press the server
   refuses throws `... refused 3 of 3 presses as "unable to go anywhere" (body at r18c10, trigger r18c10,
   seated:false, 1 bodies within 2 sq; ledger dp-...)` and leaves one `door_press_refused` row per press
@@ -839,13 +839,20 @@ through a nested shelter order.
   the password said exactly twice, on r8c26 (landing r10c26) and r9c26 (landing r7c26), with no
   walk ever crossing the secret wall; every trigger and chest square in the section the kod
   implies; a missing password refuses at the wall; an unsurveyed hall (701) and a section 713
-  does not have are refused by number.
-- `m59-hall-record-test.mjs` (26): `hallWithdraw` reads back and records EVERY chest in the hall
+  does not have are refused by number. **703, the third hall (6 more):** the river is a moat that
+  splits the hall at the bridge, and the step mask's wade at r13 is pinned as the assumption it is;
+  the bridge platforms (sector 2, a FLOOR lift) step from the banks only when down, the span only when
+  up, and a ceiling packet at the same height is not this door; the timing helpers; from the foyer to
+  the chests and back on a fake server clock -- one press at ENTRANCE each way, the word said exactly
+  twice per crossing (board, rise, span, say, alight) and never a refused step; an ignored saying is
+  waited out and said again; a body found on the bridge rides it off.
+- `m59-hall-record-test.mjs` (35): `hallWithdraw` reads back and records EVERY chest in the hall
   it is standing in, once, after the stash/deposit and the draws -- so `wants: []` with nothing to
   put is a pure read-and-record errand. 713's four chests land in `chests/713/<square>.json` under
   room 713 (an empty chest as an empty list), nothing leaks into the flat 714 layout, 714 still
   writes the flat layout, a chest that will not answer is left out of `recorded` and keeps its last
-  good reading, and a run that never reached the chests asks none of them.
+  good reading, and a run that never reached the chests asks none of them. 703's two chests land in
+  `chests/703/r26c9.json` and `r29c9.json` and leave 713's alone.
 - `m59-door-refusal-test.mjs` (4): the refusal record itself. Spoken refusal `server_refused`, silent
   press `not_verified`; webbed reads `held`; the job steering the body is named; ten objects and six
   rows per door per ten minutes however crowded or looped, the next window saying how many were held
@@ -1889,7 +1896,7 @@ the records it describes.
   tab bar all six boards share, and the pack drill-in: that it names what is in the pack
   rather than only how full it is, and that an EMPTY pack, a character the broker is not
   holding, and a broker too old to report the list are three different sentences) and
-  `node tools/m59-multiguild-boards-test.mjs` (41 — the boards with TWO guild halls: /inventory
+  `node tools/m59-multiguild-boards-test.mjs` (49 — the boards with TWO guild halls, then the fleet's three (714, 713, 703: 703 is a choice with its guild and two chests and `?hall=703` shows only its chests): /inventory
   shows one hall's chests, plan and history at a time behind a `?hall=<room>` picker that exists
   only when there is more than one hall, and with one hall looks exactly as it did; the
   compendium's `/_guildplan` lists the halls, gates each on the rent of the guild that OWNS it

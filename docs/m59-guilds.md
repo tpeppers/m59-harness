@@ -46,7 +46,7 @@ What changes for the keeper:
   guilds are known, the hall is 714, as it always was.
 - **Chests are worked only in a usable hall.** The keeper works the chests of the hall it
   is standing in only if all of these hold:
-  - its passage is surveyed. 714's and 713's are (`SURVEYED_HALLS` and the per-hall
+  - its passage is surveyed. 714's, 713's and 703's are (`SURVEYED_HALLS` and the per-hall
     `HALLS` table in `m59-guild-passage.mjs`), so every other hall is refused by name rather
     than walked with another hall's doors. **713 (the Hall of the Slaughtered Command,
     `guildh13.kod`) is three sections, not five:** foyer (r9c3, where a Rescue lands), hall
@@ -55,6 +55,26 @@ What changes for the keeper:
     r8c26 moves the speaker to r10c26, said on r9c26 to r7c26 (`WalkThroughSecretWall`,
     `guildh13.kod:191`). A character that is told "secret door" and waits for a ceiling to
     lift there will wait for ever.
+    **703 (the Den of Shadows, `guildh3.kod`, Rizzo's Revenge) is three sections and its
+    secret door is an ELEVATOR:** foyer (r5c4, viTeleport), hall proper (r12c16,
+    viInner_teleport), far bank with both chests (r27c9; chests r26c9 and r29c9). ENTRANCE
+    (sector 1, a ceiling) is pressed from r5c7 / r5c8. BRIDGE (sector 2) is a **floor**, and
+    only the bridge's two end platforms (north r17c13-14, south r20c15-r21c17); the span
+    between them is fixed at 654. The platforms rest UP at 654, 154 above both banks, so the
+    bridge is a wall from either side. The password (said outside the foyer) drops both to
+    500 at speed 16; a 10 s timer from the saying raises them again, and a saying while it runs
+    is ignored. So the passage (`door.lift`, `rideLift`) says it on the bank (r16c14 or
+    r22c16), steps onto the near platform when it is within a step of the bank, rides it up,
+    walks the span, says it **again** on the far platform and steps off when that is down —
+    the operator's "say it twice while riding it, first to go up, then for the elevator down".
+    About 30 s a crossing. **Assumption to confirm live:** the river is treated as a moat
+    (`HALLS[703].moat`, squares whose centre floor is below 497). The step mask itself lets a
+    body wade it at r13-16 cols 16-18 and the server marks every river square walkable, so a
+    plain walk could reach the chests without the bridge; section membership, and every
+    baked 703 rail, refuse the water so the passage takes the lift. The lift's heights and
+    masks are in `substrate/m59-ceiling-doors.json` (a `kind: 'floor'` door, opted in by room
+    in `m59-ceiling-doorbake.mjs FLOOR_LIFTS`), so the live geometry follows the platforms
+    from their sector-height packets (ANIMATE_FLOOR_LIFT, type 4).
   - its owner is our guild or an ally.
   - the character's rank is at least sir (`hallHere()`).
 - **Hall passwords are kept per hall room.** The door checks the *owner's* password

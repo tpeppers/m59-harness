@@ -152,10 +152,12 @@ export async function depositWithRecovery(call, agent, deposit, { retries = 1, p
 }
 
 /** The standard approach and draw, as fleetscript steps. */
-export function hallDrawSteps({ wants, holder = null, why = 'the guild chests', onResult = null } = {}) {
+// `hall` is the hall to walk to when no ride landed us: 714 by default (the one every older script
+// meant); 713 or 703 for the Rowlfs' or Rizzo's Revenge's hall.
+export function hallDrawSteps({ wants, holder = null, why = 'the guild chests', onResult = null, hall = HALL } = {}) {
   return [
     ...(holder ? [{ ...rideChalice({ why }), optional: true }] : []),
-    walk(HALL, { why: `${why} (on foot if no ride landed us; a no-op if one did)` }),
+    walk(hall, { why: `${why} (on foot if no ride landed us; a no-op if one did)` }),
     verify(async ({ agent, call }) => {
       const r = await withdrawWithRecovery(call, agent, wants);
       console.log(`  ${agent}: hall draw ${JSON.stringify(r.arrived)} in ${r.attempts} attempt(s)` + (r.why ? ` — ${r.why}` : ''));

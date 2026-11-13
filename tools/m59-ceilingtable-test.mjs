@@ -48,7 +48,10 @@ for (const [num, def] of rooms) {
   const ids = def.doors.map(d => d.id);
   // The key is built by joining heights in door-array order, so the order IS the contract.
   if (JSON.stringify(ids) !== JSON.stringify([...ids].sort((a, b) => a - b))) badOrder.push(num);
-  if (def.doors.some(d => !(d.open > d.closed))) badHeights.push(num + ':open<=closed');
+  // A CEILING opens UP. A FLOOR LIFT (kind 'floor', 703's bridge platforms) rests where the .roo
+  // ships it and opens to the other height, which for 703 is DOWN -- so its rule is shipped === closed.
+  if (def.doors.some(d => d.kind === 'floor' ? !(d.open !== d.closed && d.shipped === d.closed) : !(d.open > d.closed)))
+    badHeights.push(num + ':open<=closed');
   if (def.doors.some(d => !Array.isArray(d.indices) || !d.indices.length)) badSectors.push(num + ':no indices');
 
   const keys = Object.keys(def.states);
@@ -71,7 +74,9 @@ for (const [num, def] of rooms) {
     const st = def.states[key];
     if (typeof st?.mask !== 'string' || st.mask.length < 8) badMask.push(`${num}:${key}`);
     if (!Array.isArray(st?.sectors) || !st.sectors.length
-        || st.sectors.some(s => !Number.isInteger(s.index) || !Number.isFinite(s.ceiling)))
+        || st.sectors.some(s => !Number.isInteger(s.index) ||
+             !(def.doors.find(d => d.indices?.includes(s.index))?.kind === 'floor'
+               ? Number.isFinite(s.floor) : Number.isFinite(s.ceiling))))
       badSectors.push(`${num}:${key}`);
   }
 }
@@ -81,6 +86,12 @@ ok('and every height is one that door can actually be at', !badHeights.length, b
 ok('the state count matches what `partial` claims', !badCount.length, badCount.slice(0, 4).join(', '));
 ok('every state carries a mask', !badMask.length, badMask.slice(0, 4).join(', '));
 ok('and a sector patch with a real index and ceiling', !badSectors.length, badSectors.slice(0, 4).join(', '));
+// FLOOR LIFTS ARE OPT-IN BY ROOM (m59-ceiling-doorbake.mjs FLOOR_LIFTS): a new door in a room
+// re-keys every state of it, and every rail baked against those keys.
+const floorLifts = rooms.flatMap(([num, def]) => def.doors.filter(d => d.kind === 'floor').map(d => `${num}:${d.id}`));
+ok("the only floor lift in the table is 703's bridge (sector 2)", floorLifts.join(',') === '703:2', floorLifts.join(','));
+ok('703 keys are ENTRANCE then BRIDGE, resting at 500,654', table.rooms[703]?.doors.map(d => d.id).join(',') === '1,2'
+   && !!table.rooms[703]?.states['500,654']);
 
 console.log('\nthe RESTING state — the one a room is in when nobody has touched it');
 // THIS IS THE ASSERTION THAT CAUGHT THE BUG, and it is deliberately not "the all-shut state".

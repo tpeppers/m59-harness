@@ -18,10 +18,10 @@
 import { readFileSync, existsSync } from 'node:fs';
 import {
   ANCHORS, DOOR_TABLE, CHESTS, EXIT, RAILS, ROOM, HALL_TABLES, railsPath,
-  hallGeometry, cutLeg, plan, railFor, parseSquare, sq, centre, edgeOf,
+  hallGeometry, cutLeg, plan, railFor, parseSquare, sq, centre, edgeOf, hallMoat,
 } from './m59-guildrails.mjs';
 import { anchors as passageAnchors, doors as passageDoors, bakedCrossing,
-         HALLS, SURVEYED_HALLS, chestSectionOf } from './m59-guild-passage.mjs';
+         HALLS, SURVEYED_HALLS, chestSectionOf, moatSquares } from './m59-guild-passage.mjs';
 import { verifyRail } from './m59-railcut.mjs';
 
 let pass = 0, fail = 0;
@@ -285,6 +285,78 @@ console.log('\n8. THE SECOND HALL: 713, THE HALL OF THE SLAUGHTERED COMMAND');
     ok('bakedCrossing reads 713\'s own file', Array.isArray(first) && first.at(-1).row === 3 && first.at(-1).col === 9,
        JSON.stringify(first));
     ok('...and 714\'s file does not answer for it', bakedCrossing([3, 7], [3, 9], 4) === null);
+  }
+}
+console.log('\n9. THE THIRD HALL: 703, THE DEN OF SHADOWS (an elevator, and a moat)');
+{
+  const mine = HALL_TABLES[703], theirs = HALLS[703];
+  ok('703 is surveyed in both files', !!mine && !!theirs && SURVEYED_HALLS.includes(703));
+  ok('703: the same anchors', JSON.stringify(mine.anchors) === JSON.stringify(theirs.anchors), mine.anchors.map(sq).join(' '));
+  ok('703: the same doors, triggers, crossings, kinds and deck',
+     mine.doors.length === theirs.doors.length && mine.doors.every((a, i) => {
+       const b = theirs.doors[i];
+       return a.sector === b.sector && JSON.stringify(a.inward) === JSON.stringify(b.inward) &&
+              JSON.stringify(a.outward) === JSON.stringify(b.outward) && !!a.secret === !!b.secret &&
+              !!a.lift === !!b.lift && JSON.stringify(a.deck ?? null) === JSON.stringify(b.deck ?? null);
+     }));
+  ok('703: the same moat rule', JSON.stringify(mine.moat) === JSON.stringify(theirs.moat));
+  ok('703: the chests are the last section', chestSectionOf(703) === 2 && theirs.chestSection === mine.anchors.length - 1);
+  const passageMoat = moatSquares(703), bakeMoat = hallMoat(703);
+  ok('703: the two files find the same river', passageMoat.size === bakeMoat.size &&
+     [...passageMoat].every(k => bakeMoat.has(k)), `${passageMoat.size} vs ${bakeMoat.size}`);
+  ok('714 and 713 have no moat', hallMoat(714) === null && hallMoat(713) === null);
+  const spoken = theirs.doors.filter(d => d.secret).map(d => d.sector);
+  ok('703: only door 2 (the bridge) is spoken, never the entrance', spoken.length === 1 && spoken[0] === 2, spoken.join(','));
+
+  ok('703 shut is ENTRANCE 500 and BRIDGE up at 654', hallGeometry([], 703).key === '500,654');
+  ok('703 with the entrance up', hallGeometry([1], 703).key === '580,654');
+  ok('703 with the platforms down', hallGeometry([2], 703).key === '500,500');
+
+  // ENTRANCE, between cols 7 and 8: cut with it up, not with it down.
+  const [inTrigger, inAcross] = mine.doors[0].inward;
+  const up = cutLeg(inTrigger, inAcross, { open: [1], room: 703 });
+  ok('r5c7 -> r5c9 with door 1 up: cut and verified', up.ok && up.verified === true, up.ok ? `${up.legs} legs` : up.why);
+  ok('...and NOT with the hall shut', !cutLeg(inTrigger, inAcross, { open: [], room: 703 }).ok);
+  // THE LIFT: on at the bank only while DOWN, across the span only while UP, and never a wade.
+  const [north, south] = mine.doors[1].deck;
+  ok('board r16c14 -> r17c14: platforms down cuts', cutLeg([16, 14], north, { open: [2], room: 703 }).ok);
+  ok('...platforms up does not', !cutLeg([16, 14], north, { open: [], room: 703 }).ok);
+  ok('the span r17c14 -> r21c16: up cuts', cutLeg(north, south, { open: [], room: 703 }).ok);
+  ok('...down does not (the span is 154 above the platforms)', !cutLeg(north, south, { open: [2], room: 703 }).ok);
+  ok('bank to bank with the platforms down does not cut either, with the moat refused',
+     !cutLeg([16, 14], [22, 16], { open: [2], room: 703 }).ok);
+  ok('...but WITHOUT the moat it wades (the assumption, pinned)', cutLeg([16, 14], [22, 16], { open: [2], room: 703, moat: null }).ok);
+
+  const p = plan(703);
+  const kinds = p.reduce((a, l) => (a[l.kind] = (a[l.kind] ?? 0) + 1, a), {});
+  ok('703 plan: the entrance crosses both ways, the lift boards, rides and alights both ways',
+     kinds.crossing === 2 && kinds.board === 2 && kinds.ride === 2 && kinds.alight === 2 &&
+     kinds.approach === 4 && kinds.landing === 4, JSON.stringify(kinds));
+  ok('703 plan: both chests both ways', kinds.chest === 4);
+
+  const path703 = railsPath(703);
+  if (!existsSync(path703)) ok('substrate/rail-703.json exists', false, 'run: node tools/m59-guildrails.mjs bake --room 703');
+  else {
+    const baked = JSON.parse(readFileSync(path703, 'utf8'));
+    ok('rail-703 is room 703', baked.room === 703);
+    ok('rail-703: every leg cut', baked.legs.every(l => l.ok), `${baked.legs.filter(l => !l.ok).length} failed`);
+    ok('rail-703: every leg verified by the mover\'s own trace', baked.legs.every(l => l.verified === true));
+    const cache = new Map(), moat = hallMoat(703);
+    let stale = 0, wet = 0;
+    for (const l of baked.legs.filter(x => x.ok && x.waypoints?.length > 1)) {
+      const id = (l.doors_open ?? []).join(',');
+      if (!cache.has(id)) cache.set(id, hallGeometry(l.doors_open ?? [], 703));
+      const v = verifyRail(l.waypoints, { edge: edgeOf(cache.get(id).geo, moat), lattice: baked.lattice });
+      if (v && v.ok === false) stale++;
+      if (l.waypoints.some(w => moat.has(`${Math.floor(w.y / 1024) + 1},${Math.floor(w.x / 1024) + 1}`))) wet++;
+    }
+    ok('rail-703: no leg stale against the map on disk', stale === 0, `${stale} stale`);
+    ok('rail-703: no leg enters the river', wet === 0, `${wet} wet`);
+    ok('rail-703 records door 2 as a lift with its deck', baked.doors.some(d => d.sector === 2 && d.lift && d.secret &&
+       JSON.stringify(d.deck) === JSON.stringify(['r17c14', 'r21c16'])));
+    const first = bakedCrossing([5, 7], [5, 9], 1, 703);
+    ok('bakedCrossing reads 703\'s own file', Array.isArray(first) && first.at(-1).row === 5 && first.at(-1).col === 9,
+       JSON.stringify(first));
   }
 }
 

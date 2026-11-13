@@ -104,6 +104,15 @@ await ok('hallDrawSteps: chalice first when a holder is named, then the walk, th
   assert.equal(hallDrawSteps({ wants: [], holder: 'x' })[0].optional, true, 'a refused ride falls through to the walk');
   assert.deepEqual(hallDrawSteps({ wants: [] }).map(s => s.do), ['walk', 'verify']);
 });
+await ok('hallDrawSteps walks to 714 unless told another hall (713, 703)', async () => {
+  assert.equal(hallDrawSteps({ wants: [] })[0].to, 714);
+  assert.equal(hallDrawSteps({ wants: [], hall: 703 })[0].to, 703);
+  assert.equal(hallDrawSteps({ wants: [], hall: 713, holder: 'x' })[1].to, 713);
+});
+await ok("a lift that would not carry the body is a passage refusal, retried like a door (703's bridge)", async () => {
+  assert.ok(PASSAGE_REFUSAL.test('guild door 2 could not be crossed: the lift was called 4 times and the body is at r16c14, not across at r22c16'));
+  assert.ok(PASSAGE_REFUSAL.test('guild door 2 trigger not reached (stopped at r12c16, wanted r16c14, after 3 approaches)'));
+});
 
 await ok('a door that refused every press (a keeper rest mid-crossing) is retried after vigor is back over the rest line', async () => {
   const b = broker([{ ok: false, why: 'guild door 59 could not be crossed: the server refused 3 of 3 presses as "unable to go anywhere" (body at r2c36, trigger r3c28)' },

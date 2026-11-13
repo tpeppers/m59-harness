@@ -6,6 +6,19 @@ import { sharedRoomGeometry, applySectorHeights, STEP_MASK_VERSION, RoomGeometry
 import { forgetReach, applyDoorState, noteDoorState } from './m59-routes.mjs';
 
 const table = JSON.parse(readFileSync(new URL('../substrate/m59-ceiling-doors.json', import.meta.url)));
+// A DOOR IS A CEILING UNLESS THE TABLE SAYS `kind: 'floor'`. The Den of Shadows' (703) BRIDGE is a
+// floor lift baked into this table beside its ceiling entrance (see m59-ceiling-doorbake.mjs
+// FLOOR_LIFTS); its sector packets are ANIMATE_FLOOR_LIFT (4), a ceiling's ANIMATE_CEILING_LIFT
+// (5), and a height observed under the other animation is not this door's.
+export const animationType = d => (d?.kind === 'floor' ? 4 : 5);
+// The height a door is at: what the server last said for EVERY sector of it, under its own
+// animation type, or where the .roo ships it when it has not said (see applyCeilingDoors).
+function observedHeight(d, observed) {
+  const type = animationType(d);
+  const seen = (d.ids ?? [d.id]).map(id => observed?.get?.(id));
+  const h = seen[0]?.type === type ? seen[0].height : null;
+  return h != null && seen.every(x => x?.type === type && x.height === h) ? h : (d.shipped ?? d.closed);
+}
 const current = new WeakMap();
 const animations = new WeakMap();
 // M59Client publishes onEvent; it is not a Node EventEmitter. Optional `.on`
@@ -54,11 +67,7 @@ export function applyCeilingDoors(map, roomNum, observed, event = null, { geomet
   // apart) is at a height only when EVERY sector of the run has been seen there. Part-way
   // through the run the passage is still shut by the sectors that have not moved, so anything
   // short of all of them reads as the resting height — never as open.
-  const heights = definition.doors.map(d => {
-    const seen = (d.ids ?? [d.id]).map(id => observed.get(id));
-    const h = seen[0]?.type === 5 ? seen[0].height : null;
-    return h != null && seen.every(x => x?.type === 5 && x.height === h) ? h : (d.shipped ?? d.closed);
-  });
+  const heights = definition.doors.map(d => observedHeight(d, observed));
   const key = heights.join(','), state = definition.states[key];
   if (!state) return null;
   let changed = false;
@@ -80,7 +89,8 @@ export function applyCeilingDoors(map, roomNum, observed, event = null, { geomet
   // doors-shut answer. Set unconditionally rather than only on `changed`, because "the room is
   // in this state" is true whether or not this call is what put it there.
   noteDoorState(roomNum, key);
-  const door = event?.type === 5 && definition.doors.find(d => (d.ids ?? [d.id]).includes(event.sector));
+  const moved = event && definition.doors.find(d => (d.ids ?? [d.id]).includes(event.sector));
+  const door = moved && event.type === animationType(moved) ? moved : null;
   // Stock client MoveSector: duration = abs(dest-source) / speed seconds.
   // Use the full open/closed span even for a reversal part way through a lift.
   const settledAt = door && Number.isFinite(event.speed) && event.speed >= 0
@@ -134,7 +144,7 @@ export function planDoorChain(map, roomNum, from, targets, plans,
   const cheb = (a, b) => Math.max(Math.abs(a.row - b.row), Math.abs(a.col - b.col));
   const initial = new Set(def.doors.filter(d => (d.ids ?? [d.id]).every(id => {
     const h = observed?.get?.(id);
-    return h?.type === 5 && h.height === d.open;
+    return h?.type === animationType(d) && h.height === d.open;
   })).map(d => d.id));
   const queue = [{ open: initial, at: { row: from.row, col: from.col }, chain: [] }];
   const seen = new Set();
@@ -171,7 +181,7 @@ export function planDoorChain(map, roomNum, from, targets, plans,
 export function ceilingPassableKod(map, roomNum, sector, { geometry = null } = {}) {
   const def = table.version === STEP_MASK_VERSION && table.rooms[roomNum];
   const door = def && def.doors.find(d => (d.ids ?? [d.id]).includes(Number(sector)));
-  if (!door) return null;
+  if (!door || door.kind === 'floor') return null;   // headroom is a ceiling's question
   const room = map?.rooms?.[roomNum];
   const g = geometry ?? (room?.roo ? sharedRoomGeometry(room) : null);
   const floors = (door.indices ?? []).map(i => g?.sectors?.[i]?.floorHeight).filter(Number.isFinite);
@@ -188,8 +198,7 @@ export function previewOpenedDoor(map, roomNum, sector, { observed = new Map() }
   const selected=def.doors.find(d=>(d.ids??[d.id]).includes(Number(sector)));if(!selected)return null;
   const heights=def.doors.map(d=>{
     if(d===selected)return d.open;
-    const seen=(d.ids??[d.id]).map(id=>observed.get(id));
-    return seen[0]?.type===5&&seen.every(x=>x?.type===5&&x.height===seen[0].height)?seen[0].height:(d.shipped??d.closed);
+    return observedHeight(d,observed);
   });
   const key=heights.join(','),state=def.states[key];if(!state)return null;
   const geometry=RoomGeometry.fromJSON(room.roo);if(geometry.security!==def.security)return null;
@@ -226,8 +235,7 @@ export function doorBringsCloser(map, roomNum, from, target, sector,
   // One private geometry per (room, door-state): `previewOpenedDoor` builds a fresh one per call.
   const key = def.doors.map(d => {
     if (d === door) return d.open;
-    const seen = (d.ids ?? [d.id]).map(id => observed.get(id));
-    return seen[0]?.type === 5 && seen.every(x => x?.type === 5 && x.height === seen[0].height) ? seen[0].height : (d.shipped ?? d.closed);
+    return observedHeight(d, observed);
   }).join(',');
   const cache = CLOSER_PREVIEWS.get(room.roo) ?? new Map();
   CLOSER_PREVIEWS.set(room.roo, cache);

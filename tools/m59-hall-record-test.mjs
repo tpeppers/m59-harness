@@ -111,6 +111,28 @@ section('714 keeps the flat layout');
   ok(existsSync(join(scratch, 'chests', 'r18c2.json')), 'chests/r18c2.json, the layout every 714 reader knows');
 }
 
+// THE DEN OF SHADOWS (703): two chests, where guildh3.kod:172 CreateStandardObjects puts them.
+section('703: an empty errand reads and records both chests, under 703');
+{
+  const CHESTS703 = [
+    { id: 9301, row: 26, col: 9, items: [{ id: 6, name: 'mushroom', amount: 22 }] },
+    { id: 9302, row: 29, col: 9, items: [{ id: 7, name: 'sapphire', amount: 2 }] },
+  ];
+  const { k, asked } = fakeKeeper(703, CHESTS703);
+  const r = await k.hallWithdraw([], {});
+  ok(r.ok === true && r.chests === 2, 'the run succeeds and sees two chests', JSON.stringify(r));
+  ok(JSON.stringify([...r.recorded].sort()) === JSON.stringify(['r26c9', 'r29c9']), 'both recorded, by square', JSON.stringify(r.recorded));
+  ok(asked.length === 2, 'each chest read exactly once');
+  for (const ch of CHESTS703) {
+    const path = join(scratch, 'chests', '703', `r${ch.row}c${ch.col}.json`);
+    ok(existsSync(path), `chests/703/r${ch.row}c${ch.col}.json written`);
+    if (existsSync(path)) ok(JSON.parse(readFileSync(path, 'utf8')).room === 703, '...filed under room 703');
+  }
+  const store = new StorageCache({ dir: scratch });
+  ok(store.allChests({ room: 703 }).length === 2, 'the store lists two chests for 703');
+  ok(store.allChests({ room: 713 }).length === 4, "and 713's four are untouched");
+}
+
 section('a run that never reached the chests records nothing');
 {
   const { k, asked } = fakeKeeper(713, CHESTS713);

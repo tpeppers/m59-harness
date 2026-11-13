@@ -5,7 +5,7 @@
 //   node tools/m59-guildrails.mjs show            # what is baked, leg by leg
 //   node tools/m59-guildrails.mjs check           # re-verify the baked lines against the map
 //   node tools/m59-guildrails.mjs probe r4c28 r2c28 --door 59   # one pair, one door state
-//   ... --room 713                                # any of the above for another surveyed hall
+//   ... --room 713                                # any of the above for another surveyed hall (713, 703)
 //
 // 714 (the Bookmaker's Guild House) is the default and was the only hall for a year; 713 (the Hall
 // of the Slaughtered Command) is the second. A hall's SPOKEN WALL (713's door 5, a password
@@ -105,7 +105,38 @@ export const HALL_TABLES = Object.freeze({
          ],
          exit: [10, 2], chests: [[12, 24], [13, 24], [12, 29], [13, 29]],
          exitNote: 'the foyer\'s `go` exit to Ko\'catan South (2009)' },
+  // THE DEN OF SHADOWS (703, guildh3.kod), restated from m59-guild-passage.mjs and checked against it.
+  // Door 2 is a FLOOR LIFT (the bridge's two end platforms); its legs are cut with the moat refused,
+  // so no leg of it can come back as a wade (see `plan` and m59-guild-passage.mjs DEN_OF_SHADOWS).
+  // Exit r5c1 is the foyer's front door to the Lake of Jala's Song (568, guildh3.kod:98); the chests
+  // are where CreateStandardObjects puts them (guildh3.kod:172).
+  703: { anchors: [[5, 4], [12, 16], [27, 9]],
+         doors: [
+           { sector: 1, inward: [[5, 7], [5, 9]], outward: [[5, 8], [5, 6]] },
+           { sector: 2, inward: [[16, 14], [22, 16]], outward: [[22, 16], [16, 14]], secret: true, lift: true,
+             deck: [[17, 14], [21, 16]] },
+         ],
+         moat: { belowKod: 497 },
+         exit: [5, 1], chests: [[26, 9], [29, 9]],
+         exitNote: 'the foyer\'s `go` exit to the Lake of Jala\'s Song (568)' },
 });
+
+/**
+ * A moated hall's water, as "r,c" keys: squares whose centre floor in `geo` is below `belowKod`.
+ * The same rule as m59-guild-passage.mjs `moatSquares`, on the bake's own geometry.
+ */
+export function moatOf(geo, moat) {
+  const out = new Set();
+  if (!moat) return out;
+  for (let r = 1; r <= geo.rows; r++) for (let c = 1; c <= geo.cols; c++) {
+    const x = (c - 1) * 1024 + 512, y = (r - 1) * 1024 + 512;
+    try {
+      const leaf = geo.leafAtClient(x, y);
+      if (leaf?.sector && geo.floorBaseAtClient(x, y, leaf) / 16 < moat.belowKod) out.add(`${r},${c}`);
+    } catch { /* outside the room */ }
+  }
+  return out;
+}
 const tableFor = (room) => {
   const t = HALL_TABLES[Number(room)];
   if (!t) throw new Error(`room ${room} is not a surveyed hall (${Object.keys(HALL_TABLES).join(', ')})`);
@@ -205,10 +236,13 @@ export function hallGeometry(open = [], room = ROOM) {
 // It is cached per ordered square pair anyway: the flood crosses the same handful of square
 // boundaries thousands of times.
 const squareOf = (p) => [Math.floor(p.y / 1024) + 1, Math.floor(p.x / 1024) + 1];
-export const edgeOf = (geo) => {
+// A MOAT (703's river) is refused outright: a point in one of its squares is not on the rail, so a
+// crossing cut for the bridge cannot come back as a wade.
+export const edgeOf = (geo, moat = null) => {
   const lands = new Map();
   const crosses = (a, b) => {
     const [ar, ac] = squareOf(a), [br, bc] = squareOf(b);
+    if (moat?.size && (moat.has(`${ar},${ac}`) || moat.has(`${br},${bc}`))) return false;
     if (ar === br && ac === bc) return true;          // inside one square, the fine trace decides
     const k = `${ar},${ac}>${br},${bc}`;
     if (!lands.has(k)) {
@@ -232,10 +266,11 @@ const floorOf = (geo) => (x, y) => {
 };
 
 /** Cut one leg and say, in one object, everything needed to believe or disbelieve it. */
-export function cutLeg(from, to, { open = [], geo = null, key = null, room = ROOM } = {}) {
+export function cutLeg(from, to, { open = [], geo = null, key = null, room = ROOM, moat = undefined } = {}) {
   const g = geo ?? hallGeometry(open, room).geo;
   const k = key ?? hallGeometry(open, room).key;
-  const edge = edgeOf(g);
+  const water = moat === undefined ? hallMoat(room) : moat;
+  const edge = edgeOf(g, water);
   const a = centre(from), b = centre(to);
   const cut = cutRail(a, b, { edge, bounds: { w: g.cols * 1024, h: g.rows * 1024 },
                               floorAt: floorOf(g), lattice: LATTICE });
@@ -258,6 +293,15 @@ export function cutLeg(from, to, { open = [], geo = null, key = null, room = ROO
   return leg;
 }
 
+// The moat of a hall, read off its ALL-SHUT geometry (the bridge up, so the deck is not water), once.
+const MOATS = new Map();
+export function hallMoat(room = ROOM) {
+  const t = HALL_TABLES[Number(room)];
+  if (!t?.moat) return null;
+  if (!MOATS.has(Number(room))) MOATS.set(Number(room), moatOf(hallGeometry([], room).geo, t.moat));
+  return MOATS.get(Number(room));
+}
+
 /** Every leg this hall needs, in the order the passage walks them. */
 export function plan(room = ROOM) {
   const { anchors, doors, exit, chests, exitNote } = tableFor(room);
@@ -269,7 +313,28 @@ export function plan(room = ROOM) {
     const before = anchors[i], after = anchors[i + 1];
     const [inTrigger, inAcross] = d.inward, [outTrigger, outAcross] = d.outward;
     const tag = `door ${d.sector}${d.teleport ? ' (secret wall — spoken, the server moves the body)'
+                                 : d.lift ? ' (lift — spoken, ridden)'
                                  : d.secret ? ' (secret — spoken, not stepped)' : ''}`;
+    if (d.lift) {
+      // A LIFT IS TWO ELEVATORS AND A SPAN. Sector 2 is the two END PLATFORMS of 703's bridge; the
+      // span between them is a fixed floor at 654. At rest the platforms are up, flush with the span
+      // and 154 above both banks; the word drops them to the banks and the timer brings them back up.
+      // So nothing crosses with the deck down -- the span is then 154 above the platforms -- and the
+      // legs are: walk to the bank; step onto the near platform while it is DOWN; walk the span while
+      // it is UP; step off the far platform once the word has brought it DOWN again.
+      const [north, south] = d.deck;
+      push('approach', before, inTrigger, [], `${tag} inward: walk to the bank, hall shut`);
+      push('board', inTrigger, north, [d.sector], `${tag} inward: onto the near platform while it is down`);
+      push('ride', north, south, [], `${tag} inward: across the span once the platforms are up`);
+      push('alight', south, inAcross, [d.sector], `${tag} inward: off the far platform once it is down again`);
+      push('landing', inAcross, after, [], `${tag} inward: on to the next anchor, hall shut again`);
+      push('approach', after, outTrigger, [], `${tag} outward: walk to the bank, hall shut`);
+      push('board', outTrigger, south, [d.sector], `${tag} outward: onto the near platform while it is down`);
+      push('ride', south, north, [], `${tag} outward: across the span once the platforms are up`);
+      push('alight', north, outAcross, [d.sector], `${tag} outward: off the far platform once it is down again`);
+      push('landing', outAcross, before, [], `${tag} outward: on to the previous anchor, hall shut`);
+      continue;
+    }
     // INWARD: deeper into the hall.
     push('approach', before, inTrigger, [], `${tag} inward: walk to the trigger, hall shut`);
     // A SPOKEN WALL HAS NO CROSSING TO CUT: no ceiling moves and no step is taken -- the body is
@@ -313,7 +378,8 @@ export function bake({ onLeg = null, room = ROOM } = {}) {
   }
   return { version: 1, room: Number(room), lattice: LATTICE, cut: new Date().toISOString(),
            anchors: anchors.map(sq), exit: sq(exit), chests: chests.map(sq),
-           doors: doors.map(d => ({ sector: d.sector, secret: !!d.secret, ...(d.teleport ? { teleport: true } : {}) })),
+           doors: doors.map(d => ({ sector: d.sector, secret: !!d.secret, ...(d.teleport ? { teleport: true } : {}),
+                                    ...(d.lift ? { lift: true, deck: d.deck.map(sq) } : {}) })),
            legs: out };
 }
 
@@ -366,7 +432,7 @@ if (isMain) {
       for (const l of baked.legs.filter(x => x.ok)) {
         const id = (l.doors_open ?? []).join(',');
         if (!cache.has(id)) cache.set(id, hallGeometry(l.doors_open ?? [], room));
-        const v = verifyRail(l.waypoints, { edge: edgeOf(cache.get(id).geo), lattice: baked.lattice });
+        const v = verifyRail(l.waypoints, { edge: edgeOf(cache.get(id).geo, hallMoat(room)), lattice: baked.lattice });
         if (v && v.ok === false) { bad++; console.log(`  STALE ${l.from} -> ${l.to}: ${JSON.stringify(v).slice(0, 150)}`); }
       }
       console.log(bad ? `\n${bad} baked leg(s) no longer walk on the map on disk — re-bake`
@@ -384,7 +450,7 @@ if (isMain) {
   }
 
   else {
-    console.error('usage: m59-guildrails.mjs bake | show | check | probe rNcM rNcM [--door 59]  [--room 714|713]');
+    console.error('usage: m59-guildrails.mjs bake | show | check | probe rNcM rNcM [--door 59]  [--room 714|713|703]');
     process.exit(2);
   }
 }
