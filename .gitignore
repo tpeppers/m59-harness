@@ -1098,3 +1098,5 @@ substrate/rescue-travel/
 /substrate/farm-gear-cache-*.json
 /substrate/farm-sale-cache-ward-*.json
 /substrate/ocean-courier-*.lock
+# The GOAP distiller's ledger (tools/m59-distill-run.mjs): one fleet's decisions and outcomes, named characters.
+/substrate/distill-*.jsonl
