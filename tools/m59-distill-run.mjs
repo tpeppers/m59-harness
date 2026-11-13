@@ -97,6 +97,8 @@ const cfg = mkConfig({
   buy_override: has('buy-anyway') || fileConfig.buy_override,
   homes: flag('also-home') ? list(flag('also-home')).map(Number) : fileConfig.homes,
   stay_in_hall: has('hall-stay') || fileConfig.stay_in_hall,
+  parallel: flag('parallel') != null ? Number(flag('parallel')) : (fileConfig.parallel ?? 1),
+  hall_parallel: flag('hall-parallel') != null ? Number(flag('hall-parallel')) : (fileConfig.hall_parallel ?? 2),
   only,
   hall_room: flag('hall') != null ? Number(flag('hall')) : fileConfig.hall_room,
   farm_allow: flag('farm-allow') ? parseFarmAllow(flag('farm-allow')) : fileConfig.farm_allow,
@@ -352,10 +354,32 @@ async function pass() {
                why: d.why, notes: d.notes, proposals: d.proposals });
   if (!APPLY) return;
 
-  // In-place first (they move nobody), then the road; one at a time — fleetScript holds one run lock per fleet.
+  // In-place first (they move nobody, and a hand-over touches two characters), one at a time. Then the road,
+  // `parallel` at once: the run lock is per character (since 2026-09-10), so trips by different characters need not
+  // queue -- eleven sequential five-minute trips made one pass take an hour (2026-11-13, unlimited away slots). Hall
+  // draws are capped at `hall_parallel` at once: they all cross the same guild door.
   const todo = out.decisions.map(d => d.action).filter(a => a && a.executable !== false)
     .sort((x, y) => (x.road ? 1 : 0) - (y.road ? 1 : 0));
-  for (const a of todo) {
+  for (const a of todo.filter(a => !a.road)) await runAction(a, pass_id);
+  const road = todo.filter(a => a.road);
+  const width = Math.max(1, Number(cfg.parallel) || 1), hallWidth = Math.max(1, Number(cfg.hall_parallel) || 1);
+  let hallBusy = 0;
+  const waiting = [...road];
+  const worker = async () => {
+    for (;;) {
+      const i = waiting.findIndex(a => a.kind !== 'hall_draw' || hallBusy < hallWidth);
+      if (i < 0) { if (!waiting.length) return; await new Promise(res => setTimeout(res, 2000)); continue; }
+      const [a] = waiting.splice(i, 1);
+      const hall = a.kind === 'hall_draw';
+      if (hall) hallBusy++;
+      try { await runAction(a, pass_id); } finally { if (hall) hallBusy--; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, road.length) }, worker));
+}
+
+async function runAction(a, pass_id) {
+  {
     const id = `${pass_id}-${a.agent}-${a.kind}`;
     record({ phase: 'start', id, agent: a.agent, kind: a.kind, key: keyOf(a), action: a });
     say(`${a.agent}: ${a.kind} ${keyOf(a) ?? ''} ...`);
