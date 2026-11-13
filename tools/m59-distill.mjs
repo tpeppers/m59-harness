@@ -60,6 +60,7 @@ export const DEFAULTS = Object.freeze({
   away_limit: 1,              // characters outside the home room at once (in-scope, observed + granted this pass)
   exclude: [],                // agents never touched (and never used as donors)
   no_hall: [],                // agents who may not draw from the hall (not members/allies of its guild -- CanEnter refuses)
+  ban_learn: [],              // abilities nobody is sent to learn (operator 2026-11-13: scimitar wielding, refused at Quintor)
   only: null,                 // restrict to these action kinds; everything else falls through
   hurt_below: 0.8,            // health fraction under which a character is left to recover
   fragile_below: 25,          // max health under which no road action is given (fleetScript's fragileBody agrees)
@@ -513,7 +514,9 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
     if (next && allowed('learn')) {
       const money = o.purse + o.bank, price = num(next.price);
       const g = gate('learn', next.name);
-      const block = !next.expected_buyable ? 'not expected to be offered'
+      const banned = n => (c.ban_learn ?? []).some(b => lc(b) === lc(n));
+      const block = banned(next.name) ? 'banned by the operator (ban_learn)'
+        : !next.expected_buyable ? 'not expected to be offered'
         : g ? g.why
         : price == null ? 'no price on record'
         : money < price ? `cannot afford: ${price} against ${o.purse} purse + ${o.bank} bank`
@@ -533,7 +536,7 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
       // fall through: weaponcraft refusals at Quintor (scimitar wielding, 2026-11-13) say the skill eligibility is wrong.
       if (next.kind === 'spell' && next.expected_buyable && price != null && money >= price) {
         for (const alt of o.learning.planned.active ?? []) {
-          if (!alt || lc(alt.name) === lc(next.name) || alt.kind !== next.kind || !alt.expected_buyable) continue;
+          if (!alt || lc(alt.name) === lc(next.name) || alt.kind !== next.kind || !alt.expected_buyable || banned(alt.name)) continue;
           if (num(alt.remaining_required) > 0) continue;
           const ap = num(alt.price);
           if (ap == null || money < ap || !alt.teacher?.name || alt.teacher?.room == null) continue;

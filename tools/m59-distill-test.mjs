@@ -571,3 +571,16 @@ console.log(`\n${n} passed`);
   const poor = decide({ characters: [row(100)], config: { home: 153, away_limit: 2 }, data: {}, history: [] });
   if (poor.decisions[0].action) { console.log('FAIL money is not worked around'); process.exitCode = 1; } else console.log('ok - an unaffordable next takes no alternative');
 }
+
+// A banned ability is never sent, as next or as an alternative.
+{
+  const { decide } = await import('./m59-distill.mjs');
+  const o = { agent: 't14', character: 'P', in_game: true, in_roster: true, room: 153, hp: 50, hp_max: 50, pack: [], spells: [], purse: 9000, bank: 0, policy: {},
+    learning: { planned: { configured: true,
+      next: { kind: 'skill', name: 'scimitar wielding', level: 3, price: 1000, expected_buyable: true, remaining_required: 0, teacher: { name: 'Q', room: 50 } },
+      active: [] } } };
+  const out = decide({ characters: [o], config: { home: 153, ban_learn: ['Scimitar Wielding'] }, data: {}, history: [] });
+  const d = out.decisions[0];
+  if (d.action?.kind === 'learn' || !d.notes.some(n => /banned by the operator/.test(n))) { console.log('FAIL a banned ability must not be learned: ' + JSON.stringify(d)); process.exitCode = 1; }
+  else console.log('ok - banned ability is not sent');
+}
