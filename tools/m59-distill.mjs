@@ -73,6 +73,9 @@ export const DEFAULTS = Object.freeze({
   farm_count: 20,             // how many to farm in one trip
   farm_minutes: 20,           // the farming budget
   buy_when_farm_unapproved: true,   // a farm source that is only a proposal does not block buying
+  buy_override: false,        // operator 2026-11-13 "yes to buying": a loadout's buy_reagents:false no longer stops a distiller buy
+  homes: [],                  // more rooms that count as home: practise there, start road actions there, not away (the hall)
+  stay_in_hall: false,        // a hall draw ends in the hall (when the hall is a home) instead of walking back
   stock_casts: 20,            // practice-plan: reagent stock per gate spell, in casts
   rest_casts: 5,              // practice-plan: reagent stock per other spell, in casts (its own default)
   practice_creatures: null,   // does the practice room hold creatures? null = ask the spawn index (an inn: no)
@@ -115,6 +118,7 @@ export function config(over = {}) {
   for (const k of ['trap_rooms', 'unreachable_rooms', 'buy_avoid_rooms', 'buy_prefer_rooms', 'risky_rooms'])
     c[k] = [].concat(c[k] ?? []).map(Number).filter(Number.isFinite);
   c.home = num(c.home);
+  c.homes = (Array.isArray(c.homes) ? c.homes : []).map(num).filter(n => n != null);
   c.away_limit = Math.max(0, Math.trunc(num(c.away_limit) ?? 1));
   return c;
 }
@@ -386,7 +390,8 @@ export function practiceFor(o, c, catalogue, { creatures = true } = {}) {
   const plan = planPractice({
     known: o.spells, planner: learning, pack: o.pack, maxMana: o.mana_max, vigor: o.vigor, karma: o.karma,
     policy, catalogue,
-    options: { rooms: c.home != null ? [c.home] : o.room != null ? [o.room] : null,
+    options: { rooms: o.room != null && (o.room === c.home || (c.homes ?? []).includes(o.room)) ? [o.room]
+                      : c.home != null ? [c.home] : o.room != null ? [o.room] : null,
                stockCasts: c.stock_casts, restCasts: c.rest_casts, ...(creatures ? {} : { quarry: [] }) },
   });
   if (!plan.ok) return { ...plan, gated };
@@ -428,7 +433,9 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
   const c = config(over);
   const allowed = k => !c.only || c.only.has(k);
   const inScope = o => o.in_game && o.in_roster && !o.piloted && !c.exclude.includes(o.agent);
-  const awayNow = c.home == null ? 0 : characters.filter(o => inScope(o) && o.room !== c.home).length;
+  // HOME IS A SET (operator 2026-11-13: "let them even practice in the guild hall if someone needs it for reagents").
+  const isHome = r => r != null && (r === c.home || c.homes.includes(r));
+  const awayNow = c.home == null ? 0 : characters.filter(o => inScope(o) && !isHome(o.room)).length;
   let awayGranted = 0;
   const touched = new Set();
   const hall = hallStock(data.chests ?? [], c.hall_room);
@@ -436,7 +443,7 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
   // Phase 1: every character's practice plan, so a donor's own want is known before anybody gives.
   const plans = new Map();
   for (const o of characters) if (inScope(o)) {
-    const creatures = roomHasCreatures(data.spawns, c.home ?? o.room, c);
+    const creatures = roomHasCreatures(data.spawns, isHome(o.room) ? o.room : (c.home ?? o.room), c);
     try { plans.set(o.agent, practiceFor(o, c, data.catalogue, { creatures })); } catch (e) { plans.set(o.agent, { ok: false, why: e.message }); }
   }
   const ownWant = (agent, key) => (plans.get(agent)?.reagents ?? []).filter(r => (r.key ?? itemKey(r.item)) === key)
@@ -494,7 +501,7 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
       if (fragile) return `fragile body (${o.hp_max} max health < ${c.fragile_below}): no road actions`;
       if (o.pvp_hold) return 'a PvP return hold is in force';
       if (c.home == null) return 'no home room given';
-      if (o.room !== c.home) return `not at home (in ${o.room}): road actions start from ${c.home}`;
+      if (!isHome(o.room)) return `not at home (in ${o.room}): road actions start from ${[c.home, ...c.homes].join(' or ')}`;
       if (confined && !(o.policy.confineRooms ?? []).map(Number).includes(Number(room)))
         return `confined to ${(o.policy.confineRooms).join(',')}`;
       if (awayNow + awayGranted >= c.away_limit) return `away limit: ${awayNow + awayGranted} already away of ${c.away_limit}`;
@@ -626,7 +633,8 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
         if (!block) {
           const takeN = Math.min(amount, chest.amount - c.hall_keep);
           chest.amount -= takeN;
-          take({ kind: 'hall_draw', item: chest.name, amount: takeN, hall: c.hall_room, home: c.home, road: true },
+          take({ kind: 'hall_draw', item: chest.name, amount: takeN, hall: c.hall_room,
+                 home: c.stay_in_hall && isHome(c.hall_room) ? c.hall_room : c.home, road: true },
                `${need.item} short ${amount}; the hall chests hold ${chest.amount + takeN}`);
           supplied = true; break;
         }
@@ -657,7 +665,7 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
         supplied = true; break;
       }
       // 4. BUY at the cheapest reachable counter.
-      if (allowed('buy') && !o.buy_reagents) d.notes.push(`buy ${need.item}: the loadout says buy_reagents false`);
+      if (allowed('buy') && !o.buy_reagents && !c.buy_override) d.notes.push(`buy ${need.item}: the loadout says buy_reagents false`);
       else if (allowed('buy') && data.sourcing && !gate('buy', need.item)) {
         const b = buySource(data.sourcing, need.item, c);
         if (b.best) {

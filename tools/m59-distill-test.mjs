@@ -595,3 +595,16 @@ console.log(`\n${n} passed`);
   const bad = cases.filter(([b, want]) => mainlandBank(b) !== want);
   if (bad.length) { console.log('FAIL mainlandBank: ' + JSON.stringify(bad)); process.exitCode = 1; } else console.log('ok - island bank money is not counted');
 }
+
+// Home is a set: a character in the hall (a second home) is not away, practises there, and a hall draw may stay.
+{
+  const { decide } = await import('./m59-distill.mjs');
+  const mk = (agent, room) => ({ agent, character: agent, in_game: true, in_roster: true, room, hp: 50, hp_max: 50, pack: [], spells: [],
+    purse: 100, bank: 0, policy: {}, learning: { planned: { configured: true, active: [] } } });
+  const out = decide({ characters: [mk('t1', 153), mk('t2', 714), mk('t3', 50)], config: { home: 153, homes: [714], away_limit: 5 }, data: {}, history: [] });
+  if (out.away.now !== 1) { console.log('FAIL only the character outside both homes is away: ' + out.away.now); process.exitCode = 1; }
+  else console.log('ok - a character in a second home is not away');
+  const t3 = out.decisions.find(x => x.agent === 't3');
+  if (/not at home/.test(t3.why ?? '') && !/153 or 714/.test(t3.why)) { console.log('FAIL the refusal names both homes'); process.exitCode = 1; }
+  else console.log('ok - homes named together');
+}
