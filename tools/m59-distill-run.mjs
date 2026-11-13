@@ -87,6 +87,7 @@ function parseFarmAllow(s) {
 const fileConfig = flag('config') ? JSON.parse(readFileSync(flag('config'), 'utf8')) : {};
 const only = flag('only') ? list(flag('only')) : fileConfig.only ?? null;
 for (const k of only ?? []) if (!KINDS.includes(k)) { console.error(`--only ${k}: not one of ${KINDS.join(', ')}`); process.exit(2); }
+const squares = v => String(v ?? '').split(',').map(t => t.trim()).filter(Boolean).map(t => { const [row, col] = t.split(':').map(Number); return { row, col }; }).filter(p => p.row > 0 && p.col > 0);
 const cfg = mkConfig({
   ...fileConfig,
   home: flag('home') != null ? Number(flag('home')) : fileConfig.home,
@@ -97,6 +98,8 @@ const cfg = mkConfig({
   buy_override: has('buy-anyway') || fileConfig.buy_override,
   homes: flag('also-home') ? list(flag('also-home')).map(Number) : fileConfig.homes,
   stay_in_hall: has('hall-stay') || fileConfig.stay_in_hall,
+  doorway: flag('doorway') ? squares(flag('doorway')) : (fileConfig.doorway ?? []),
+  park: flag('park') ? squares(flag('park')) : (fileConfig.park ?? []),
   parallel: flag('parallel') != null ? Number(flag('parallel')) : (fileConfig.parallel ?? 1),
   hall_parallel: flag('hall-parallel') != null ? Number(flag('hall-parallel')) : (fileConfig.hall_parallel ?? 2),
   only,
@@ -335,6 +338,7 @@ if (!DATA.route) console.log('note: no substrate/m59-map.json, so routes are not
 
 async function pass() {
   const t0 = Date.now();
+  if (APPLY && cfg.doorway.length && cfg.park.length && cfg.home != null) await clearDoorway();
   if (APPLY) {
     const w = whichOk();
     if (!w.ok) { say(`m59-which refused (${w.out}) — nothing applied this pass`); return; }
@@ -389,6 +393,32 @@ async function runAction(a, pass_id) {
              queued: r.queued ?? undefined, code: r.code ?? undefined, why: r.why ?? null,
              ...(r.before !== undefined ? { before: r.before } : {}) });
     say(`${a.agent}: ${a.kind} ${r.ok ? 'ok' : r.refused ? 'REFUSED' : 'FAILED'}${r.why ? ` -- ${r.why}` : ''}`);
+  }
+}
+
+// THE DOORWAY OF HOME. The Cibilo Creek Inn (153) has one working exit, at r3c1, and it is also where a body
+// coming home stops. On 2026-11-13 sixteen idle characters stood on and around it and four buyers spent fifteen
+// minutes unable to leave ("route_progressing_exits_exhausted"). Before each pass, anybody idle on a --doorway
+// square of the home room is walked to a free --park square (squares a body has been seen to stand on).
+async function clearDoorway() {
+  let rows;
+  try { rows = (await call('fleet', {}, 120_000))?.fleet ?? []; } catch { return; }
+  const key = p => `${p?.row},${p?.col}`;
+  const door = new Set(cfg.doorway.map(key));
+  const occupied = new Set(rows.filter(x => x.room_num === cfg.home && x.position).map(x => key(x.position)));
+  const free = cfg.park.filter(p => !occupied.has(key(p)));
+  for (const x of rows) {
+    if (x.room_num !== cfg.home || !x.position || !door.has(key(x.position))) continue;
+    if (x.piloted || x.human_held || (x.ordered_by && !/^keeper/i.test(String(x.ordered_by)))) {
+      const ap = await call('autopilot', { agent: x.agent, action: 'status' }, 60_000).catch(() => null);
+      if (!ap?.movement || ap.movement.order != null) continue;   // genuinely on its way somewhere: leave it
+    }
+    while (free.length) {
+      const p = free.shift();
+      const res = await call('walk_to', { agent: x.agent, row: p.row, col: p.col, max_steps: 20,
+        avoid_squares: cfg.doorway }, 60_000).catch(e => ({ error: e.message }));
+      if (res?.arrived) { say(`doorway: moved ${x.agent} off r${x.position.row}c${x.position.col} to r${p.row}c${p.col}`); break; }
+    }
   }
 }
 
