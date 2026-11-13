@@ -25,7 +25,12 @@ import { walk, verify, rideChalice } from './m59-fleetscript.mjs';
 
 export const HALL = 714;
 // A refusal of the PASSAGE, not of the chests: worth one more try from wherever the body now stands.
-export const PASSAGE_REFUSAL = /guild door \d+ trigger not reached|outside the known passage|not in the hall/i;
+export const PASSAGE_REFUSAL = /guild door \d+ trigger not reached|guild door \d+ could not be crossed|outside the known passage|not in the hall/i;
+// THE DOOR REFUSED EVERY PRESS ("unable to go anywhere"), 2026-11-13. Twice in half an hour at door 59: the
+// keeper's play_dead rung (rest at the safe wall) took the body mid-crossing because vigor had dipped under
+// the 80 rest line on the walk in (76 and 78 at the press), so the presses went out six squares off the
+// trigger. The refusal text does not carry the cancel, so this is waited out like a survival cancel.
+export const DOOR_NOT_CROSSED = /guild door \d+ could not be crossed/i;
 
 // A passage walk the KEEPER cancelled for survival (playing dead, resting at the wall): the body is
 // hurt and the ladder is doing its job. Retrying 15 seconds later walks straight into the same cancel
@@ -42,18 +47,31 @@ export const healthFraction = st => {
   return null;
 };
 // Wait until health is back to `atLeast` (or the clock runs out). Never throws; returns the last reading.
+// Vigor and the line the keeper rests below, when the status says (either shape); null when unread.
+export const vigorReading = st => {
+  const v = st?.vigor ?? st?.vitals?.vigor ?? null;
+  if (v == null) return null;
+  const value = Number(typeof v === 'object' && v ? v.value : v);
+  if (!Number.isFinite(value)) return null;
+  const line = Number(typeof v === 'object' && v ? v.rest_threshold : NaN);
+  return { value, line: Number.isFinite(line) ? line : 80 };
+};
+// Wait until health is back to `atLeast` AND vigor is back over the rest line (a rest at the wall is often
+// about vigor alone, with health full), or the clock runs out. Never throws; returns the last reading.
 export async function waitForRecovery(call, agent, { atLeast = 0.95, maxMs = 8 * 60_000, everyMs = 20_000, sleepFn = sleep, now = Date.now } = {}) {
   const until = now() + maxMs; let frac = null;
   for (;;) {
-    frac = healthFraction(await call('status', { agent }, 60_000).catch(() => null));
-    if (frac != null && frac >= atLeast) return { recovered: true, health: frac };
+    const st = await call('status', { agent }, 60_000).catch(() => null);
+    frac = healthFraction(st);
+    const vig = vigorReading(st);
+    if (frac != null && frac >= atLeast && (!vig || vig.value >= vig.line)) return { recovered: true, health: frac, vigor: vig?.value ?? null };
     if (now() >= until) return { recovered: false, health: frac };
     await sleepFn(everyMs);
   }
 }
 // One pause between attempts: a survival cancel waits out the rest; anything else waits pauseMs.
 async function pauseBefore(call, agent, why, { pauseMs, sleepFn, recovery }) {
-  if (SURVIVAL_CANCEL.test(String(why ?? ''))) return waitForRecovery(call, agent, { sleepFn, ...recovery });
+  if (SURVIVAL_CANCEL.test(String(why ?? '')) || DOOR_NOT_CROSSED.test(String(why ?? ''))) return waitForRecovery(call, agent, { sleepFn, ...recovery });
   await sleepFn(pauseMs); return null;
 }
 const countIn = (inv, item) => (inv?.items ?? [])

@@ -14,7 +14,8 @@ const broker = (replies, pack = { emerald: 0 }) => {
     calls.push(name);
     // Like the real pack: an emptied stack is absent, never listed at amount 0 (0 means ONE unstackable).
     if (name === 'inventory') return { items: Object.entries(pack).filter(([, a]) => a > 0).map(([name, amount]) => ({ name, amount })) };
-    if (name === 'status') return { hp: { value: (pack.__hp ??= [100]).length > 1 ? pack.__hp.shift() : pack.__hp[0], max: 100 } };
+    if (name === 'status') return { hp: { value: (pack.__hp ??= [100]).length > 1 ? pack.__hp.shift() : pack.__hp[0], max: 100 },
+      ...(pack.__vigor ? { vigor: { value: pack.__vigor.length > 1 ? pack.__vigor.shift() : pack.__vigor[0], rest_threshold: 80 } } : {}) };
     if (name === 'hall_withdraw') { const r = replies.shift() ?? { ok: false, why: 'no more replies' };
       for (const [k, v] of Object.entries(r.give ?? {})) pack[k] = (pack[k] ?? 0) + v;
       for (const [k, v] of Object.entries(r.take ?? {})) pack[k] = (pack[k] ?? 0) - v; return r; }
@@ -102,6 +103,16 @@ await ok('hallDrawSteps: chalice first when a holder is named, then the walk, th
   assert.deepEqual(hallDrawSteps({ wants: [], holder: 'Loial the Ogier' }).map(s => s.do), ['ride_chalice', 'walk', 'verify']);
   assert.equal(hallDrawSteps({ wants: [], holder: 'x' })[0].optional, true, 'a refused ride falls through to the walk');
   assert.deepEqual(hallDrawSteps({ wants: [] }).map(s => s.do), ['walk', 'verify']);
+});
+
+await ok('a door that refused every press (a keeper rest mid-crossing) is retried after vigor is back over the rest line', async () => {
+  const b = broker([{ ok: false, why: 'guild door 59 could not be crossed: the server refused 3 of 3 presses as "unable to go anywhere" (body at r2c36, trigger r3c28)' },
+                    { ok: true, took: { emerald: 10 }, give: { emerald: 10 } }],
+                   { emerald: 0, __hp: [100], __vigor: [76, 78, 81] });
+  const r = await withdrawWithRecovery(b.call, 't10', [{ item: 'emerald', amount: 10 }], { sleepFn: nap });
+  assert.equal(r.ok, true); assert.equal(r.attempts, 2);
+  assert.equal(b.calls.filter(c => c === 'status').length, 3, 'waited through 76 and 78 for 81');
+  assert.ok(PASSAGE_REFUSAL.test('guild door 59 could not be crossed: x'));
 });
 
 console.log(`\n${n} passed`);
