@@ -128,6 +128,16 @@ export function config(over = {}) {
  * @param karma   the `status` karma value, or null when unread
  * @param loadout the character's loadout `policy` block (substrate/loadouts/<Name>.json), or null
  */
+/** MONEY A MAINLAND BANKER WILL HAND OVER. `banked.balance` is the LAST account visited, and Ko'catan's is a separate
+ *  account no mainland banker pays out: Fozzie's 261,796 there read as bank money, and a 1000 learn went to Barloque
+ *  to be told "You have no money to withdraw!" (2026-11-13). Every road action here starts at a mainland home. */
+export function mainlandBank(banked) {
+  if (!banked) return 0;
+  const accts = banked.accounts ?? (banked.account ? { [banked.account]: banked.balance } : null);
+  if (!accts) return num(banked.balance) ?? 0;
+  return Object.entries(accts).filter(([k]) => !/kocatan/i.test(k)).reduce((t, [, v]) => t + (num(v) ?? 0), 0);
+}
+
 export function observation(row = {}, { spells = null, karma = null, loadout = null } = {}) {
   const [hp, hpMax] = pair(row.health), [mana, manaMax] = pair(row.mana);
   const pack = (row.pack_items ?? []).map(i => ({ name: String(i.name ?? ''), amount: Number(i.amount) || 1 }));
@@ -137,7 +147,7 @@ export function observation(row = {}, { spells = null, karma = null, loadout = n
     in_roster: row.in_roster !== false,
     piloted: typeof row.human_held === 'boolean' ? row.human_held : !!row.piloted,
     room: num(row.room_num), hp, hp_max: hpMax ?? num(row.level), mana, mana_max: manaMax,
-    vigor: num(row.vigor), purse: num(row.purse) ?? 0, bank: num(row.banked?.balance) ?? 0,
+    vigor: num(row.vigor), purse: num(row.purse) ?? 0, bank: mainlandBank(row.banked),
     bank_account: row.banked?.account ?? null,
     pack, pack_percent: num(row.pack?.percent),
     committed: row.committed ?? null, busy: row.busy ?? null, ordered_by: row.ordered_by ?? null,

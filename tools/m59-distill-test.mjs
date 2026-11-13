@@ -584,3 +584,14 @@ console.log(`\n${n} passed`);
   if (d.action?.kind === 'learn' || !d.notes.some(n => /banned by the operator/.test(n))) { console.log('FAIL a banned ability must not be learned: ' + JSON.stringify(d)); process.exitCode = 1; }
   else console.log('ok - banned ability is not sent');
 }
+
+// Ko'catan money is not mainland money.
+{
+  const { mainlandBank } = await import('./m59-distill.mjs');
+  const cases = [[{ balance: 261796, account: 'kocatan' }, 0],
+                 [{ balance: 0, account: 'jasper-tos-barloque', accounts: { 'jasper-tos-barloque': 0, kocatan: 261796 } }, 0],
+                 [{ balance: 5000, account: 'jasper-tos-barloque' }, 5000],
+                 [{ balance: 700 }, 700], [null, 0]];
+  const bad = cases.filter(([b, want]) => mainlandBank(b) !== want);
+  if (bad.length) { console.log('FAIL mainlandBank: ' + JSON.stringify(bad)); process.exitCode = 1; } else console.log('ok - island bank money is not counted');
+}
