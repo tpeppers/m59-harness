@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { rawIntellect } from './m59-learners.mjs';
+import { rawIntellect, outOfReach, reachableTeacher, stageBarrier } from './m59-learners.mjs';
 import { isVaultmanName, vaultsSaid, isBankerLine } from './m59-vaults.mjs';
 import {renderArrivals} from './m59-arrivals-page.mjs';
 import {movementRegionSpec} from './m59-movement-region.mjs';
@@ -926,6 +926,7 @@ function learningView(c) {
     const matches = kinds.map(kind => byName.get(`${kind}:${learningName(entry.name)}`)).filter(Boolean);
     const row = matches.length === 1 ? matches[0] : null;
     const teacher = row ? taughtAbility(row.name, row.kind) : null;
+    const teachers = teacher?.teachers ?? [];
     return {
       order, name: entry.name, kind: row?.kind ?? entry.kind ?? null,
       queue_stage: entry.queue_stage ?? order,
@@ -933,7 +934,8 @@ function learningView(c) {
       remaining_required: row?.remaining_required ?? null,
       expected_buyable: row?.can_learn === true && !!teacher && teacher.teachers.length > 0,
       price: teacher?.price ?? (row?.level ? 250 * (2 ** Number(row.level)) : null),
-      teacher: teacher?.teachers[0] ?? null,
+      teacher: reachableTeacher(teachers),
+      out_of_reach: outOfReach(row, teachers) ?? undefined,
       blocked_by: row?.blocked_by ?? (!row ? ['already known or absent from the learning catalogue']
         : !teacher ? ['no teacher in the merchant catalogue'] : undefined),
     };
@@ -942,10 +944,9 @@ function learningView(c) {
   // buyable after only part of the preceding level is trained; selecting it here would
   // turn "all Weaponcraft 2, then all Weaponcraft 3" into a suggestion. Known abilities
   // disappeared in plannedAbilities(), so the smallest remaining stage is the active one.
-  const activeStage = planned.length
-    ? Math.min(...planned.map(row => Number(row.queue_stage) || 0)) : null;
-  const active = activeStage == null ? []
-    : planned.filter(row => (Number(row.queue_stage) || 0) === activeStage);
+  // An ability out of reach (island-only teacher, no teacher, not in the catalogue) does not hold the barrier:
+  // stageBarrier (m59-learners.mjs) skips it, so a stage whose remaining abilities are all out of reach is done.
+  const { activeStage, active } = stageBarrier(planned);
   // One purchase per character per press. Buying an ability changes PlayerCanLearn's
   // inputs, so a second one that was eligible before the first is not assumed eligible
   // afterwards. The next refresh is the next trustworthy preflight.

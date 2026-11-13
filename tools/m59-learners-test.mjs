@@ -6,7 +6,7 @@
 // of `have` counts only the best three (a gain in the fourth-best moves nothing); a full book cuts
 // the window to its oldest row; no gain is no ETA rather than infinity or zero; the Princess shield's
 // intellect bonus is taken back out because PlayerCanLearn reads raw intellect.
-import { standing, trend, kindOf, abilitiesAt, plannerCatalogue, rawIntellect } from './m59-learners.mjs';
+import { standing, trend, kindOf, abilitiesAt, plannerCatalogue, rawIntellect, outOfReach, reachableTeacher, stageBarrier } from './m59-learners.mjs';
 import * as shim from './m59-spell-learners.mjs';
 import { learningConstants } from './m59-loadout.mjs';
 
@@ -86,6 +86,23 @@ ok(rawNeed - shownNeed === 14, `five points of intellect is 14 points of need: $
 ok(trend({ abilities: gonzo, intellect: 15, name: 'archery', catalogue, constants, history: hist, now, windowMs: 10 * H }).eta_margin
    === trend({ abilities: gonzo, intellect: 15, name: 'archery', catalogue, constants, history: hist, now, windowMs: 10 * H }).eta,
    'margin defaults to 0');
+
+// A stage whose remaining abilities are all out of reach is done (Zoot, 2026-11-13).
+ok(outOfReach(null) === 'absent from the learning catalogue', 'absent row is out of reach');
+ok(outOfReach({ name: 'x' }, []) === 'no teacher in the merchant catalogue', 'no teacher is out of reach');
+ok(/island/.test(outOfReach({ name: 'x' }, [{ name: 'Bone', room: 2141 }])), 'island-only teacher is out of reach');
+ok(outOfReach({ name: 'x' }, [{ name: 'Bone', room: 2141 }, { name: 'Jonas', room: 371 }]) === null, 'one mainland teacher is enough');
+ok(reachableTeacher([{ name: 'Bone', room: 2141 }, { name: 'Jonas', room: 371 }]).room === 371, 'the mainland teacher is chosen');
+const zoot = [
+  { name: 'detect invisible', queue_stage: 3, out_of_reach: 'taught only on the island (2141)' },
+  { name: 'martyrs battleground', queue_stage: 3, out_of_reach: 'no teacher in the merchant catalogue' },
+  { name: 'eagle eyes', queue_stage: 4 }, { name: 'deflect', queue_stage: 4 }, { name: 'haste', queue_stage: 5 } ];
+const sb = stageBarrier(zoot);
+ok(sb.activeStage === 4 && sb.active.map(r => r.name).join() === 'eagle eyes,deflect', `stage 3 all out of reach -> stage 4: ${JSON.stringify(sb)}`);
+const held = stageBarrier([{ name: 'a', queue_stage: 3 }, { name: 'b', queue_stage: 3, out_of_reach: 'x' }, { name: 'c', queue_stage: 4 }]);
+ok(held.activeStage === 3 && held.active.length === 1, 'one reachable ability still holds its stage');
+ok(stageBarrier([{ name: 'a', queue_stage: 1, out_of_reach: 'x' }]).activeStage === null, 'nothing reachable: no stage');
+ok(stageBarrier([]).active.length === 0, 'empty plan: no stage');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

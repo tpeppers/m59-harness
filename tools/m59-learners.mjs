@@ -214,3 +214,33 @@ export async function main(argv = process.argv.slice(2)) {
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) await main();
+
+// A PLANNED ABILITY NOBODY CAN GO AND BUY DOES NOT HOLD THE QUEUE. The planner finishes each stage ("all Kraanan 3,
+// then all Kraanan 4"), and a stage whose last abilities are taught only on the island, or by no teacher at all, is
+// never finished: Zoot held 249/248 toward Kraanan 4 all night of 2026-11-13 behind detect invisible (the Bone
+// Priestess, 2141) and martyrs battleground (no merchant teaches it). Operator, that night: consider a level done
+// when its remaining spells are out of reach. Not points: an ability merely not yet earned still holds the barrier.
+export const ISLAND_ROOM_MIN = 2000;
+
+/** Why this planned ability cannot be bought by walking there, or null. `row` is the learning-catalogue row (null
+ *  when absent), `teachers` the merchant catalogue's [{name, room}] for it. */
+export function outOfReach(row, teachers = []) {
+  if (!row) return 'absent from the learning catalogue';
+  if (!teachers.length) return 'no teacher in the merchant catalogue';
+  if (teachers.every(t => Number(t.room) >= ISLAND_ROOM_MIN))
+    return `taught only on the island (${teachers.map(t => t.room).join(', ')})`;
+  return null;
+}
+
+/** The teacher to walk to: the first one off the island, else the first. */
+export function reachableTeacher(teachers = []) {
+  return teachers.find(t => Number(t.room) < ISLAND_ROOM_MIN) ?? teachers[0] ?? null;
+}
+
+/** The first unfinished stage among abilities still in reach, and its rows. Out-of-reach rows are skipped. */
+export function stageBarrier(planned = []) {
+  const live = planned.filter(r => !r.out_of_reach);
+  if (!live.length) return { activeStage: null, active: [] };
+  const activeStage = Math.min(...live.map(r => Number(r.queue_stage) || 0));
+  return { activeStage, active: live.filter(r => (Number(r.queue_stage) || 0) === activeStage) };
+}
