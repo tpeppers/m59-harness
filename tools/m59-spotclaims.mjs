@@ -173,15 +173,12 @@ function records(dir, prefix, { retainDead = false } = {}) {
   // newest complete record, which makes the create-before-delete move crash-safe.
   const newest = new Map();
   for (const value of out) {
-    // Adjacent body-width passage zones can overlap. Keep one complete record
-    // per owned zone so an atomic handoff never discards its earlier admission.
-    const identity=prefix==='passage'?JSON.stringify([value.agent,value.room,value.zone]):value.agent;
-    const old = newest.get(identity);
+    const old = newest.get(value.agent);
     const at = Number(value.updated_at ?? value.claimed_at ?? 0);
     const oldAt = Number(old?.updated_at ?? old?.claimed_at ?? 0);
     if (!old || at > oldAt || (at === oldAt && value._name > old._name)) {
       if (old) remove(old._path);
-      newest.set(identity, value);
+      newest.set(value.agent, value);
     } else remove(value._path);
   }
   return [...newest.values()];
@@ -325,31 +322,19 @@ export function fileSpotHeldBy(agent, { snapshot = null } = {}) {
 // Passage claims use the same fleet/server namespace and atomic store as walls.
 // No timeout can evict a live body from a passage. Only its owner releases it
 // after a confirmed exit; dead-process claims are removed by records().
-export function reserveFilePassage(agent,room,zone,options={}) {
- const {handoffFrom=null,...request}=options;
- return reserveFilePassages(agent,room,[{zone,...request}],{handoffFrom});
-}
-// One native packet may overlap several narrow zones. Admit its complete set
-// under the same store lock, keeping every prior admission through the handoff.
-export function reserveFilePassages(agent,room,requests,{handoffFrom=null}={}) {
-  if(!fileSpotClaimsEnabled())return null;
-  return withLock(dir=>{
-    const all=records(dir,'passage'),owned=all.filter(r=>r.agent===String(agent));
-    if(owned.some(r=>r.pid!==process.pid))return {ok:false,reason:'passage_owner_process_changed'};
-    const normalized=requests.map(r=>({flow:null,entryPending:false,entry:null,character:null,...r}));
-    for(const request of normalized){
-      const conflict=all.find(r=>r.room===room&&r.zone===request.zone&&crossingAdmissionConflict(r,{agent:String(agent),flow:request.flow,entry:request.entry}));
-      if(conflict)return {ok:false,agent:conflict.agent,zone:request.zone};
-      const own=owned.find(r=>r.room===room&&r.zone===request.zone);
-      if(own&&(own.flow??null)!==request.flow)return {ok:false,reason:'passage_flow_changed'};
-    }
-    const adding=normalized.filter(r=>!owned.some(o=>o.room===room&&o.zone===r.zone));
-    const handoff=owned.length&&Array.isArray(handoffFrom)&&handoffFrom.length===owned.length&&owned.every(r=>
-      r.room===room&&!r.entryPending&&handoffFrom.some(h=>h.room===r.room&&h.zone===r.zone));
-    if(adding.length&&owned.length&&!handoff)return {ok:false,reason:'passage_exit_unconfirmed'};
-    for(const request of adding)writeExclusive(dir,'passage',String(agent),{
-      agent:String(agent),room,...request,pid:process.pid,process_started_at:PROCESS_STARTED_AT,updated_at:Date.now()});
-    return {ok:true};
+export function reserveFilePassage(agent, room, zone, {flow=null,entryPending=false,entry=null,character=null}={}) {
+  if (!fileSpotClaimsEnabled()) return null;
+  return withLock(dir => {
+    const all = records(dir, 'passage');
+    const conflict = all.find(r => r.room === room && r.zone === zone && crossingAdmissionConflict(r,{agent:String(agent),flow,entry}));
+    if (conflict) return { ok: false, agent: conflict.agent };
+    const own = all.find(r => r.agent === String(agent));
+    if(own&&own.pid!==process.pid)return {ok:false,reason:'passage_owner_process_changed'};
+    if (own?.room === room && own.zone === zone) return (own.flow??null)===flow?{ok:true}:{ok:false,reason:'passage_flow_changed'};
+    if (own) return { ok: false, reason: 'passage_exit_unconfirmed' };
+    writeExclusive(dir, 'passage', String(agent), { agent: String(agent), room, zone, flow, entryPending, entry, character,
+      pid: process.pid, process_started_at:PROCESS_STARTED_AT, updated_at: Date.now() });
+    return { ok: true };
   });
 }
 export function filePassageSnapshot(){
@@ -360,22 +345,22 @@ export function filePassageSnapshot(){
 // this admits no new body and never releases another live keeper's claim.
 export function retagOwnFilePassage(agent,room,zone,flow){
  if(!fileSpotClaimsEnabled())return null;if(typeof flow!=='string'||!flow||flow.length>2048)throw Error('invalid passage convoy flow');
- return withLock(dir=>{const all=records(dir,'passage'),own=all.find(r=>r.agent===String(agent)&&r.room===room&&r.zone===zone);if(!own)return{ok:false,reason:'passage_not_held'};if(own.pid!==process.pid||own.room!==room||own.zone!==zone)return{ok:false,reason:'passage_owner_or_location_changed'};if(own.flow===flow)return{ok:true,changed:false};const{_path,_name,...record}=own;writeExclusive(dir,'passage',String(agent),{...record,flow,updated_at:Date.now()});remove(_path);return{ok:true,changed:true};});
+ return withLock(dir=>{const all=records(dir,'passage'),own=all.find(r=>r.agent===String(agent));if(!own)return{ok:false,reason:'passage_not_held'};if(own.pid!==process.pid||own.room!==room||own.zone!==zone)return{ok:false,reason:'passage_owner_or_location_changed'};if(own.flow===flow)return{ok:true,changed:false};const{_path,_name,...record}=own;writeExclusive(dir,'passage',String(agent),{...record,flow,updated_at:Date.now()});remove(_path);return{ok:true,changed:true};});
 }
 // Called only after the owning native session observes its body inside the zone.
 export function confirmFilePassageEntry(agent,room,zone){
  if(!fileSpotClaimsEnabled())return null;
- return withLock(dir=>{const own=records(dir,'passage').find(r=>r.agent===String(agent)&&r.room===room&&r.zone===zone);
+ return withLock(dir=>{const own=records(dir,'passage').find(r=>r.agent===String(agent));
   if(!own||own.pid!==process.pid||own.room!==room||own.zone!==zone)return false;
   if(!own.entryPending)return true;
   const {_path,_name,...record}=own;writeExclusive(dir,'passage',String(agent),{...record,entryPending:false,updated_at:Date.now()});remove(_path);return true;
  });
 }
-export function releaseFilePassage(agent, {room=null,zone=null}={}) {
+export function releaseFilePassage(agent) {
   if (!fileSpotClaimsEnabled()) return null;
   return withLock(dir => {
     for (const r of records(dir, 'passage'))
-      if (r.agent === String(agent) && r.pid === process.pid&&(room==null||r.room===room)&&(zone==null||r.zone===zone)) remove(r._path);
+      if (r.agent === String(agent) && r.pid === process.pid) remove(r._path);
     return true;
   });
 }

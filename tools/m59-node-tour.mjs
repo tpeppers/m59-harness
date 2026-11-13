@@ -7,7 +7,6 @@ import {createHash} from 'node:crypto';
 import {protocolToClient} from './m59-finepos.mjs';
 import {roomGeometry,floorAt,edgeOf,floodReport} from './m59-ground.mjs';
 import {cutRail} from './m59-railcut.mjs';
-import {planNavMesh} from './m59-navmesh.mjs';
 import {railLeg,checkRoute} from './m59-noderails.mjs';
 import {STONES} from './m59-stones.mjs';
 import {resolveControlUrl} from './m59-fleetpath.mjs';
@@ -35,15 +34,6 @@ export function tourComplete(r){return r.start?.room===2&&r.end?.room===2&&r.nod
   r.nodes.every((n,i)=>n.stone===TOUR_NODES[i]&&insideNode(n.position,n.stone))&&!r.failure;}
 export function cutTourWalk(geo,from,step){
   const edge=edgeOf(geo);
-  const goal=Number.isFinite(step.x)&&Number.isFinite(step.y)?step:
-    {x:(step.col-1)*1024+512,y:(step.row-1)*1024+512};
-  const mesh=step.navmesh===false?null:planNavMesh(geo,from,goal,{allowedKinds:['walk'],maxMs:step.maxMs??2000,maxNodes:200000,
-    goalSquare:step.boxFlood?{row:step.row,col:step.col}:undefined,avoidSquares:step.avoidSquares,
-    minimumFloor:step.minimumFloor,edge});
-  if(mesh?.available&&mesh.found&&mesh.complete!==false){
-    const points=step.boxFlood?mesh.waypoints:mesh.waypoints.map(p=>({...p,f:floorAt(geo,p.x,p.y)}));
-    return {points,proof:{ok:true,bridgeOk:true,waypoints:points,visited:mesh.visited??0,source:'navmesh',navmesh_identity:mesh.identity}};
-  }
   const proof=step.boxFlood?floodReport(geo,from,{row:step.row,col:step.col},{lattice:64,cap:1500000,box:0}):
     cutRail(from,step,{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
   let points=step.boxFlood?proof.path:(proof.ok&&proof.bridgeOk?proof.waypoints:null);
@@ -79,7 +69,7 @@ export function railBoardingCut(geo,from,step,waypoints,{tries=6,spacing=16,onRa
   if(near.length&&near[0].d<=onRail)return {proof:{ok:true,why:'already_on_rail'},points:null,onRail:true,target:{index:near[0].i},attempts};
   for(const c of near){if(picked.length>=tries)break;if(!picked.some(q=>Math.abs(q.i-c.i)<spacing))picked.push(c);}
   const square=v=>Math.floor(v/1024)+1;
-  const candidates=[...picked.map(c=>({index:c.i,step:{...step,kind:'cut',board:undefined,boxFlood:false,room:step.room,x:c.p.x,y:c.p.y,row:square(c.p.y),col:square(c.p.x)}})),{index:'head',step:head}];
+  const candidates=[...picked.map(c=>({index:c.i,step:{kind:'cut',room:step.room,x:c.p.x,y:c.p.y,row:square(c.p.y),col:square(c.p.x)}})),{index:'head',step:head}];
   for(const c of candidates){
     const {proof,points}=cutTourWalk(geo,from,c.step);attempts.push({index:c.index,ok:!!points,why:points?null:proof.why??null});
     if(points)return {proof,points,target:c,attempts};

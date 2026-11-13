@@ -38,8 +38,6 @@ import {
   floorHeightAt, protocolToClient, clientToProtocol,
 } from './m59-roo.mjs';
 
-import {planNavMesh,navMeshExecutionAims} from './m59-navmesh.mjs';
-
 const NAV = {
   /**
    * Floor height (client/BSP units) at the CENTER of a square, from the BSP sector
@@ -342,21 +340,11 @@ const NAV = {
   // (x,y), 64 units/square. This is deliberately not the room router: the coarse
   // grid gets us near the exit,
   // then this resolves only the final BSP-scale gap with locally validated segments.
-  finePathProtocol(fromX, fromY, toX, toY, options = {}) {
-    const {step=8,margin=12*KOD_FINENESS,maxNodes=20000,maxMs=50,maxWaypoints=Infinity}=options;
-    if(options.navmesh!==false){
-      const from={x:protocolToClient(fromX),y:protocolToClient(fromY)},goal={x:protocolToClient(toX),y:protocolToClient(toY)};
-      const constraints={...options,maxNodes,maxMs,allowedKinds:['walk'],
-        bounds:{minX:Math.min(from.x,goal.x)-margin*16,minY:Math.min(from.y,goal.y)-margin*16,
-          maxX:Math.max(from.x,goal.x)+margin*16,maxY:Math.max(from.y,goal.y)+margin*16}};
-      const mesh=planNavMesh(this,from,goal,constraints);
-      if(mesh.available&&mesh.found&&mesh.complete!==false){
-        const execution=navMeshExecutionAims(this,mesh,{...constraints,maxMs:25});
-        const convert=p=>({x:clientToProtocol(p.x),y:clientToProtocol(p.y)});
-        if(execution.aims.length-1<=maxWaypoints)return {found:true,waypoints:execution.aims.slice(1).map(convert),
-          sourceWaypoints:mesh.waypoints.map(convert),source:'navmesh',navmesh_identity:mesh.identity,expanded:mesh.visited??0};
-      }
-    }
+  finePathProtocol(fromX, fromY, toX, toY, {
+    step = 8,
+    margin = 12 * KOD_FINENESS,
+    maxNodes = 20000,
+  } = {}) {
     const _fpT0 = Date.now();
     const _fpResult = this._finePathProtocolImpl(fromX, fromY, toX, toY, { step, margin, maxNodes });
     const _fpMs = Date.now() - _fpT0;

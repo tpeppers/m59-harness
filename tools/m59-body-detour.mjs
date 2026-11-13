@@ -1,8 +1,7 @@
 // Bounded local A* around live bodies. All points/distances are KOD (64/square).
 // Use the same wall/body microstep trace as the mover; send-time validation still owns packets.
 import { blocksMovement } from './m59-parse.mjs';
-import { protocolToClient, clientToProtocol, protocolToward } from './m59-roo.mjs';
-import { planNavMesh,navMeshExecutionAims } from './m59-navmesh.mjs';
+import { protocolToClient, protocolToward } from './m59-roo.mjs';
 
 export function blockingBodySnapshot(objects, selfId) {
   return [...(objects?.values?.() ?? [])].filter(o => o.id !== selfId && blocksMovement(o.flags ?? 0)
@@ -11,10 +10,10 @@ export function blockingBodySnapshot(objects, selfId) {
 }
 
 // Points are KOD wire units; the minimum height is in CLIENT geometry units.
-export function floorConstraintAllows(geo,p,minimumFloor,{roomFlags=0,overrideDepths=null}={}){
+export function floorConstraintAllows(geo,p,minimumFloor){
   if(!Number.isFinite(minimumFloor))return true;
   const x=protocolToClient(p.x),y=protocolToClient(p.y),leaf=geo.leafAtClient(x,y);
-  const height=leaf?.sector?geo.floorBaseAtClient(x,y,leaf,{roomFlags,overrideDepths}):null;
+  const height=leaf?.sector?geo.floorBaseAtClient(x,y,leaf):null;
   return Number.isFinite(height)&&height>=minimumFloor;
 }
 
@@ -54,7 +53,7 @@ function searchBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0,
   const key = p => `${Math.round((p.x - from.x) / spacing)},${Math.round((p.y - from.y) / spacing)}`;
   const allowed = p => p.x >= bounds.minX && p.x <= bounds.maxX && p.y >= bounds.minY && p.y <= bounds.maxY
     && !avoidSquares?.has?.(`${Math.floor(p.y / 64)},${Math.floor(p.x / 64)}`)
-    && floorConstraintAllows(geo,p,minimumFloor,{roomFlags,overrideDepths});
+    && floorConstraintAllows(geo,p,minimumFloor);
   const edge = (a, b) => {
     if (!allowed(b)) return null;
     const samples = Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/spacing));
@@ -126,79 +125,15 @@ function searchBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0,
 // collision rules, using the remainder of the original time/node budget.
 // Refinement is opt-in: ordinary departure searches retain their completed
 // refusal/cache contract and bounded legacy candidate costs.
-// Adapt the shared CLIENT mesh to this module's established KOD contract. Only a
-// loaded, identity-matched artifact participates; missing meshes retain native A*.
-function meshBodyDetour(geo,from,goal,options,maxMs,maxNodes){
- if(!geo?.collisionReady||![from?.x,from?.y,goal?.x,goal?.y].every(Number.isFinite))return null;
- const range=Math.max(8,Math.min(128,options.maxGoalRangeSquares??24,options.maxRangeSquares??8))*64;
- if(Math.max(Math.abs(goal.x-from.x),Math.abs(goal.y-from.y))>range)return null;
- const point=p=>({x:protocolToClient(p.x),y:protocolToClient(p.y)});
- const margin=Math.max(2,Math.min(24,options.marginSquares??2))*64;
- const bounds={minX:protocolToClient(Math.min(from.x,goal.x)-margin),
-  minY:protocolToClient(Math.min(from.y,goal.y)-margin),
-  maxX:protocolToClient(Math.max(from.x,goal.x)+margin),
-  maxY:protocolToClient(Math.max(from.y,goal.y)+margin)};
- const squares=Array.isArray(options.goalSquares)&&options.goalSquares.length>0&&options.goalSquares.length<=128&&
-  options.goalSquares.every(p=>Number.isInteger(p?.row)&&Number.isInteger(p?.col))?options.goalSquares:
-  Number.isInteger(options.goalSquare?.row)&&Number.isInteger(options.goalSquare?.col)?[options.goalSquare]:null;
- const obstacles=blockingBodySnapshot(options.objects,options.selfId);
- const threats=(options.threats??[]).map(t=>point({x:Number.isFinite(t.x)?t.x:t.col*64+32,
-  y:Number.isFinite(t.y)?t.y:t.row*64+32})).filter(t=>Number.isFinite(t.x)&&Number.isFinite(t.y));
- const radius=(options.threatRadius??4)*1024,weight=options.threatWeight??0;
- const spacing=([1,2,4,8,16].includes(options.spacingUnits)?options.spacingUnits:8)*16;
- // Retain the local detour's maximum-pressure cost, rather than changing it to
- // the additive whole-room threat field just because the graph changed.
- const pressure=p=>threats.reduce((cost,t)=>Math.max(cost,Math.max(0,1-Math.hypot(t.x-p.x,t.y-p.y)/radius)*weight),0);
- const cost=weight>0&&threats.length?(a,b)=>{
-  const distance=Math.hypot(b.x-a.x,b.y-a.y),samples=Math.max(1,Math.ceil(distance/spacing));let extra=0;
-  for(let i=1;i<=samples;i++)extra+=pressure({x:a.x+(b.x-a.x)*i/samples,y:a.y+(b.y-a.y)*i/samples});
-  return distance*(1+extra/samples);
- }:null;
- const mesh=planNavMesh(geo,point(from),point(goal),{obstacles,roomFlags:options.roomFlags??0,
-  overrideDepths:options.overrideDepths,avoidSquares:options.avoidSquares,minimumFloor:options.minimumFloor,
-  ...(squares?{goalSquares:squares}:{}),bounds,maxMs,maxNodes,deadline:options.deadline,
-  allowedKinds:['walk'],loadShards:false,threats,threatWeight:weight,threatRadius:radius,cost,now:options.now});
- if(!mesh.available||!mesh.found||mesh.complete===false)return {mesh};
- const convert=p=>({x:clientToProtocol(p.x),y:clientToProtocol(p.y)});
- const execution=navMeshExecutionAims(geo,mesh,{obstacles,roomFlags:options.roomFlags??0,overrideDepths:options.overrideDepths,
-  avoidSquares:options.avoidSquares,minimumFloor:options.minimumFloor,cost,maxMs:5,deadline:options.deadline,now:options.now});
- return {mesh,result:{found:true,waypoints:execution.aims.slice(1).map(convert),sourceWaypoints:mesh.waypoints.map(convert),
-  nodes:mesh.visited??0,bodies:obstacles.length,source:'navmesh',navmesh_identity:mesh.identity}};
-}
 export function planBodyDetour(geo,from,goal,options={}){
- // Input/range refusals retain their established priority, even with a zero
- // query budget. They do not require artifact lookup or collision serialization.
- if(!geo?.collisionReady||typeof geo.traceFineMoveClient!=='function'||
-  ![from?.x,from?.y,goal?.x,goal?.y].every(Number.isFinite))return searchBodyDetour(geo,from,goal,options);
- const range=Math.max(8,Math.min(128,options.maxGoalRangeSquares??24,options.maxRangeSquares??8))*64;
- if(Math.max(Math.abs(goal.x-from.x),Math.abs(goal.y-from.y))>range)return searchBodyDetour(geo,from,goal,options);
  const now=options.now??performance.now.bind(performance),start=now(),maxMs=options.maxMs??35,maxNodes=options.maxNodes??768;
- const deadline=Math.min(options.deadline??Infinity,start+maxMs);
- // The strict one-square executor relies on its original nearest-footing
- // native pour and atomic first target. Replacing that target with intermediate
- // mesh samples can move before a newly occupied destination is refused.
- const short=Math.max(Math.abs(goal.x-from.x),Math.abs(goal.y-from.y))<=64;
- let first=null;
- if(short){
-  first=searchBodyDetour(geo,from,goal,{...options,maxMs:Math.max(0,deadline-now())});
-  if(first.found||first.reason!=='no clear local body route')return first;
- }
- const attempt=options.navmesh===false?null:meshBodyDetour(geo,from,goal,{...options,deadline},
-  Math.max(0,Math.min(10,maxMs/4,deadline-now())),Math.max(0,maxNodes-(first?.nodes??0)));
- if(attempt?.result)return {...attempt.result,nodes:(attempt.result.nodes??0)+(first?.nodes??0)};
- const meshNodes=(attempt?.mesh?.visited??0)+(first?.nodes??0);
- // Missing/stale artifact lookup still spends this request's original clock.
- const remainingMs=deadline-now(),remainingNodes=maxNodes-meshNodes;
- if(remainingMs<=0||remainingNodes<=0)return {found:false,reason:'body detour budget exhausted',nodes:meshNodes,
-  ...(attempt?.mesh?.available?{navmesh_reason:attempt.mesh.reason}:{})};
- let result=first??searchBodyDetour(geo,from,goal,{...options,maxMs:remainingMs,maxNodes:remainingNodes}),nodes=first?meshNodes:(result.nodes??0)+meshNodes;
- if(meshNodes)result={...result,nodes};
+ let result=searchBodyDetour(geo,from,goal,options),nodes=result.nodes??0;
  let spacing=[1,2,4,8,16].includes(options.spacingUnits)?options.spacingUnits:8;
  while(!result.found&&result.reason==='no clear local body route'&&spacing>4&&options.refine===true){
-  spacing/=2;const remainingMs=deadline-now(),remainingNodes=maxNodes-nodes;
+  spacing/=2;const remainingMs=maxMs-(now()-start),remainingNodes=maxNodes-nodes;
   if(remainingMs<=0||remainingNodes<=0)break;
   result=searchBodyDetour(geo,from,goal,{...options,spacingUnits:spacing,maxMs:remainingMs,maxNodes:remainingNodes});
   nodes+=result.nodes??0;result={...result,nodes,refinedSpacingUnits:spacing};
  }
- return attempt?.mesh?.available?{...result,navmesh_reason:attempt.mesh.reason}:result;
+ return result;
 }

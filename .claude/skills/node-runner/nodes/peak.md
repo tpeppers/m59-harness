@@ -1,36 +1,5 @@
 # Seafarer's Peak — room 515, r20c17
 
-## 2026-11-12: normal entrance boarding and complete quiet return verified
-
-Two complete owned quiet native trials now connect the normal entrance at
-client `x31232/y50688`, floor 5056, to the node square r20c17 and back to the
-normal entrance. They took **127.5 and 127.7 seconds**, kept **36/36 HP**, and
-restored the owned native baseline after each trial. The earlier upper-start-only
-limitation below is superseded for this observed quiet geometry state.
-
-The new boarding fall is client **x9600/y21712**, floor **8896**, to
-**x7264/y24224**, floor **8064**. It reaches the western upper staircase from
-the entrance walking component. Walking then reaches the previously tested
-upper fall, **x7952/y25584/11136 → x10128/y23408/10080**, and continues to
-**x16768/y19840/11104** in r20c17. Both falls and the node endpoint repeated
-with **zero observed XY error**. The walking return ended at
-**x31248/y50672/5056**, 22.6 client units from the authored entrance target,
-inside the existing three-protocol-unit arrival tolerance.
-
-A separate pair of authored takeoff-to-landing trials first verified the new
-boarding flight. The model also passes 8, 16, 33 and 50 ms gravity frames.
-Receipt `navmesh-native-1794533600552` covers those two flight trials;
-`navmesh-native-1794533659103` covers both complete approach/return trials.
-Private receipts are under `substrate/scratch/navmesh-lab/`; the source-backed
-candidate, exact typed legs and authored starts are in
-`experiments/navmesh/peak-boarding-diagnostic.json`.
-
-Setup authored the initial room-local entry and disabled monsters. No
-mid-route placement, healing, attack or node activation was used. This proves
-the tested room-local quiet traversal, not town-to-node travel, monster
-survival, bonding or a complete acquisition circuit. Peak remains outside the
-five-node acquisition circuit until those separate requirements are addressed.
-
 ## 2026-10-06: upper-stair section verified; normal boarding still missing
 
 A quiet native character started at an **authored high staircase point**, client

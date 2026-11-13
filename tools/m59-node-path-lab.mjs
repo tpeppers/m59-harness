@@ -16,7 +16,6 @@ import {doorsFor} from './m59-doorplan.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
 import {quantizeRailPoint,landingCheck} from './m59-railfollow.mjs';
 import {parseNodeSquare,auditNodeWalk} from './m59-node-route-audit.mjs';
-import {navMeshExecutionAims} from './m59-navmesh.mjs';
 const args=process.argv.slice(2),has=n=>args.includes('--'+n),flag=n=>args[args.indexOf('--'+n)+1];
 if(has('help')){console.log('Explicit --config FILE --scene FILE --to rNcM --out DIR; optional --via rNcM --door --return rNcM --horizon-ms N --quiet --candidate-jumps 1..3 --travel-to ROOM --return-town ROOM --quiet-rooms 521,522');process.exit(0);}
 for(const n of ['config','scene','to','out'])if(!has(n))throw Error('--'+n+' required');
@@ -65,14 +64,6 @@ try{
     },
     onStarted:async(s)=>{
       let room=Number(s.world.room.num);const began=Date.now(),generation=s.movementGeneration;
-      receipt.passage_refusals=[];
-      const claimPassage=s.claimPassageMove.bind(s);
-      s.claimPassageMove=target=>{
-        const reply=claimPassage(target);
-        if(reply?.traffic==='passage_admission')receipt.passage_refusals.push({at:Date.now(),
-          target,position:{x:s.client.self?.x,y:s.client.self?.y,predicted:s.client.self?.predicted},reply});
-        return reply;
-      };
       const sample=()=>{const p=s.client.self,c=p?protocolToClient(p):null,g=s.world.geometry;
         receipt.poses.push({ms:Date.now()-began,room:s.world.room.num,row:p?.row,col:p?.col,x:p?.x,y:p?.y,
           hp:s.client.vitals()?.health?.value,floor_client:c&&g?g.floorBaseAtClient(c.x,c.y,g.leafAtClient(c.x,c.y)):null});};
@@ -122,11 +113,7 @@ try{
             if(aborted||s.movementWasCancelled(generation)||!reply.moved||!confirmed||Number(s.world.room.num)!==room||!landing.ok)return {arrived:false,reason:'candidate_landing_not_confirmed',landing};
             continue;
           }
-          const execution=plan.source==='navmesh'?navMeshExecutionAims(g,{waypoints:routeLeg.waypoints},{maxMs:500}):null;
-          if(execution)routeLeg.execution_aims=execution.aims;
-          for(const [index,p] of (execution?.aims??routeLeg.waypoints).entries()){
-            if(aborted||s.movementWasCancelled(generation))return {arrived:false,reason:'trial_cancelled',index};
-            if(!await s.confirmPosition())return {arrived:false,reason:'waypoint_origin_not_confirmed',index};
+          for(const [index,p] of routeLeg.waypoints.entries()){
             if(aborted||s.movementWasCancelled(generation))return {arrived:false,reason:'trial_cancelled',index};
             if(Number(s.world.room.num)!==room)return {arrived:false,reason:'room_changed',index};
             const wire=quantizeRailPoint(p,{floorAt:(x,y)=>g.floorBaseAtClient(x,y,g.leafAtClient(x,y)),edge:(a,b)=>g.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true});

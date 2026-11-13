@@ -101,8 +101,6 @@ function harness({ verdicts = {} } = {}) {
   const calls = [];
   const notes = [];
   const ap = Object.create(Autopilot.prototype);
-  // Stage authority and danger observation inspect their owning Session.
-  ap.s = { world: { room: { num: 2013 } }, client: {} };
 
   for (const stage of PASS_STAGES) {
     ap[stage] = async () => {

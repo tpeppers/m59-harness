@@ -5,30 +5,6 @@
  "_coordinates": "Square records in this file use named 1-based KOD `row` and `col` fields; JSON property order is not a positional convention. OPTIONAL `from_fine`/`to_fine` carry named {x,y} in CLIENT/BSP units (1024 to the square), and when present they are what the geometry validates against: a square is a summary and on jumping ground it is a false one — r40c33 spans 3520 to 10880, the valley floor and the high ledge in one square with one stand point. The squares remain the index every caller asks by; the fine points are the truth. See docs/m59-coordinates.md and docs/m59-routing.md.",
  "jumps": [
   {
-   "room": 515,
-   "room_name": "Seafarer's Peak",
-   "from": { "row": 22, "col": 10 },
-   "to": { "row": 24, "col": 8 },
-   "from_fine": { "x": 9600, "y": 21712 },
-   "to_fine": { "x": 7264, "y": 24224 },
-   "kind": "fall",
-   "requires": { "running": true },
-   "observed_by": "Owned isolated native quiet lab, 2026-11-12: two independent takeoff-only trials plus two complete normal-entrance-to-node-and-walking-return trials. Fresh server reads confirmed exact landing XY and floor 8064 from takeoff floor 8896. Native baseline restored after every trial. See experiments/navmesh/enhanced-native-results.json.",
-   "note": "One-way boarding from the normal entrance component toward the western upper stairs. Walk to CLIENT x5824/y24000, then follow the separately declared upper fall. Quiet movement evidence; no combat, activation, acquisition or circuit promotion."
-  },
-  {
-   "room": 515,
-   "room_name": "Seafarer's Peak",
-   "from": { "row": 25, "col": 8 },
-   "to": { "row": 23, "col": 10 },
-   "from_fine": { "x": 7952, "y": 25584 },
-   "to_fine": { "x": 10128, "y": 23408 },
-   "kind": "fall",
-   "requires": { "running": true },
-   "observed_by": "Owned isolated native quiet lab, 2026-11-12: both complete normal-entrance-to-node-and-walking-return trials confirmed exact landing XY and floor 10080 from takeoff floor 11136. Node footing x16768/y19840 on floor 11104 also confirmed exactly; walking return reached the entrance floor 5056 within 23 CLIENT units. Native baseline restored. See experiments/navmesh/enhanced-native-results.json. Earlier upper-section native proof is recorded in docs/m59-vale-peak-node-pathing.md.",
-   "note": "One way, after walking the upper stairs. Continue on foot to r20c17; return to r50c31 uses ordinary walking and does not reverse either fall. Quiet movement evidence only."
-  },
-  {
    "room": 2505,
    "room_name": "Konima's Ascension",
    "from": {

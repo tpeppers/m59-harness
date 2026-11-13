@@ -105,16 +105,10 @@ await test('shared physical bounds permit a checked small uphill fall but reject
   assert.equal(high.reason,'fall_span_exceeds_actual_floor_budget');
 });
 await test('Peak upper-stair candidate plan contains a proved fall and checked walk chords',()=>{
-  // The real upper fall was promoted after repeated native trials. Keep this
-  // research fixture independent of that registry so it still tests discovery
-  // and full geometry proof of an undeclared fall, with declarations preferred
-  // by the production planner as before.
-  const research=fineRouter(515,{exactWalk:true,navmesh:false});
-  research.declared.length=0;
-  const p=research.plan({x:5824,y:24000},{row:20,col:17},{allowCandidates:true,maxJumps:1,branch:24});
+  const p=peak.plan({x:5824,y:24000},{row:20,col:17},{allowCandidates:true,maxJumps:1,branch:24});
   assert.equal(p.ok,true,p.why);assert.equal(p.jumps,1);assert.equal(p.all_declared,false);
-  assert.equal(auditNodeWalk(p,research.geo).ok,true);
-  assert.ok(p.legs.filter(l=>l.kind==='jump').every(j=>proveCandidateFall(research.geo,j).model_proved));
+  assert.equal(auditNodeWalk(p,peak.geo).ok,true);
+  assert.ok(p.legs.filter(l=>l.kind==='jump').every(j=>proveCandidateFall(peak.geo,j).model_proved));
 });
 await test('connected node arrival requires a fresh endpoint in the destination room',async()=>{
   const fixture=(finalRoom,confirm=true,cancel=false)=>{
