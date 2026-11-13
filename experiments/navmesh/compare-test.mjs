@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {RoomGeometry,protocolToClient} from '../../tools/m59-roo.mjs';
+import {assessPath} from './compare.mjs';
+const map=JSON.parse(fs.readFileSync(new URL('../../substrate/m59-map.json',import.meta.url)));
+const geo=RoomGeometry.fromJSON(map.rooms[535].roo);geo.roomNum=535;
+const from={x:protocolToClient(736),y:protocolToClient(992)},goal={x:protocolToClient(736),y:protocolToClient(2272)};
+assert(assessPath(geo,[from,goal],from,goal).valid,'the clear flat control must remain valid');
+assert.equal(assessPath(geo,[{x:NaN,y:NaN}],from,goal).valid,false,'malformed paths cannot skip the proof loop');
+assert.equal(assessPath(geo,[{x:Infinity,y:goal.y}],from,goal).valid,false);
+assert.equal(assessPath(geo,[from],from,goal).reason,'incomplete_endpoint','a route prefix is not full arrival');
+assert.equal(assessPath(geo,[from,goal],from,goal,{avoidSquares:['25,11']}).reason,'mandatory_avoidance');
+assert.equal(assessPath(geo,[from,goal],from,goal,{minimumFloor:10000}).reason,'minimum_floor');
+assert.equal(assessPath(geo,[from,goal],from,goal,{obstacles:[{id:77,x:from.x,y:(from.y+goal.y)/2}]}).valid,false,'captured body collisions remain required');
+console.log('Passed 7 common-proof controls (valid route, malformed points, partial route, exclusion, floor, body)');

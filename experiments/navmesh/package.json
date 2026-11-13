@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "compare": "node compare.mjs --rounds 5 --query-rounds 25 --fine-resolution",
+    "test": "node compare-test.mjs && node geometry-test.mjs && node verify-results.mjs",
+    "report": "node report.mjs"
+  },
+  "dependencies": {
+    "recast-navigation": "0.44.0"
+  }
+}
