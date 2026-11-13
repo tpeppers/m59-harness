@@ -74,7 +74,9 @@ export const script = {
         if (!r.ok) throw new Error(`hall_withdraw: ${r.why}`);
         return true;
       }, 'taking the wants out of the chests, read back off the pack'),
-      walk(Number(p.home), { why: 'bring it to the raid' }),
+      // ALWAYS: a refused draw (a guild door that would not open, 2026-11-13) used to end the run where it stood, and
+      // Bunsen waited in the Barloque vaultman's office for 16 minutes with nothing driving him home.
+      { ...walk(Number(p.home), { why: 'bring it to the raid' }), always: true },
     ];
   },
 };
