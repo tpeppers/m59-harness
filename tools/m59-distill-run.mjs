@@ -65,7 +65,7 @@ const INTERVAL_S = Math.max(60, Number(flag('interval', 600)) || 600);
 const LEDGER = join(REPO, 'substrate', `distill-${FLEET}.jsonl`);
 
 // Imported after M59_FLEET is set, so every module resolves the same fleet.
-const { decide, observation, formatDecision, config: mkConfig, KINDS } = await import('./m59-distill.mjs');
+const { decide, observation, formatDecision, config: mkConfig, KINDS, abandonedStarts } = await import('./m59-distill.mjs');
 const { loadSpawns } = await import('./m59-spawns.mjs');
 const { loadSourcingData } = await import('./m59-sourcing-lib.mjs');
 const { loadCatalogue } = await import('./m59-deskpractice.mjs');
@@ -116,6 +116,18 @@ const record = (row) => {
   mkdirSync(dirname(LEDGER), { recursive: true });
   appendFileSync(LEDGER, JSON.stringify({ at: Date.now(), fleet: FLEET, ...row }) + '\n');
 };
+// A START WITH NO OUTCOME, FOUND AT STARTUP, IS AN ABANDONED RUN. Actions execute in this process, one at a time
+// (learn errands record their outcome the moment they are spawned), so a fresh runner can own nothing in flight.
+// 2026-11-13: two runs cut off by a loop restart read as "still in flight" for two hours, filling both away slots
+// while both bodies sat in the inn. Closed with ok:false so a half-done errand cools down before it is retried.
+const closeAbandoned = () => {
+  for (const h of abandonedStarts(readLedger())) {
+    record({ phase: 'outcome', id: h.id, agent: h.agent, kind: h.kind, key: h.key ?? null, ok: false, abandoned: true,
+             why: `abandoned: the runner that started it (${new Date(h.at).toISOString()}) is gone` });
+    console.log(`ledger: closed ${h.agent} ${h.kind} ${h.key ?? ''} as abandoned (started ${new Date(h.at).toISOString()})`);
+  }
+};
+if (APPLY) closeAbandoned();
 const keyOf = a => a.kind === 'learn' ? a.skill : a.kind === 'practice' ? 'practice' : a.key ?? a.item ?? null;
 
 // ------------------------------------------------------------------------------------------- observation

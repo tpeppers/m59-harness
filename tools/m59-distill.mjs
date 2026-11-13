@@ -210,6 +210,15 @@ export function historyGate(history = [], { agent, kind, key = null }, c, now = 
   return null;
 }
 
+/** The starts in a ledger that no outcome closes (the runner closes them as abandoned at startup). */
+export function abandonedStarts(history) {
+  const open = new Map();
+  for (const h of [...history].sort((x, y) => x.at - y.at)) {
+    const id = h.id ?? `${h.agent}:${h.kind}:${h.key}`;
+    if (h.phase === 'start') open.set(id, h); else if (h.phase === 'outcome') open.delete(id);
+  }
+  return [...open.values()];
+}
 /** Any in-flight action of ours on this agent, whatever the kind. */
 const inflight = (history, agent, c, now) => {
   const starts = new Map();

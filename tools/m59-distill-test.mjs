@@ -510,3 +510,19 @@ console.log(`\n${n} passed`);
   const g2 = historyGate(hist, { agent: 't14', kind: 'learn', key: 'scimitar wielding' }, c, now + 6 * 3600_000);
   if (g2) { console.log('FAIL after 6 h the learn may be tried again'); process.exitCode = 1; } else console.log('ok - after 6 h it may be tried again');
 }
+
+// A start with no outcome is abandoned when a fresh runner reads the ledger; a closed start is not.
+{
+  const { abandonedStarts, historyGate, config } = await import('./m59-distill.mjs');
+  const now = Date.parse('2026-11-13T10:00:00Z');
+  const hist = [
+    { id: 'p1-t11-hall_draw', agent: 't11', kind: 'hall_draw', key: 'fairy wing', phase: 'start', at: now - 30 * 60_000 },
+    { id: 'p1-t4-supply', agent: 't4', kind: 'supply', key: 'herb', phase: 'start', at: now - 20 * 60_000 },
+    { id: 'p1-t4-supply', agent: 't4', kind: 'supply', key: 'herb', phase: 'outcome', ok: true, at: now - 19 * 60_000 },
+  ];
+  const open = abandonedStarts(hist);
+  if (open.length !== 1 || open[0].agent !== 't11') { console.log('FAIL exactly the unclosed start is abandoned'); process.exitCode = 1; } else console.log('ok - only the unclosed start is abandoned');
+  const closed = [...hist, { id: 'p1-t11-hall_draw', agent: 't11', kind: 'hall_draw', key: 'fairy wing', phase: 'outcome', ok: false, abandoned: true, at: now }];
+  const g = historyGate(closed, { agent: 't11', kind: 'hall_draw', key: 'fairy wing' }, config({}), now + 1000);
+  if (g?.busy) { console.log('FAIL an abandoned start must no longer read as in flight'); process.exitCode = 1; } else console.log('ok - abandoned start no longer in flight');
+}
