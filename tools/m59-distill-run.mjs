@@ -365,6 +365,9 @@ async function pass() {
   const todo = out.decisions.map(d => d.action).filter(a => a && a.executable !== false)
     .sort((x, y) => (x.road ? 1 : 0) - (y.road ? 1 : 0));
   for (const a of todo.filter(a => !a.road)) await runAction(a, pass_id);
+  // AND AGAIN BEFORE THE ROAD: a hand-over just finished may have left its receiver standing in the doorway the
+  // trips are about to walk through (Scooter on r3c1, 2026-11-13 20:11).
+  if (cfg.doorway.length && cfg.park.length && cfg.home != null && todo.some(a => a.road)) await clearDoorway();
   const road = todo.filter(a => a.road);
   const width = Math.max(1, Number(cfg.parallel) || 1), hallWidth = Math.max(1, Number(cfg.hall_parallel) || 1);
   let hallBusy = 0;
