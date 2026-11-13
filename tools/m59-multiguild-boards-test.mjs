@@ -170,6 +170,34 @@ console.log('\nthe economy board: one rent per guild');
   ok('and neither balance hides the other', /rent owed/.test(two) && /rent credit/.test(two));
 }
 
+console.log('\nthe fleet\'s three halls: 714, 713 and 703 (the Den of Shadows)');
+{
+  // The roster's own three guilds and halls: Second Swines in 714, Rowlfs of War in 713, Rizzo's
+  // Revenge in 703. 703's two chests are r26c9 and r29c9 (guildh3.kod CreateStandardObjects).
+  registry.recordHall(713, 'Rowlfs of War');
+  registry.recordHall(703, "Rizzo's Revenge");
+  store.writeChest('r26c9', { room: 703, items: [{ name: 'mushroom', amount: 22 }], by: 'Rizzo', at: 5000 });
+  store.writeChest('r29c9', { room: 703, items: [{ name: 'garnet', amount: 4 }], by: 'Rizzo', at: 5000 });
+  store.writeChest('r12c24', { room: 713, items: [{ name: 'orc tooth', amount: 9 }], by: 'Gonzo', at: 5000 });
+  const halls = hallChoices({ store, registry });
+  ok('703 is a choice, with its guild and two chests',
+     halls.some(h => h.room === 703 && h.guild === "Rizzo's Revenge" && h.chests === 2), JSON.stringify(halls.find(h => h.room === 703)));
+  ok('...named the Den of Shadows', halls.find(h => h.room === 703)?.name === 'The Den of Shadows');
+  ok('713 is a choice too, and the list is sorted by room',
+     halls.some(h => h.room === 713) && halls.map(h => h.room).join(',') === [...halls.map(h => h.room)].sort((a, b) => a - b).join(','),
+     halls.map(h => h.room).join(','));
+  ok('714 is still the default', pickHall(halls, null).room === 714);
+  ok('?hall=703 is taken', pickHall(halls, '703').room === 703 && pickHall(halls, '703').explicit);
+  const page = renderInventory({ live: [], characters: new Set(), hall: '703' });
+  const pc = chestsOf(page);
+  ok("?hall=703 shows 703's chests and nobody else's", /garnet/.test(pc) && /mushroom/.test(pc) && !/sapphire/.test(pc) && !/elderberry/.test(pc));
+  ok('and marks 703 as the selected tab', /href="\?hall=703&amp;hours=168" class="on"/.test(page));
+  const rows = summarise(store.allChests({ room: 703 }), { owners: room => registry.ownerOfHall(room) });
+  ok("m59-hall-chests files them as 703's, Rizzo's Revenge's",
+     rows.map(r => r.chest_id).sort().join(',') === '703/r26c9,703/r29c9' && rows.every(r => r.guild === "Rizzo's Revenge"),
+     JSON.stringify(rows.map(r => [r.chest_id, r.guild])));
+}
+
 try { rmSync(root, { recursive: true, force: true }); } catch { /* a scratch dir left behind is harmless */ }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -80,12 +80,30 @@ function statesFor(doors) {
   return { heights: out.filter(h => !seen.has(h.join(',')) && seen.add(h.join(','))), partial: true };
 }
 
+// A FLOOR LIFT THAT IS A HALL'S PASSWORD DOOR, BAKED BESIDE THE CEILINGS — OPT-IN, BY ROOM.
+//
+// The Den of Shadows (703, guildh3.kod) has a ceiling ENTRANCE (sector 1) and, as its secret
+// door, a FLOOR: BRIDGE, sector 2, which the owner's password lowers 654 -> 500 and a 10 s timer
+// raises again (OpenSecretDoor / CloseSecretDoor, ANIMATE_FLOOR_LIFT). Its floor variant cannot
+// live in `m59-routes.json`'s `stepMaskVariants` instead: the runtime observer asks THIS table
+// first (`applyCeilingDoors ?? applyDoorState`), so in a room that has both, a floor variant is
+// never consulted and the ceiling state's mask overwrites it. One room, one table, every state.
+//
+// A floor door is `kind: 'floor'`; its sector packets are ANIMATE_FLOOR_LIFT (type 4), not 5.
+// CLOSED is where the .roo ships it (the impassable rest: the bridge stands 154 above both
+// banks) and OPEN is the other height. Only the rooms named here, so no other room's state keys
+// move: a key is the door heights joined, and a new door in a room would re-key every rail baked
+// against it.
+const FLOOR_LIFTS = Object.freeze({ 703: [2] });
+
 const rooms = {};
 const report = [];
 for (const entry of varsectors.rooms) {
   const num = entry.room;
   if (num == null || (only != null && num !== only)) continue;
-  const ceilings = (entry.sectors ?? []).filter(s => s.kind === 'ceiling' && s.heights?.length >= 2);
+  const lifts = new Set(FLOOR_LIFTS[num] ?? []);
+  const ceilings = (entry.sectors ?? []).filter(s => (s.kind === 'ceiling' ||
+    (s.kind === 'floor' && lifts.has(s.serverId ?? s.sector))) && s.heights?.length >= 2);
   if (!ceilings.length) continue;
   const roomEntry = map.rooms[num], routed = routes.rooms[num];
   if (!roomEntry?.rooFile) { report.push({ room: num, skipped: 'not in m59-map.json' }); continue; }
@@ -149,11 +167,17 @@ for (const entry of varsectors.rooms) {
     // router would call them sealed, which is precisely the failure this table exists to end,
     // reintroduced by the fix for it. Caught by `m59-ceilingtable-test.mjs` asserting the
     // all-shut mask equals the routing baseline; in those three rooms it does not.
+    if (s.kind === 'floor') {
+      const shippedFloor = Math.round((base.sectors[indices[0]]?.floorHeight ?? NaN) / 16);
+      if (!s.heights.includes(shippedFloor)) return null;   // reported below as unbakeable
+      return { id, name: s.name ?? null, kind: 'floor', closed: shippedFloor,
+               open: s.heights.find(h => h !== shippedFloor), shipped: shippedFloor, indices };
+    }
     const shippedKod = Math.round((base.sectors[indices[0]]?.ceilingHeight ?? NaN) / 16);
     return { id, ...(ids.length > 1 ? { ids } : {}), name: s.name ?? null,
              closed: Math.min(...s.heights), open: Math.max(...s.heights),
              shipped: Number.isFinite(shippedKod) ? shippedKod : null, indices };
-  }).filter(d => d.indices.length);
+  }).filter(d => d?.indices.length);
   // A shipped height that is neither open nor closed means the kod moves this sector between
   // positions the .roo does not use, and the fallback then has no honest answer — say so
   // rather than picking one.
@@ -167,7 +191,7 @@ for (const entry of varsectors.rooms) {
   let inert = 0;
   for (const heights of wanted) {
     const overrides = Object.fromEntries(doors.flatMap((d, i) =>
-      (d.ids ?? [d.id]).map(id => [id, { ceiling: heights[i] }])));
+      (d.ids ?? [d.id]).map(id => [id, d.kind === 'floor' ? { floor: heights[i] } : { ceiling: heights[i] }])));
     const geometry = geometryWithSectorHeights(buf, overrides, { mask: false, file: roomEntry.rooFile }).geometry;
     const mask = b64(geometry.buildStepMask());
     if (mask === baseline && heights.some((h, i) => h !== doors[i].closed)) inert++;
@@ -176,7 +200,9 @@ for (const entry of varsectors.rooms) {
     // sets on the live geometry, and headroom is read by more than the step mask. Dropping an
     // inert row would make the runtime fall back and leave the ceilings where they were.
     states[heights.join(',')] = { mask,
-      sectors: doors.flatMap((d, i) => d.indices.map(index => ({ index, ceiling: heightKodToClient(heights[i]) }))) };
+      sectors: doors.flatMap((d, i) => d.indices.map(index => (d.kind === 'floor'
+        ? { index, floor: heightKodToClient(heights[i]) }
+        : { index, ceiling: heightKodToClient(heights[i]) }))) };
   }
   rooms[num] = { security: base.security, baseline, doors, states, partial };
   report.push({ room: num, name: roomEntry.name ?? '', doors: doors.length,

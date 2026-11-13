@@ -392,3 +392,145 @@ test('a body dragged off the trigger before the press is recorded where it actua
   assert.equal(r.actual.at_press.fine_in_square, true);
   assert.deepEqual(r.expected.trigger, { row: 18, col: 10, at: 'r18c10' });
 });
+
+// THE DEN OF SHADOWS (703). ENTRANCE (sector 1) is a pressed ceiling, from r5c7 in the foyer
+// (plGuild_doors, guildh3.kod:76) and r5c8 inside (guildh3.kod SomethingTryGo). The password door is
+// a FLOOR LIFT: sector 2 is the bridge's two end platforms, which rest UP at 654 (flush with the span,
+// 154 above both banks); a saying outside the foyer drops them to 500 and LIFT_DELAY 10 s after the
+// SAYING they rise again, and a saying while that timer runs does nothing (OpenSecretDoor /
+// CloseSecretDoor, guildh3.kod:149-171). The fake below is that server, on a fake clock.
+const { moatSquares, liftHeights, liftBoardDelayMs, liftFloorAt, bakedLeg, HALLS: HALLS_703 } =
+  await import('./m59-guild-passage.mjs');
+const hall703 = (start, { deafFor = 0 } = {}) => {
+  const map = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url)));
+  attachStepMasks(map);
+  const g = sharedRoomGeometry(map.rooms[703]), observed = new Map(), log = [];
+  let t = 1_000_000, timer = null, deaf = deafFor;
+  const c = { self: { ...start }, room: { id: 4111, sectorHeights: observed }, evSeq: 0, events: [] };
+  const fire = () => {                               // the ptBridge timer: CloseSecretDoor
+    if (timer != null && t >= timer) {
+      timer = null; log.push('rise');
+      observed.set(2, { type: 4, height: 654, speed: 16, at: t });
+      c.events.push({ kind: 'sector-height', sector: 2, room: 4111, height: 654, type: 4, speed: 16, at: t, seq: ++c.evSeq });
+      applyCeilingDoors(map, 703, observed);
+    }
+  };
+  const clock = { now: () => t, sleep: async ms => { t += ms; fire(); } };
+  c.waitFor = async ({ since, match, timeoutMs = 100 }) => {
+    let hits = c.events.filter(e => e.seq > since && (!match || match(e)));
+    if (!hits.length) { t += timeoutMs; fire(); hits = c.events.filter(e => e.seq > since && (!match || match(e))); }
+    return { events: hits };
+  };
+  c.go = () => {
+    const { row, col } = c.self;
+    if (row !== 5 || ![7, 8].includes(col)) throw new Error(`invalid GO trigger r${row}c${col}`);
+    log.push(1); observed.set(1, { type: 5, height: 580 });
+    c.events.push({ kind: 'sector-height', sector: 1, room: 4111, height: 580, speed: 0, at: t, seq: ++c.evSeq });
+    applyCeilingDoors(map, 703, observed);
+  };
+  const k = { clock,
+    sayHallPassword: async () => {
+      log.push('say');
+      if (c.self.row >= 1 && c.self.row <= 8 && c.self.col >= 1 && c.self.col <= 7) throw new Error('said in the foyer');
+      if (deaf > 0) { deaf--; return { ok: true }; }                 // a saying the server did not take
+      if (timer != null) return { ok: true };                         // ptBridge running: ignored
+      observed.set(2, { type: 4, height: 500, speed: 16, at: t });
+      c.events.push({ kind: 'sector-height', sector: 2, room: 4111, height: 500, type: 4, speed: 16, at: t, seq: ++c.evSeq });
+      applyCeilingDoors(map, 703, observed);
+      timer = t + 10_000;
+      return { ok: true };
+    },
+    s: { need: () => c, world: { geometry: g, room: { num: 703 } }, pacer: { submit: async (_kind, fn) => fn() },
+      async step(col, row, options) {
+        assert.equal(options.confirm, true);
+        assert.ok(Math.max(Math.abs(row - c.self.row), Math.abs(col - c.self.col)) <= 1);
+        const lands = g.moverStepLands(c.self.row, c.self.col, row, col);
+        log.push(`${lands ? '' : 'refused '}r${row}c${col}`);
+        if (!lands) return { moved: false, reason: 'mover refused' };
+        c.self = { row, col }; t += 400; fire(); return { moved: true };
+      },
+      async walkTo(col, row) {
+        const path = g.path(c.self.row, c.self.col, row, col);
+        assert.ok(path.found, `path r${c.self.row}c${c.self.col} -> r${row}c${col}`);
+        c.self = { row, col }; t += 400 * path.steps.length; fire();
+        observed.delete(1); applyCeilingDoors(map, 703, observed);
+      } } };
+  return { c, k, log, g, map, observed, clock };
+};
+
+test('703: the river is a moat that splits the hall at the bridge, and the bridge is in no section', () => {
+  const moat = moatSquares(703);
+  assert.ok(moat.size > 30, `the river is ${moat.size} squares`);
+  for (const sq of ['13,17', '16,16', '19,10', '20,8']) assert.ok(moat.has(sq), `r${sq.replace(',', 'c')} is river`);
+  for (const [r, col] of [[5, 4], [5, 7], [5, 6], [3, 2]]) assert.equal(guildSection(r, col, 703), 0, `r${r}c${col} foyer`);
+  for (const [r, col] of [[5, 8], [5, 9], [12, 16], [16, 14], [10, 10]]) assert.equal(guildSection(r, col, 703), 1, `r${r}c${col} hall proper`);
+  for (const [r, col] of [[22, 16], [27, 9], [26, 9], [29, 9], [25, 2], [10, 20]])
+    assert.equal(guildSection(r, col, 703), 2, `r${r}c${col} far bank`);
+  for (const [r, col] of [[17, 14], [21, 16], [19, 15]]) assert.equal(guildSection(r, col, 703), -1, `r${r}c${col} is bridge`);
+  // Without the moat the step mask WADES: this is the assumption, pinned so a re-bake that changes it is seen.
+  const { g } = hall703({ row: 12, col: 16 });
+  assert.equal(g.moverStepLands(13, 16, 13, 17) && g.moverStepLands(13, 17, 13, 18), true,
+    'the coarse mask wades the river at r13 (the moat is our reading of the operator, not of the mask)');
+});
+
+test('703: the bridge platforms are a floor lift in the door table, and step only when down', () => {
+  assert.deepEqual(liftHeights(703, 2), { up: 654, down: 500 });
+  assert.equal(liftHeights(703, 1), null, 'the entrance is a ceiling, not a lift');
+  const { g, map, observed } = hall703({ row: 16, col: 14 });
+  assert.equal(g.moverStepLands(16, 14, 17, 14), false, 'at rest the north platform is a wall from the bank');
+  assert.equal(g.moverStepLands(21, 16, 22, 16), false, 'and the south one');
+  assert.equal(g.moverStepLands(17, 14, 18, 14), true, 'the span is level with the platforms when they are up');
+  observed.set(2, { type: 4, height: 500 }); applyCeilingDoors(map, 703, observed);
+  assert.equal(g.moverStepLands(16, 14, 17, 14), true, 'down, the north platform is a step from the bank');
+  assert.equal(g.moverStepLands(21, 16, 22, 16), true, 'and the south one');
+  assert.equal(g.moverStepLands(17, 14, 18, 14), false, 'and the span is 154 above it: no walking across while down');
+  observed.set(2, { type: 5, height: 500 }); applyCeilingDoors(map, 703, observed);
+  assert.equal(g.moverStepLands(16, 14, 17, 14), false, 'a CEILING packet at that height is not this floor door');
+});
+
+test('703: the lift timing helpers', () => {
+  assert.equal(liftBoardDelayMs({ from: 654, to: 500, speed: 16 }), 8125, '130 units to within a step, at 16/s');
+  assert.equal(liftBoardDelayMs({ from: 510, to: 500, speed: 16 }), 0, 'already within a step');
+  assert.equal(liftFloorAt({ from: 654, to: 500, speed: 16, at: 0 }, 5000), 574);
+  assert.equal(liftFloorAt({ from: 500, to: 654, speed: 16, at: 0 }, 60_000), 654);
+  assert.ok(bakedLeg([16, 14], [17, 14], [2], 703), 'board leg baked with the platforms down');
+  assert.ok(bakedLeg([17, 14], [21, 16], [], 703), 'span leg baked with them up');
+  assert.equal(bakedLeg([17, 14], [21, 16], [2], 703), null, 'and no span leg with them down');
+  assert.equal(HALLS_703[703].doors[1].lift, true);
+});
+
+test('703: foyer to the chests and back out, riding the lift both ways, on the real bake', async () => {
+  const { c, k, log } = hall703({ row: 5, col: 4 });            // viTeleport, guildh3.kod:42-43
+  await guildPassage(k, 2, () => false);
+  assert.equal(guildSection(c.self.row, c.self.col, 703), 2);
+  assert.deepEqual([c.self.row, c.self.col], [22, 16], 'stepped off the south platform onto the far bank');
+  const inward = log.slice();
+  // One press at the entrance; then say -> board -> rise -> the span -> say -> alight. Never a refused step.
+  assert.equal(inward[0], 1);
+  assert.equal(inward.filter(x => x === 'say').length, 2, 'the word said exactly twice: once to go up, once to come down');
+  assert.ok(!inward.some(x => /^refused/.test(x)), inward.join(' '));
+  const sayAt = inward.indexOf('say'), boardAt = inward.indexOf('r17c14'), riseAt = inward.indexOf('rise');
+  assert.ok(sayAt < boardAt && boardAt < riseAt, `say, board, then rise: ${inward.join(' ')}`);
+  assert.ok(inward.indexOf('r21c16') > riseAt && inward.lastIndexOf('say') > inward.indexOf('r21c16'),
+    'walked the span after the rise and said it again on the far platform');
+  log.length = 0;
+  await guildPassage(k, 0, () => false);
+  assert.equal(guildSection(c.self.row, c.self.col, 703), 0);
+  assert.equal(log.filter(x => x === 'say').length, 2);
+  assert.ok(log.includes('r21c16') && log.includes('r17c14') && log.includes('r16c14'), log.join(' '));
+  assert.equal(log.filter(x => x === 1).length, 1, 'one press at the entrance on the way out');
+});
+
+test('703: a saying the server did not take is waited out and said again', async () => {
+  const { c, k, log } = hall703({ row: 12, col: 16 }, { deafFor: 1 });
+  await guildPassage(k, 2, () => false);
+  assert.equal(guildSection(c.self.row, c.self.col, 703), 2);
+  assert.equal(log.filter(x => x === 'say').length, 3, 'one ignored, then the two that ride');
+});
+
+test('703: a body found standing on the bridge rides it off towards where it is going', async () => {
+  const { c, k, log } = hall703({ row: 17, col: 14 });
+  await guildPassage(k, 2, () => false);
+  assert.deepEqual([c.self.row, c.self.col], [22, 16]);
+  assert.equal(log.filter(x => x === 'say').length, 1, 'already up on the north platform: one saying to come down');
+});

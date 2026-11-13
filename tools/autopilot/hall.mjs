@@ -70,7 +70,7 @@ export class HallPart {
   }
 
   // CAN THIS BODY WORK THE CHESTS OF THE HALL IT IS STANDING IN? Three different refusals, each with
-  // its own fix: not a hall at all; a hall whose passage nobody has surveyed (714's and 713's are, in
+  // its own fix: not a hall at all; a hall whose passage nobody has surveyed (714's, 713's and 703's are, in
   // m59-guild-passage.mjs, and walking one hall's doors in another room would be walking into walls); and
   // a hall whose owner is neither our guild nor an ally (CanEnter, ghall.kod:1039, refuses silently).
   hallHere() {
@@ -124,7 +124,7 @@ export class HallPart {
     const where0 = this.hallHere();
     if (!where0.ok) return { ok: false, why: where0.why, steps: [{ step: 'which_hall', ok: false, why: where0.why }],
                              at: { row: c.self?.row ?? null, col: c.self?.col ?? null } };
-    // THE CHEST SECTION OF THE HALL WE ARE STANDING IN: 714's is 4 (GUILD_CHEST_SECTION), 713's is 2.
+    // THE CHEST SECTION OF THE HALL WE ARE STANDING IN: 714's is 4 (GUILD_CHEST_SECTION), 713's and 703's are 2.
     const chestSection = where0.room === 714 ? GUILD_CHEST_SECTION : chestSectionOf(where0.room);
     try {
       await guildPassage(this, chestSection, () => false);

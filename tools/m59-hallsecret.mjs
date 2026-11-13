@@ -75,7 +75,8 @@ function readSecrets(fleet, dir = FLEETS_DIR) {
 // the word that opens the chest room is the host's. Passwords are therefore keyed by hall ROOM:
 //
 //     { "guild_hall":  { "room": 714, "password": "..." },          <- the one there always was
-//       "guild_halls": { "705": { "password": "..." } } }           <- every other hall
+//       "guild_halls": { "713": { "password": "..." },             <- every other hall, by room:
+//                        "703": { "password": "..." } } }          (713 Rowlfs, 703 Rizzo's Revenge)
 //
 // The legacy `guild_hall` block stays where it is (older deploys read it) and answers for its own
 // room -- 714 when it names none, because that is the only hall it was ever written for.

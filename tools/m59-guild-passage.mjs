@@ -1,4 +1,4 @@
-// Walk a surveyed guild hall's doors (714, 713) from their reachable trigger sides.
+// Walk a surveyed guild hall's doors (714, 713, 703) from their reachable trigger sides.
 // The closed-state geometry identifies which section the character occupies;
 // actual movement always uses the live, collision-checked session geometry.
 import { readFileSync } from 'node:fs';
@@ -24,6 +24,11 @@ import { noteDoorPressRefused, doorPressPose } from './m59-door-refusal.mjs';
 //   secret + teleport          SAY the password on the trigger and the server MOVES the body
 //                              to `across` (UtilGoNearSquare); no sector moves, so there is no
 //                              height to wait for -- the position is the fact
+//   secret + lift              a FLOOR the password lowers and a timer raises (703's bridge): SAY
+//                              it on the bank trigger, wait for the floor's sector-height event,
+//                              board, walk the `deck` to its far end, and if the floor has risen
+//                              under the body say it again and step off to `across` once it is
+//                              down -- an elevator ridden, see `rideLift`
 export const LEGACY_HALL = 714;
 export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
 // EVERY DOOR IN THIS HALL IS SPOKEN, NOT PRESSED — INCLUDING ON THE WAY OUT.
@@ -110,13 +115,66 @@ const SLAUGHTERED_COMMAND = {
   ],
   chestSection: 2, insideSection: 1, booth: false,
 };
+// THE DEN OF SHADOWS (703, guildh3.kod), Rizzo's Revenge's hall off the Lake of Jala's Song (568).
+// Three sections, two doors, and its secret door is a FLOOR: an elevator, not a door.
+//
+//   section 0  the FOYER (viFoyer 1/8/1/7, guildh3.kod:45-48: rows 1-8, cols 1-7). Anchor r5c4 is
+//              viTeleport (guildh3.kod:42-43), where a Rescue lands a member. Its `go` exit r5c1 is
+//              the front door to 568 (guildh3.kod CreateStandardExits).
+//   section 1  the hall proper, west of and north of the river. Anchor r12c16 is viInner_teleport
+//              (guildh3.kod:55-56).
+//   section 2  the FAR BANK: south of the river's east-west arm and east of its north-south arm,
+//              holding both chests (r26c9 and r29c9, guildh3.kod:172 CreateStandardObjects) on a 588
+//              shelf up a stair at cols 11-12, and the back stair to the room's second `go` exit
+//              r25c1 (568's password door at r26c50 lands at r25c2, f8.kod). Anchor r27c9, between
+//              the two chests.
+//
+//   door 1     ENTRANCE (guildh3.kod:16), a ceiling slab between cols 7 and 8 lifted 500 -> 580 for
+//              LIFT_DELAY 10 s. Pressed from the foyer on r5c7 (plGuild_doors, guildh3.kod:76,
+//              matched by ghall.kod SomethingTryGo, gated on CanEnter) and from inside on r5c8
+//              (guildh3.kod SomethingTryGo, gated on ReqLegalEntry). Inward crosses hotplate 1
+//              (r5c8) then 2 (r5c9) in that order (CreateHotPlates, guildh3.kod:214).
+//   door 2     BRIDGE (guildh3.kod:15), the password door, and it is a FLOOR (ANIMATE_FLOOR_LIFT,
+//              m59-variable-sectors.json kind 'floor') -- two of them. Sector 2 is the bridge's two END
+//              PLATFORMS (north r17c13-14, south r20c15-r21c17) over the river's corner; the span
+//              between them is a fixed floor at 654. Both platforms ship at BRIDGE_HIGH 654, flush with
+//              the span and 154 above both banks (500), so at rest the bridge is a wall from either
+//              bank. The owner's password said by a member outside the foyer (ghall.kod SomeoneSaid;
+//              GuildHall3 never sets pbSecretDoorOpen, so the only guard is its own ptBridge timer)
+//              calls OpenSecretDoor (guildh3.kod:149): both platforms LOWER to BRIDGE_LOW 500 at speed
+//              16 (154 units, ~9.6 s), and LIFT_DELAY 10 s after the saying they RISE again
+//              (CloseSecretDoor, :162). A saying while that timer runs is ignored. Hence `lift`, an
+//              elevator ridden (see rideLift): say on the bank, step on when the platform is down, ride
+//              it up, walk the span, say again, step off when the far platform is down -- the
+//              operator's "say the password twice while riding it -- the first time to go up, then for
+//              the elevator down" (2026-11-13). `deck` is the platforms' ends, [north, south].
+//
+//   THE RIVER IS THE MOAT, AND THAT IS AN ASSUMPTION THE STEP MASK DOES NOT SHARE. The river is a
+//   492 channel 8 below its banks, and the coarse step mask lets a body wade it at r13-16 cols 16-18
+//   (moverStepLands r13c16 -> r13c17 -> r13c18), which joins sections 1 and 2 without the bridge;
+//   the server's walkable grid marks every river square walkable too. The operator's account is that
+//   the chests are reached by the elevator, so section membership here treats every square whose
+//   centre floor is below `moat.belowKod` as water nobody stands in (`moatSquares`), which splits the
+//   hall exactly at the river. Which way a live body actually goes is the thing to confirm on prod.
+const DEN_OF_SHADOWS = {
+  room: 703, name: 'The Den of Shadows',
+  anchors: [[5,4],[12,16],[27,9]],
+  doors: [
+    { sector: 1, inward: [[5,7],[5,9]], outward: [[5,8],[5,6]] },
+    // `deck` is the two platforms, [north, south]: where a rider steps on, and off.
+    { sector: 2, inward: [[16,14],[22,16]], outward: [[22,16],[16,14]], secret: true, lift: true,
+      deck: [[17,14],[21,16]], within_ms: 12000 },
+  ],
+  moat: { belowKod: 497 },
+  chestSection: 2, insideSection: 1, booth: false,
+};
 const BOOKMAKERS = {
   room: 714, name: "The Bookmaker's Guild House",
   anchors, doors,
   chestSection: 4, insideSection: 3, booth: true,
 };
-export const HALLS = Object.freeze({ 714: BOOKMAKERS, 713: SLAUGHTERED_COMMAND });
-export const SURVEYED_HALLS = Object.freeze([714, 713]);
+export const HALLS = Object.freeze({ 714: BOOKMAKERS, 713: SLAUGHTERED_COMMAND, 703: DEN_OF_SHADOWS });
+export const SURVEYED_HALLS = Object.freeze([714, 713, 703]);
 
 /** The surveyed passage of hall `room`, or null. */
 export const hallSurvey = (room) => HALLS[Number(room)] ?? null;
@@ -160,10 +218,78 @@ function closedGeometry(room) {
   return CLOSED.get(room);
 }
 
+// THE MOAT: squares whose CENTRE floor (all doors shut) is below `hall.moat.belowKod` kod units, as
+// "r,c" keys. Derived from the geometry every time, never typed -- 703's river is every square it
+// names, and a re-bake that moves the river moves the moat with it. Empty for a hall with no moat.
+const MOATS = new Map();
+export function moatSquares(room) {
+  const hall = hallSurvey(room);
+  if (!hall?.moat) return new Set();
+  if (!MOATS.has(hall.room)) {
+    const g = closedGeometry(hall.room), out = new Set();
+    for (let r = 1; r <= g.rows; r++) for (let c = 1; c <= g.cols; c++) {
+      const x = (c - 1) * 1024 + 512, y = (r - 1) * 1024 + 512;
+      const leaf = g.leafAtClient(x, y);
+      if (leaf?.sector && g.floorBaseAtClient(x, y, leaf) / 16 < hall.moat.belowKod) out.add(`${r},${c}`);
+    }
+    MOATS.set(hall.room, out);
+  }
+  return MOATS.get(hall.room);
+}
+
+// SECTIONS OF A MOATED HALL: a mover-legal flood from each anchor, forwards and backwards, that never
+// enters the moat. A square belongs to the first anchor that reaches it AND that it reaches -- the same
+// two-way rule as `path` below, without the A* that would happily wade. Cached per hall.
+const MOAT_SECTIONS = new Map();
+function moatSections(hall) {
+  if (MOAT_SECTIONS.has(hall.room)) return MOAT_SECTIONS.get(hall.room);
+  const g = closedGeometry(hall.room), moat = moatSquares(hall.room);
+  const lands = (a, b, c, d) => { try { return !!g.moverStepLands(a, b, c, d); } catch { return false; } };
+  const flood = ([sr, sc], backwards) => {
+    const seen = new Set([`${sr},${sc}`]), q = [[sr, sc]];
+    for (let i = 0; i < q.length; i++) {
+      const [r, c] = q[i];
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        const R = r + dr, C = c + dc, key = `${R},${C}`;
+        if ((!dr && !dc) || R < 1 || C < 1 || R > g.rows || C > g.cols || seen.has(key) || moat.has(key)) continue;
+        if (!(backwards ? lands(R, C, r, c) : lands(r, c, R, C))) continue;
+        seen.add(key); q.push([R, C]);
+      }
+    }
+    return seen;
+  };
+  const out = hall.anchors.map(a => ({ fwd: flood(a, false), back: flood(a, true) }));
+  MOAT_SECTIONS.set(hall.room, out);
+  return out;
+}
+
+/**
+ * The section of the NEAREST square that has one, for a body standing where no section is (in a
+ * moated hall: in the water, or on the bridge deck). Chebyshev rings outward; ties go to the
+ * lower section, the one nearer the door out. -1 when nothing within 3 squares is filed. Used only
+ * to decide which way to walk, never to decide that a crossing succeeded.
+ */
+export function nearestSection(row, col, room = LEGACY_HALL) {
+  for (let d = 1; d <= 3; d++) {
+    let best = -1;
+    for (let r = row - d; r <= row + d; r++) for (let c = col - d; c <= col + d; c++) {
+      if (Math.max(Math.abs(r - row), Math.abs(c - col)) !== d) continue;
+      const s = guildSection(r, c, room);
+      if (s >= 0 && (best < 0 || s < best)) best = s;
+    }
+    if (best >= 0) return best;
+  }
+  return -1;
+}
+
 /** Which section of hall `room` the square [row, col] is in, by the all-doors-shut geometry; -1 if none. */
 export function guildSection(row, col, room = LEGACY_HALL) {
   const hall = hallSurvey(room);
   if (!hall) return -1;
+  if (hall.moat) {
+    const key = `${row},${col}`;
+    return moatSections(hall).findIndex(s => s.fwd.has(key) && s.back.has(key));
+  }
   const closed = closedGeometry(hall.room);
   // STRICT, NO GOAL EXEMPTION. `path` lets its final step into the goal skip `moverStepLands`
   // when no legal approach exists, which is right for a walker and wrong for a membership test:
@@ -197,7 +323,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // The hall's geometry is ENUMERABLE — all 32 ceiling states are in substrate/m59-ceiling-doors.json
 // — so the line across an open door is a fact that can be cut in advance. m59-guildrails.mjs cuts
 // it against the state where that one door is up, verifies it with the mover's own trace, and
-// writes substrate/rail-<room>.json (714, 713). This reads it.
+// writes substrate/rail-<room>.json (714, 713, 703). This reads it.
 //
 // IT IS A FALLBACK, NOT A REPLACEMENT. The live geometry is the only thing that knows about
 // BODIES, and a rail knows only about the ceiling — so the live plan still goes first and the rail
@@ -278,6 +404,219 @@ async function awaitTeleport(s, c, room, target, { within_ms = 4000, isInterrupt
 }
 
 /**
+ * A baked leg between two squares cut under exactly the door state `open` (sector ids that are at
+ * their OPEN height), as squares to step to next -- the starting square dropped. Null when none.
+ * Unlike `bakedCrossing` the state must match exactly: 703's lift has legs cut with the bridge DOWN
+ * (`[2]`) and legs cut along the deck with it UP (`[]`), between the same squares.
+ */
+export function bakedLeg(from, to, open = [], room = LEGACY_HALL) {
+  const baked = bakedRails(Number(room));
+  if (!baked) return null;
+  const name = ([r, c]) => `r${r}c${c}`, want = [...open].map(Number).sort((a, b) => a - b).join(',');
+  const leg = baked.legs?.find(l => l.ok && l.from === name(from) && l.to === name(to) &&
+    [...(l.doors_open ?? [])].map(Number).sort((a, b) => a - b).join(',') === want);
+  if (!leg?.waypoints?.length) return null;
+  const out = [];
+  for (const p of leg.waypoints) {
+    const col = Math.floor(p.x / 1024) + 1, row = Math.floor(p.y / 1024) + 1;
+    const last = out[out.length - 1];
+    if (!last || last.row !== row || last.col !== col) out.push({ row, col });
+  }
+  if (out.length && out[0].row === from[0] && out[0].col === from[1]) out.shift();
+  return out.length ? out : null;
+}
+
+// ------------------------------------------------------------------ the lift (703's bridge)
+//
+// THE BRIDGE IS TWO ELEVATORS AND A SPAN. Sector 2 is not the whole bridge: it is its two END
+// PLATFORMS, the north one at r17c13-14 and the south one at r20c15-r21c17. The span between them
+// (r18c14 to r20c15) is an ordinary floor fixed at 654. At rest both platforms are UP at 654, flush
+// with the span and 154 above both banks, so the bridge is a wall from either bank. The word drops
+// BOTH platforms to the banks (500); LIFT_DELAY after the saying they rise again. Nothing crosses
+// with the platforms down -- the span is then 154 above them. So a crossing is:
+//
+//   1. on the near bank (`trigger`), SAY the word; wait for the platforms' sector-height event (500)
+//   2. step onto the near platform (`deck` end) once it is within a step of the bank
+//   3. ride it up: wait for the rise (the timer, ~10 s after the saying) and for the platform to be
+//      within a step of the span
+//   4. walk the span to the far platform, which rose with ours
+//   5. SAY the word again (its timer has run out: the rise IS the timer); wait for the event; step off
+//      to `across` once the far platform is within a step of the bank
+//
+// which is the operator's "say the guild hall password twice while riding it -- the first time to go
+// up, then for the elevator down" (2026-11-13), arrived at from the kod and the geometry.
+//
+// WHAT IS DERIVED AND WHAT IS ASSUMED, so the first live run knows what it is testing.
+//
+//   derived (kod)       the word lowers sector 2 to BRIDGE_LOW 500 at speed 16 and a timer raises it
+//                       to BRIDGE_HIGH 654 LIFT_DELAY 10 s after the SAYING; a saying while that timer
+//                       runs does nothing (ptBridge); only a member outside the foyer can call it
+//                       (ghall.kod SomeoneSaid). Heights come from substrate/m59-ceiling-doors.json
+//                       (kind 'floor'), whose masks are the .roo re-baked at each height.
+//   derived (geometry)  which squares are platform and which span (sector records 93 and 94 carry
+//                       server id 2); that r16c14 -> r17c14 and r21c16 -> r22c16 step only with the
+//                       platforms down, and r17c14 -> r21c16 walks only with them up (moverStepLands,
+//                       both states, and the four rails in substrate/rail-703.json).
+//   assumed             that the river is a moat (see DEN_OF_SHADOWS); that a body on a platform is
+//                       carried with it (the server is two-dimensional, so it is OUR geometry that
+//                       decides, and it does); and the BOARDING waits -- our observer applies a
+//                       sector's destination height the moment its packet arrives, so the mover would
+//                       let a body step at once; waiting until the platform is within a step (24) of
+//                       where it is going is what a real client has to do, and it costs ~8 s a leg.
+
+/** The lift's two heights from the door table: `up` where it rests (closed), `down` where the word sends it. */
+export function liftHeights(room, sector) {
+  const d = ceilingDoors(room)?.doors?.find(x => Number(x.id) === Number(sector) && x.kind === 'floor');
+  return d ? { up: d.closed, down: d.open } : null;
+}
+
+/** How long after it starts moving a platform at `from` is within `step` of `to`, at `speed` kod units/s. */
+export function liftBoardDelayMs({ from, to, speed, step = 24 }) {
+  if (!Number.isFinite(speed) || speed <= 0 || !Number.isFinite(from) || !Number.isFinite(to)) return 0;
+  return Math.max(0, Math.ceil((Math.abs(from - to) - step) * 1000 / speed));
+}
+
+/** Where an animating platform is at `now`: from `from` toward `to` at `speed` since `at` (ms). */
+export function liftFloorAt({ from, to, speed, at }, now) {
+  if (!Number.isFinite(speed) || speed <= 0 || !Number.isFinite(at) || !Number.isFinite(from)) return to;
+  const moved = speed * Math.max(0, now - at) / 1000;
+  return from > to ? Math.max(to, from - moved) : Math.min(to, from + moved);
+}
+
+export const LIFT_SAYINGS = 4;   // two to ride (down-and-board, then down-and-alight), and one retry of each
+const LIFT_EVENT_MS = 3000;      // the lowering packet follows the saying at once; silence means ignored
+const LIFT_TIMER_MS = 12_000;    // LIFT_DELAY 10 s from the saying, and slack
+
+async function rideLift(k, { room, door, inward, trigger, across, target, isInterrupted, guard,
+                             sleepFn = sleep, now = Date.now }) {
+  const s = k.s, c = s.need();
+  const h = liftHeights(room, door.sector);
+  if (!h) return { crossed: false, why: `sector ${door.sector} is not a floor lift in substrate/m59-ceiling-doors.json` };
+  const [near, far] = inward ? door.deck : [...door.deck].reverse();
+  const at = ([r, col]) => c.self.row === r && c.self.col === col;
+  const here = () => [c.self.row, c.self.col];
+  const where = () => `r${c.self.row}c${c.self.col}`;
+  const latest = () => c.room?.sectorHeights?.get(door.sector) ?? null;
+  const isAt = (height, since) => { const o = latest(); return !!o && o.height === height && (o.at ?? 0) >= since; };
+  const waitEvent = async (since, height, ms) => {
+    const match = e => e.sector === door.sector && e.height === height && (e.type == null || e.type === 4);
+    const until = now() + ms;
+    while (now() < until) {
+      guard();
+      const reply = await c.waitFor({ since, kinds: ['sector-height'], match, timeoutMs: Math.min(250, until - now()) });
+      const e = reply?.events?.find(match);
+      if (e) return e;
+    }
+    return null;
+  };
+  const livePath = (to) => {
+    const p = s.world?.geometry?.path?.(c.self.row, c.self.col, to[0], to[1]);
+    return p?.found && p.steps?.length ? p.steps.map(x => ({ row: x.row, col: x.col })) : null;
+  };
+  const stepTo = async (to, open) => {
+    const squares = bakedLeg(here(), to, open, room) ?? livePath(to) ?? [{ row: to[0], col: to[1] }];
+    for (const sq of squares) {
+      guard();
+      if (c.self.row === sq.row && c.self.col === sq.col) continue;
+      const r = await s.step(sq.col, sq.row, { confirm: true, beforeMutation: guard });
+      if (!r?.moved) return { ok: false, reason: r?.reason ?? 'step refused' };
+    }
+    return { ok: at(to), reason: at(to) ? null : `stopped at ${where()}` };
+  };
+  const note = (phase, extra = {}) => k.note?.('guild lift passage', { sector: door.sector, inward, phase,
+    at: { row: c.self.row, col: c.self.col }, ...extra });
+  // Where the platforms are, as far as anything has said: settled at the last height reported.
+  let motion = { from: latest()?.height ?? h.up, to: latest()?.height ?? h.up, speed: 16, at: 0 };
+  let lastPress = null, sayings = 0;
+
+  // CALL THE PLATFORMS DOWN, and wait until the one we mean to step on/off is within a step of the
+  // bank. Returns false when the word was ignored or they turned round first.
+  const callDown = async (phase) => {
+    // DOWN ALREADY means a timer is running (ours from the last crossing, or somebody else's), and a
+    // saying now would be ignored: wait for the rise that ends it, then call.
+    if (latest()?.height === h.down) {
+      const rise = await waitEvent(c.evSeq, h.up, LIFT_TIMER_MS);
+      if (rise) motion = { from: h.down, to: h.up, speed: rise.speed ?? motion.speed, at: now() };
+    }
+    await standUp(s, isInterrupted);
+    guard();
+    const since = c.evSeq, pose = doorPressPose(s, c), saidAt = now();
+    const from = liftFloorAt(motion, saidAt);
+    if (!(await k.sayHallPassword()).ok) throw new Error('guild chest key unavailable');
+    sayings++;
+    const lowering = await waitEvent(since, h.down, LIFT_EVENT_MS);
+    if (isInterrupted()) throw new Error('guild passage paused for survival');
+    if (!lowering) {
+      // IGNORED: the timer of a saying we never saw is still running (ptBridge), or the word was not
+      // taken (the foyer, a wrong word). Wait out one timer for the rise that clears it.
+      lastPress = noteDoorPressRefused(s, { source: 'guild_passage', keeper: k, since, pose,
+        door: { sector: door.sector, kind: 'guild', direction: inward ? 'inward' : 'outward', secret: true },
+        trigger, across, openingReason: 'password said, the lift did not move', attempt: sayings, attempts: LIFT_SAYINGS });
+      note(`${phase}: the lift did not answer`, { sayings });
+      if (!isAt(h.up, saidAt)) {
+        const rise = await waitEvent(since, h.up, LIFT_TIMER_MS);
+        if (rise) motion = { from: h.down, to: h.up, speed: rise.speed, at: now() };
+      }
+      return false;
+    }
+    motion = { from, to: h.down, speed: lowering.speed, at: now() };
+    const ready = motion.at + liftBoardDelayMs({ from, to: h.down, speed: lowering.speed });
+    while (now() < ready) {
+      guard();
+      if (isAt(h.up, motion.at)) return false;           // turned round before it got down
+      await sleepFn(100);
+    }
+    return { since, saidAt };
+  };
+
+  while (sayings < LIFT_SAYINGS) {
+    guard();
+    // ON THE NEAR BANK: call it, board it.
+    if (!(guildSection(...here(), room) < 0)) {
+      if (!at(trigger)) {
+        await s.walkTo(trigger[1], trigger[0], { maxSteps: 10, hardCap: 12, beforeMutation: guard });
+        await s.confirmPosition?.();
+      }
+      const called = await callDown('board');
+      if (!called) continue;
+      const board = await stepTo(near, [door.sector]);
+      note('board', { reason: board.reason, sayings });
+      if (!board.ok) {
+        // Missed it. Let it go back up and call again from the bank.
+        if (!isAt(h.up, called.saidAt)) await waitEvent(called.since, h.up, LIFT_TIMER_MS);
+        motion = { from: h.down, to: h.up, speed: motion.speed, at: now() };
+        continue;
+      }
+      // RIDE IT UP: the rise is the timer; then until the platform is within a step of the span.
+      const rise = isAt(h.up, called.saidAt) ? { speed: motion.speed } : await waitEvent(called.since, h.up, LIFT_TIMER_MS);
+      if (!rise) return { crossed: false, why: `on the platform at ${where()} and it never rose`, lastPress, sayings };
+      motion = { from: h.down, to: h.up, speed: rise.speed ?? motion.speed, at: now() };
+      const top = motion.at + liftBoardDelayMs({ from: h.down, to: h.up, speed: motion.speed });
+      while (now() < top) { guard(); await sleepFn(100); }
+      note('rode up', { sayings });
+    }
+    // ON THE BRIDGE (a platform or the span): walk the span to the far platform. With the platforms up
+    // the deck is an island, so the live plan cannot wade off it either.
+    if (!at(far)) {
+      const span = await stepTo(far, []);
+      note('span', { reason: span.reason });
+      if (!span.ok) return { crossed: false, why: `could not walk the bridge to r${far[0]}c${far[1]} ` +
+        `(${span.reason})`, lastPress, sayings };
+    }
+    // AND DOWN: the second saying, and off.
+    const called = await callDown('alight');
+    if (!called) continue;
+    const off = await stepTo(across, [door.sector]);
+    note('alight', { reason: off.reason, sayings });
+    if (guildSection(...here(), room) === target) return { crossed: true, sayings, lastPress };
+    if (!off.ok && !isAt(h.up, called.saidAt)) await waitEvent(called.since, h.up, LIFT_TIMER_MS);
+    motion = { from: h.down, to: h.up, speed: motion.speed, at: now() };
+  }
+  return { crossed: false, why: `the lift was called ${sayings} times and the body is at ${where()}, ` +
+    `not across at r${across[0]}c${across[1]}`, lastPress, sayings };
+}
+
+/**
  * Walk the hall the body is standing in to `destination`, a SECTION NUMBER of that hall (0 is
  * the foyer; `chestSectionOf(room)` is the chests). The hall is read off `k.s.world.room.num`.
  */
@@ -289,8 +628,16 @@ export async function guildPassage(k, destination, isInterrupted) {
   const guard = () => { if (isInterrupted()) throw new Error('guild passage paused for survival'); };
   for (let leg = 0; leg < 8; leg++) {
     if (isInterrupted()) throw new Error('guild passage paused for survival');
-    const section = guildSection(c.self.row, c.self.col, room);
-    if (section === destination) return;
+    // A MOATED HALL HAS SQUARES NO SECTION OWNS -- the water and the bridge deck. A body found on one
+    // walks from the side it is nearest; that reading only picks a direction, never declares arrival.
+    const strictSection = guildSection(c.self.row, c.self.col, room);
+    if (strictSection === destination) return;
+    // ON THE BRIDGE ITSELF (out of the water, in no section): it is a lift, so ride it off towards the
+    // destination rather than try to walk to a bank trigger 154 below.
+    const liftAt = hall.moat && strictSection < 0 && !moatSquares(room).has(`${c.self.row},${c.self.col}`)
+      ? hall.doors.findIndex(d => d.lift) : -1;
+    const section = liftAt >= 0 ? (destination > liftAt ? liftAt : liftAt + 1)
+      : strictSection < 0 && hall.moat ? nearestSection(c.self.row, c.self.col, room) : strictSection;
     // THE BOOTH IS OFF THE LINE: out through counter door 58 into section 3 first. A character left
     // in the booth (the vault broker's post) was stranded by every ordinary hall path —
     // hall_withdraw refused "outside the known passage" and a walk out never left the room
@@ -300,6 +647,15 @@ export async function guildPassage(k, destination, isInterrupted) {
       continue;
     }
     if (section < 0) throw new Error('guild position is outside the known passage');
+    // On a square no section owns, nearest to the destination's own side: just walk to its anchor.
+    if (section === destination) {
+      const [ar, ac] = hall.anchors[destination];
+      await s.walkTo(ac, ar, { maxSteps: 30, hardCap: 40, beforeMutation: guard });
+      await s.confirmPosition?.();
+      if (guildSection(c.self.row, c.self.col, room) === destination) return;
+      throw new Error(`guild position r${c.self.row}c${c.self.col} is on no section of hall ${room}, ` +
+                      `and the walk to section ${destination}'s anchor did not land on one`);
+    }
     const inward = section < destination, door = hall.doors[inward ? section : section - 1];
     const [trigger, across] = inward ? door.inward : door.outward;
     // UP TO THREE APPROACHES. Prod 2026-10-27: Kermit (door 59, stopped at r2c33 after 3 steps) and Lew (door 55, r20c18)
@@ -307,7 +663,7 @@ export async function guildPassage(k, destination, isInterrupted) {
     // shape of a body briefly in a one-square hall passage during a trek's staging. A short pause and another walk costs
     // seconds; the refusal costs the whole stash.
     let approach = null, restWaits = 0;
-    for (let tryNo = 0; tryNo < 3; tryNo++) {
+    for (let tryNo = 0; tryNo < 3 && !(door.lift && liftAt >= 0); tryNo++) {
       if (tryNo) { await sleep(1500); guard(); }
       await standUp(s, isInterrupted);
       approach = await s.walkTo(trigger[1], trigger[0], { maxSteps: 50, hardCap: 60, beforeMutation: guard });
@@ -330,7 +686,7 @@ export async function guildPassage(k, destination, isInterrupted) {
         }
       }
     }
-    if (c.self.row !== trigger[0] || c.self.col !== trigger[1]) {
+    if ((c.self.row !== trigger[0] || c.self.col !== trigger[1]) && !(door.lift && liftAt >= 0)) {
       // WHO STANDS NEAR THE TRIGGER, by name: the likeliest reason a walk in this hall stops short.
       const near = [...(c.room?.objects?.values?.() ?? [])].filter(o => o.id !== c.selfId && Number.isFinite(o.row)
         && Math.max(Math.abs(o.row - trigger[0]), Math.abs(o.col - trigger[1])) <= 2).map(o => c.rsc?.get?.(o.nameRsc) || o.name || '?');
@@ -355,6 +711,17 @@ export async function guildPassage(k, destination, isInterrupted) {
     // pose AT the press, the trigger it was meant for, posture, movement in flight and the bodies
     // round the trigger. It is written to the ledger as `door_press_refused` and its one-line
     // summary rides the error, because "refused 3 of 3" alone was all prod had on 2026-11-01.
+    if (door.lift) {
+      // AN ELEVATOR (703's bridge): spoken, waited for, boarded, ridden, and spoken to again if it
+      // rose under us. The refusal keeps the "could not be crossed" wording m59-hall-access retries.
+      const ride = await rideLift(k, { room, door, inward, trigger, across,
+        target: section + (inward ? 1 : -1), isInterrupted, guard,
+        // A ride is ~30 s of waiting on a server timer; `k.clock` lets an offline test run it on its own.
+        sleepFn: k.clock?.sleep ?? sleep, now: k.clock?.now ?? Date.now });
+      if (!ride.crossed) throw new Error(`guild door ${door.sector} could not be crossed: ${ride.why}` +
+        pressSuffix(ride.lastPress));
+      continue;
+    }
     let crossed = false, refused = 0, lastPress = null;
     for (let attempt = 0; attempt < 3 && !crossed; attempt++) {
       if (isInterrupted()) throw new Error('guild passage paused for survival');

@@ -94,5 +94,28 @@ console.log('\nTHE FOYER, WHERE THE PASSWORD IS REFUSED WITHOUT A WORD');
   ok('and so does a half-known one', inFoyer(5, undefined) === null);
 }
 
+console.log('\nTHE THIRD HALL — 703, the Den of Shadows, keyed by its own room');
+{
+  // The roster's halls are 714 (legacy block), 713 and 703. The word that lowers 703's bridge is its
+  // OWNER's (ghall.kod SomeoneSaid), so it is filed under guild_halls["703"] and read by room.
+  const d3 = mkdtempSync(join(tmpdir(), 'm59-hallsecret-703-'));
+  setHallPassword('prod', 'fake-714', { dir: d3, room: 714 });
+  setHallPassword('prod', 'fake-713', { dir: d3, room: 713 });
+  setHallPassword('prod', 'fake-703', { dir: d3, room: 703 });
+  ok('703 reads its own word', hallPassword('prod', { dir: d3, room: 703 }) === 'fake-703');
+  ok('...and recording it overwrote neither of the others',
+     hallPassword('prod', { dir: d3, room: 714 }) === 'fake-714' && hallPassword('prod', { dir: d3, room: 713 }) === 'fake-713');
+  const raw = JSON.parse(readFileSync(secretsPathFor('prod', d3), 'utf8'));
+  ok('it is filed under guild_halls["703"]', raw.guild_halls?.['703']?.password === 'fake-703');
+  const shown = describeSecret('prod', { dir: d3 });
+  ok('describe() lists 703 as having a word, without the word',
+     shown.halls.some(h => h.room === 703 && h.has_password) && !JSON.stringify(shown).includes('fake-703'));
+  // 703's foyer is rows 1-8, cols 1-7 (guildh3.kod viFoyer): the bridge banks are outside it.
+  const { foyerFor } = await import('./m59-hallsecret.mjs');
+  ok('the bridge banks r16c14 and r22c16 are outside 703\'s foyer',
+     inFoyer(16, 14, foyerFor(703)) === false && inFoyer(22, 16, foyerFor(703)) === false);
+  ok('and the entrance trigger r5c7 is inside it', inFoyer(5, 7, foyerFor(703)) === true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

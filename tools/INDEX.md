@@ -280,7 +280,7 @@ searches it. If what you need is here, use it; if it is nearly here, extend it.
 | `guild-defense-metrics` | Descriptive arrival/departure statistics. Missing arrivals are never dropped |
 | `guild-defense-round` | Private, append-only experiment bundles. No production calls or credentials. |
 | `guild-defense-sim` | Exploratory guild defense, isolated native Simulator only. Never calls production. |
-| `guild-passage` | Walk a surveyed guild hall's doors (714, 713) from their reachable trigger sides. |
+| `guild-passage` | Walk a surveyed guild hall's doors (714, 713, 703) from their reachable trigger sides. |
 | `guild-registry` | WHICH GUILD IS WHOSE: members, halls and allies, for a roster that holds more than one guild. |
 | `guild-sale` | THE GUILD CHEST, PLANNED AND SOLD FROM: what the compendium's Guild Chest page reads and writes. |
 | `guild-secrecy` | The guild invite dialog reads current_room->contents (guildinv.c). |
