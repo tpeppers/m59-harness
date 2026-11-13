@@ -59,6 +59,7 @@ export const DEFAULTS = Object.freeze({
   home: null,                 // the home room; road actions start and end here
   away_limit: 1,              // characters outside the home room at once (in-scope, observed + granted this pass)
   exclude: [],                // agents never touched (and never used as donors)
+  no_hall: [],                // agents who may not draw from the hall (not members/allies of its guild -- CanEnter refuses)
   only: null,                 // restrict to these action kinds; everything else falls through
   hurt_below: 0.8,            // health fraction under which a character is left to recover
   fragile_below: 25,          // max health under which no road action is given (fleetScript's fragileBody agrees)
@@ -566,7 +567,7 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
       }
       // 2. The guild hall's chests.
       const chest = hall[need.key];
-      if (allowed('hall_draw') && c.hall_room != null && chest && chest.amount - c.hall_keep > 0 && !gate('hall_draw', need.item)) {
+      if (allowed('hall_draw') && c.hall_room != null && !(c.no_hall ?? []).includes(o.agent) && chest && chest.amount - c.hall_keep > 0 && !gate('hall_draw', need.item)) {
         const block = roadBlock(c.hall_room);
         if (!block) {
           const takeN = Math.min(amount, chest.amount - c.hall_keep);

@@ -92,6 +92,7 @@ const cfg = mkConfig({
   home: flag('home') != null ? Number(flag('home')) : fileConfig.home,
   away_limit: flag('away-limit') != null ? Number(flag('away-limit')) : fileConfig.away_limit,
   exclude: flag('exclude') ? list(flag('exclude')) : fileConfig.exclude,
+  no_hall: flag('no-hall') ? list(flag('no-hall')) : fileConfig.no_hall,
   only,
   hall_room: flag('hall') != null ? Number(flag('hall')) : fileConfig.hall_room,
   farm_allow: flag('farm-allow') ? parseFarmAllow(flag('farm-allow')) : fileConfig.farm_allow,
