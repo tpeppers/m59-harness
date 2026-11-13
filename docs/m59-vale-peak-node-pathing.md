@@ -1,5 +1,23 @@
 # Vale and Peak node pathing, 2026-10-06
 
+## 2026-11-12 update: Peak normal-entry route verified
+
+The normal Seafarer's Peak entrance now has **two complete quiet native
+entrance → node square → entrance proofs**, 127.5 and 127.7 seconds, with
+36/36 HP and the owned baseline restored after each run. A newly identified
+non-uphill boarding fall connects client x9600/y21712 on floor 8896 to
+x7264/y24224 on 8064; the existing upper-stair fall then reaches the node route.
+Both falls and the node endpoint had zero confirmed XY error. The walking
+return finished 22.6 client units from the normal entrance target on floor 5056.
+
+This supersedes the normal-boarding uncertainty in the October investigation
+below for the tested quiet room state. It does not establish town travel, node
+activation, ordinary monster survival or acquisition-circuit promotion.
+See the [Peak dossier](../.claude/skills/node-runner/nodes/peak.md) for exact
+endpoints, receipt identifiers and trial scope.
+
+## 2026-10-06 earlier investigation
+
 Vale's **spawn location** is now verified from **Marion's normal town spawn
 all the way through the forest and back to Marion**, in one complete quiet
 native run: **336.1 seconds, 12 normal map crossings, 59/59 HP throughout**.

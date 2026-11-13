@@ -68,7 +68,7 @@ for(const guide of western){
  const from=protocolToClient(guide.from),to=protocolToClient(guide.to);
  const r=findFineGuide(hollows,from,to,{edge:edgeFor(hollows)});
  assert(r?.ok&&r.guide===guide.name,guide.name+' retains its checked ordinary endpoint');
- const shared=await cutFineRailAsync(hollows,guide.from,guide.to,{maxMs:4000});
+ const shared=await cutFineRailAsync(hollows,guide.from,guide.to,{maxMs:4000,navmesh:false});
  assert(shared.ok&&shared.guide===guide.name&&shared.visited===0,'the general cutter reuses '+guide.name);
 }
 const passage=western[3],middle=clientToProtocol(passage.waypoints[Math.floor(passage.waypoints.length/2)]);
@@ -79,7 +79,12 @@ const drop=western[4],source=protocolToClient(drop.from),minimum=hollows.floorBa
 assert.equal(findFineGuide(hollows,source,protocolToClient(drop.to),{edge:(a,b)=>
  floorConstraintAllows(hollows,clientToProtocol(b),minimum)&&edgeFor(hollows)(a,b)}),null,
  'a shelf-bound caller cannot use a western drop to bypass its floor fence');
-console.log('The shared fine cutter reuses all six ordinary western Hollows links; live bodies and shelf constraints still reject them.');
+console.log('The native fine cutter reuses all six ordinary western Hollows links; live bodies and shelf constraints still reject them.');
+const meshGuide=western[0],meshRail=await cutFineRailAsync(hollows,meshGuide.from,meshGuide.to,{maxMs:4000});
+assert(meshRail.ok&&meshRail.bridgeOk&&meshRail.source==='navmesh','the default cutter uses the shipped mesh for the same checked western link');
+assert.deepEqual(meshRail.waypoints.at(-1)&&{x:meshRail.waypoints.at(-1).x,y:meshRail.waypoints.at(-1).y},protocolToClient(meshGuide.to));
+for(let i=1;i<meshRail.waypoints.length;i++)assert(edgeFor(hollows)(meshRail.waypoints[i-1],meshRail.waypoints[i]),
+ 'the default mesh path preserves every native geometry chord');
 
 // Native r50c21 wait: a shadowbeast occupies an interior human guide point.
 // The corridor and the following point remain reachable with that body present.

@@ -4969,6 +4969,10 @@ export function applySectorHeights(geometry, overrides = [], { mask = null } = {
   }
   if (!moved) return { moved: 0, restore: [], why: 'already at that height' };
 
+  // Derived player-navigation artifacts belong to the observed sector state.
+  // This revision is ephemeral and never changes the serialized room format.
+  geometry._navigationRevision = (geometry._navigationRevision ?? 0) + 1;
+
   // The line whose absence produced a false negative and a wrong conclusion out loud.
   for (const wall of geometry.walls) setWallHeights(wall, geometry.sectors);
 

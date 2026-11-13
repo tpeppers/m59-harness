@@ -1,5 +1,15 @@
 # Movement, collision and routing
 
+The [enhanced navigation mesh](m59-navmesh.md) supplies native-checked room
+topology to walking, body detours, fine rails and node approaches. Its state
+fingerprints and typed declared falls retain the existing movement and packet
+authority rules described here.
+
+A movement chord acquires all intersected body-width passage zones atomically.
+At an overlapping corridor handoff, the same owner retains both admissions
+until confirmed positions clear each zone individually. Predicted movement
+cannot release a reservation or bypass a conflicting holder.
+
 Arrival estimates and opt-in Rescue/chalice chains are documented in
 [m59-arrivals.md](m59-arrivals.md). Ordinary FleetScript walks use the same
 Session travel selector, with native landings checked before a second use.

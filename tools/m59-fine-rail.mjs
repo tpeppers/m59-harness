@@ -6,6 +6,36 @@ import {cutRail,threatEdgeCost,chordWalkable} from './m59-railcut.mjs';
 import {legWalls} from './m59-safelegs.mjs';
 import {planBodyDetour,blockingBodySnapshot,floorConstraintAllows} from './m59-body-detour.mjs';
 import {findFineGuide} from './m59-fine-guides.mjs';
+import {planNavMesh} from './m59-navmesh.mjs';
+
+// Shared mesh adapter in the rail cutter's CLIENT-unit contract. Policy-bearing
+// callers retain their own final edge predicate; a mesh never grants authority
+// to traverse a chord that their live-body/floor/avoidance proof refuses.
+export function cutMovementRail(geo,from,goal,settings={},constraints={}){
+ const started=performance.now(),maxMs=settings.maxMs??2000;
+ const deadline=Math.min(settings.deadline??Infinity,started+maxMs);
+ const bounds=settings.bounds&&Number.isFinite(settings.bounds.w)?
+  {minX:0,minY:0,maxX:settings.bounds.w,maxY:settings.bounds.h}:settings.bounds;
+ // Diagnostic callers can isolate native rails and authored guide reuse.
+ const mesh=settings.navmesh===false?{available:false,reason:'navmesh_disabled'}:planNavMesh(geo,from,goal,{...constraints,cost:settings.cost??null,edge:settings.edge,bounds,
+  allowedKinds:['walk'],maxMs:Math.max(0,deadline-performance.now()),
+  maxNodes:settings.maxNodes??400000,deadline});
+ if(mesh.available&&mesh.found&&mesh.complete!==false&&Array.isArray(mesh.waypoints)&&mesh.waypoints.length){
+  let valid=mesh.waypoints[0].x===from.x&&mesh.waypoints[0].y===from.y;
+  for(let i=1;i<mesh.waypoints.length&&valid;i++){
+   if(performance.now()>=deadline){valid=false;break;}
+   valid=typeof settings.edge==='function'&&settings.edge(mesh.waypoints[i-1],mesh.waypoints[i]);
+  }
+  if(valid)return {ok:true,bridgeOk:true,bridge:0,seed:{...from},target:{...goal},
+   waypoints:mesh.waypoints.map(p=>({...p,f:settings.floorAt?.(p.x,p.y)??null})),
+   legs:mesh.waypoints.length-1,visited:mesh.visited??0,source:'navmesh',navmesh_identity:mesh.identity};
+ }
+ if(performance.now()>=deadline)return {ok:false,bridgeOk:false,why:'rail request deadline',
+  visited:mesh.visited??0,navmesh_reason:mesh.reason};
+ if(settings.fallbackRail)return settings.fallbackRail;
+ const native=cutRail(from,goal,{...settings,maxMs:Math.max(0,deadline-performance.now()),deadline});
+ return mesh.available?{...native,navmesh_reason:mesh.reason}:native;
+}
 
 // A traffic side refuge must lead back to the proved route. Ordinary downhill
 // walking can enter a covered pocket that cannot rejoin a higher ledge.
@@ -17,7 +47,7 @@ export function fineRefugeReturnable(geo,from,anchor,{objects,selfId,roomFlags=0
 
 export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreachable=null,
   avoidSquares=null,objects=null,selfId=null,roomFlags=0,overrideDepths=null,
-  threats=[],threatWeight=6,threatRadius=4,maxMs=10000,goalFine=null,goalFineAlternates=[]}={}){
+  threats=[],threatWeight=6,threatRadius=4,maxMs=10000,minimumFloor=null,goalFine=null,goalFineAlternates=[],navmesh=true}={}){
   const started=performance.now(),point=p=>({x:protocolToClient(p.x),y:protocolToClient(p.y)});
   if(!geo?.collisionReady||![from?.x,from?.y].every(Number.isFinite))return {found:false,reason:'fine_rail_geometry_unavailable'};
   const exactGoal=Number.isFinite(goalFine?.x)&&Number.isFinite(goalFine?.y);
@@ -30,12 +60,17 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
   const obstacles=blockingBodySnapshot(localObjects,selfId);
   const edge=(a,b)=>{
     const row=Math.floor(clientToProtocol(b.y)/64),col=Math.floor(clientToProtocol(b.x)/64);
-    if(avoidSquares?.has(`${row},${col}`))return false;
+    if(avoidSquares?.has(`${row},${col}`)||!floorConstraintAllows(geo,
+      {x:clientToProtocol(b.x),y:clientToProtocol(b.y)},minimumFloor,{roomFlags,overrideDepths}))return false;
     const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles,roomFlags,overrideDepths});
     return t?.arrived===true&&t.blocked!==true;
   };
   const danger=threats.map(p=>point({x:Number.isFinite(p.x)?p.x:p.col*64+32,y:Number.isFinite(p.y)?p.y:p.row*64+32}));
   const cost=threatEdgeCost(danger,{radius:threatRadius*1024,weight:threatWeight,spacing:128,cacheSize:65536});
+  const cut=(a,b,settings,geometryOnly=false)=>cutMovementRail(geo,a,b,
+   {...settings,navmesh,maxMs:Math.max(0,maxMs-(performance.now()-started)),deadline:started+maxMs},
+   {obstacles:geometryOnly?[]:obstacles,roomFlags,overrideDepths,avoidSquares,minimumFloor,
+    threats:danger,threatWeight,threatRadius:threatRadius*1024});
   let rail;const candidates=[target,...(exactGoal?goalFineAlternates:[])].filter(p=>Number.isFinite(p?.x)&&Number.isFinite(p?.y));
   const usedTargets=new Set();
   for(const p of candidates.slice(0,8)){
@@ -46,11 +81,11 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
     // Discard a sealed fine opening on geometry alone before spending the
     // threat-priced search budget on its entire unreachable component.
     if(exactGoal&&candidates.length>1){
-      rail=cutRail(point(from),point(target),{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128});
+      rail=cut(point(from),point(target),{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128});
       if(!rail.ok||!rail.bridgeOk)continue;
       if(!danger.length)break;
     }
-    rail=cutRail(point(from),point(target),{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},
+    rail=cut(point(from),point(target),{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},
       lattice:128,cost:danger.length?cost:null,maxMs:Math.max(0,maxMs-(performance.now()-started))});
     if(rail.ok&&rail.bridgeOk)break;
   }
@@ -58,12 +93,13 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
   if((!rail.ok||!rail.bridgeOk)&&obstacles.length){
     const geometryEdge=(a,b)=>{
       const row=Math.floor(clientToProtocol(b.y)/64),col=Math.floor(clientToProtocol(b.x)/64);
-      if(avoidSquares?.has(`${row},${col}`))return false;
+      if(avoidSquares?.has(`${row},${col}`)||!floorConstraintAllows(geo,
+      {x:clientToProtocol(b.x),y:clientToProtocol(b.y)},minimumFloor,{roomFlags,overrideDepths}))return false;
       const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,roomFlags,overrideDepths});
       return t?.arrived===true&&t.blocked!==true;
     };
-    const guide=cutRail(point(from),point(target),{edge:geometryEdge,bounds:{w:geo.cols*1024,h:geo.rows*1024},
-      lattice:128,cost:danger.length?cost:null,maxMs:Math.max(0,maxMs-(performance.now()-started))});
+    const guide=cut(point(from),point(target),{edge:geometryEdge,bounds:{w:geo.cols*1024,h:geo.rows*1024},
+      lattice:128,cost:danger.length?cost:null},true);
     if(guide.ok&&guide.bridgeOk&&edge(point(from),guide.waypoints[0])){
       const checked=[guide.waypoints[0]];let previous=checked[0];
       for(const p of guide.waypoints.slice(1)){if(!edge(previous,p))break;checked.push(p);previous=p;}
@@ -99,11 +135,11 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
       &&(w.row!==from.row||w.col!==from.col)).sort((a,b)=>Math.hypot(a.row-goal.row,a.col-goal.col)-Math.hypot(b.row-goal.row,b.col-goal.col));
     for(const w of near.slice(0,4)){
       const side=planBodyDetour(geo,p,geo.standPointWire(w.row,w.col),{objects,selfId,roomFlags,overrideDepths,
-        goalSquare:w,avoidSquares,marginSquares:2,maxRangeSquares:8,maxNodes:768,maxMs:35,threats,threatWeight,threatRadius});
+        goalSquare:w,avoidSquares,minimumFloor,marginSquares:2,maxRangeSquares:8,maxNodes:768,maxMs:35,threats,threatWeight,threatRadius});
       if(!side.found)continue;
       let q=p,extra=0;for(const n of side.waypoints){extra+=Math.hypot(n.x-q.x,n.y-q.y)/64;q=n;}
       if(p.distance+extra>maxLeg)continue;
-      if(!fineRefugeReturnable(geo,q,p,{objects,selfId,roomFlags,overrideDepths,avoidSquares}))continue;
+      if(!fineRefugeReturnable(geo,q,p,{objects,selfId,roomFlags,overrideDepths,avoidSquares,minimumFloor}))continue;
       stop={row:w.row,col:w.col,steps:p.distance+extra,refuge_return_proved:true,waypoints:[...prefix.slice(0,i+1).map(({x,y})=>({x,y})),...side.waypoints]};break;
     }
     if(stop)break;
@@ -119,11 +155,11 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
     for(const w of candidates.slice(0,24)){
       if(performance.now()-started>maxMs+500)break;
       const side=planBodyDetour(geo,from,geo.standPointWire(w.row,w.col),{objects,selfId,roomFlags,overrideDepths,
-        goalSquare:w,avoidSquares,marginSquares:3,maxRangeSquares:14,maxNodes:6000,maxMs:80,threats,threatWeight,threatRadius});
+        goalSquare:w,avoidSquares,minimumFloor,marginSquares:3,maxRangeSquares:14,maxNodes:6000,maxMs:80,threats,threatWeight,threatRadius});
       if(!side.found||!side.waypoints.length)continue;
       let previous=from,distance=0;for(const p of side.waypoints){distance+=Math.hypot(p.x-previous.x,p.y-previous.y)/64;previous=p;}
       if(distance>maxLeg||Math.floor(previous.y/64)!==w.row||Math.floor(previous.x/64)!==w.col)continue;
-      if(!fineRefugeReturnable(geo,previous,from,{objects,selfId,roomFlags,overrideDepths,avoidSquares,
+      if(!fineRefugeReturnable(geo,previous,from,{objects,selfId,roomFlags,overrideDepths,avoidSquares,minimumFloor,
        marginSquares:3,maxRangeSquares:14,maxNodes:6000,maxMs:80}))continue;
       stop={row:w.row,col:w.col,steps:distance,waypoints:side.waypoints,alternative_refuge:true,refuge_return_proved:true};break;
     }
@@ -165,7 +201,7 @@ async function runFineRailWorker(geo,from,goal,options,{cancelled=()=>false,time
   return new Promise(resolve=>{
     const worker=new Worker(new URL('./m59-fine-rail.mjs',import.meta.url),{
       execArgv:[],resourceLimits:{maxOldGenerationSizeMb:256},
-      workerData:{kind:'m59-fine-rail/1',task,geometry,stepMask:geo._stepMask??null,from:pose,goal,options:copy}});
+      workerData:{kind:'m59-fine-rail/1',task,geometry,roomNum:geo.roomNum??geo.num??null,stepMask:geo._stepMask??null,from:pose,goal,options:copy}});
     // Every search is bounded and sends no packets. Let its isolate exit
     // naturally even after cancellation: forcibly terminating a compiling
     // worker crashed the containing keeper in Windows Node 25 (V8 !is_null).
@@ -178,6 +214,7 @@ async function runFineRailWorker(geo,from,goal,options,{cancelled=()=>false,time
 }
 if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
   const geo=RoomGeometry.fromJSON(workerData.geometry),o=workerData.options;
+  if(Number.isFinite(Number(workerData.roomNum))&&workerData.roomNum!=null)geo.roomNum=Number(workerData.roomNum);
   if(workerData.stepMask)geo.attachStepMask(workerData.stepMask);
   o.objects=new Map(o.objects.map(p=>[p.id,p]));
   if(workerData.task==='cut'){
@@ -187,22 +224,29 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
       Math.hypot(p.x-workerData.from.x,p.y-workerData.from.y)<=o.bodyRangeSquares*64)):o.objects;
     const obstacles=blockingBodySnapshot(scopedObjects,o.selfId);
     const allowed=b=>!o.avoidSquares?.has?.(Math.floor(clientToProtocol(b.y)/64)+','+Math.floor(clientToProtocol(b.x)/64))&&
-      floorConstraintAllows(geo,{x:clientToProtocol(b.x),y:clientToProtocol(b.y)},o.minimumFloor);
+      floorConstraintAllows(geo,{x:clientToProtocol(b.x),y:clientToProtocol(b.y)},o.minimumFloor,
+       {roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});
     const edge=(a,b)=>{if(!allowed(b))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles,
       roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
     const settings={
-      bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128,cost:o.threats?.length?cost:null,maxMs:o.maxMs??4000,
+      bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128,cost:o.threats?.length?cost:null,maxMs:o.maxMs??4000,navmesh:o.navmesh!==false,
       floorAt:(x,y)=>{const l=geo.leafAtClient(x,y);return l?.sector?geo.floorBaseAtClient(x,y,l):null;}};
+    const requestDeadline=performance.now()+(o.maxMs??4000);
+    const cutRoute=(a,b,settings,geometryOnly=false)=>cutMovementRail(geo,a,b,
+      {...settings,deadline:requestDeadline,maxMs:Math.max(0,requestDeadline-performance.now())},
+      {obstacles:geometryOnly?[]:obstacles,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,
+       avoidSquares:o.avoidSquares,minimumFloor:o.minimumFloor,threats:(o.threats??[]).map(point),
+       threatWeight:o.threatWeight??12,threatRadius:(o.threatRadius??8)*1024});
     const geometryEdge=(a,b)=>{if(!allowed(b))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,
       roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
     const baked=findFineGuide(geo,point(workerData.from),point(workerData.goal),{edge:geometryEdge});
     const clearBaked=baked&&baked.waypoints.slice(1).every((p,i)=>edge(baked.waypoints[i],p));
-    let cut=clearBaked?baked:cutRail(point(workerData.from),point(workerData.goal),{...settings,edge});
+    let cut=cutRoute(point(workerData.from),point(workerData.goal),{...settings,edge,fallbackRail:clearBaked?baked:null});
     let waitingRefuge=null;
     if((!cut.ok||!cut.bridgeOk)&&obstacles.length&&o.allowBodyPrefix===true){
       const geometryEdge=(a,b)=>{if(!allowed(b))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,
         roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
-      const guide=baked??cutRail(point(workerData.from),point(workerData.goal),{...settings,edge:geometryEdge});
+      const guide=cutRoute(point(workerData.from),point(workerData.goal),{...settings,edge:geometryEdge,fallbackRail:baked},true);
       if(guide.ok&&guide.bridgeOk){
         // A full geometry route blocked by this scene is traffic evidence.
         // The body may wait only at an existing proved refuge; this result
@@ -215,7 +259,7 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
         // exact destination still waits. The next authored point must have a
         // complete route under the SAME bodies, floor and mandatory edges.
         if(occupiedGoal&&o.guideNext){
-          const next=cutRail(point(workerData.from),point(o.guideNext),{...settings,edge});
+          const next=cutRoute(point(workerData.from),point(o.guideNext),{...settings,edge});
           if(next.ok&&next.bridgeOk)cut={...next,guide_advance:{from:workerData.goal,to:o.guideNext,reason:'occupied_guide_waypoint'}};
         }
         // A different waiting wall cannot free an occupied exact destination.
