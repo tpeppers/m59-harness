@@ -652,6 +652,7 @@ through a nested shelter order.
   reads, a file that will not parse is loud and the last good reading stands; a hand-over never passes the target, the
   giver's keep or what fits; a requester outside 552, or not quiet, is named and handed nothing, and nothing walks; when
   Zheng holds none, a farmer in 552 gives only above its strategy reserve and its own request, never the singer.
+- `m59-supervisor-heartbeat-test.mjs` (6): the harness half of DUM's supervisor registry contract (`m59-supervisor-heartbeat.mjs`): the schema-1 card is written atomically with repo/commit/dirty, a modified or untracked pinned path is dirty, DUM's `M59_SUPERVISOR_ID` wins, the `<id>.stop` request is honoured and cleared on start. The Ocean courier is its first user.
 - `m59-purse-lease-test.mjs` (22): an errand's purse lease (`m59-purse-lease.mjs`). A live lease raises every banking
   float and `bank_above` to its carry and lapses by itself; no keeper part reads `policy.walkingMoney` directly; the
   broker's `purse_lease` and the bank tool's `lease_ms` set it.

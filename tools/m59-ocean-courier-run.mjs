@@ -1,11 +1,13 @@
 // One production courier, with native recovery remaining in control during travel.
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { call, fleetScript } from './m59-fleetscript.mjs';
 import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
 import { dibsFile } from './m59-dibs.mjs';
 import { readReceived } from './m59-loot-eject.mjs';
+import { supervisorHeartbeat } from './m59-supervisor-heartbeat.mjs';
 import { farmFoodCacheFile } from './m59-farm-food-cache-record.mjs';
 import { farmGearCacheFile } from './m59-farm-gear-cache-record.mjs';
 import {
@@ -153,6 +155,13 @@ async function restoreCourierVigor(before) {
 
 const server = await oceanCourierIdentity(fleet);
 acquire();
+// A DUM SUPERVISOR (2026-11-12). The prod doctrine declares this courier `must`: DUM reads this heartbeat to know it is up
+// and from which commit, starts it when it is not (the lock above refuses a second copy), and stops it with
+// <state dir>/ocean-courier.stop -- which, like great-ocean.stop, lets the current lap finish.
+const heartbeat = supervisorHeartbeat({ id: 'ocean-courier', fleet, entry: import.meta.url,
+  paths: [fileURLToPath(new URL('./fleetscripts/ocean-courier.mjs', import.meta.url)),
+          fileURLToPath(new URL('./m59-ocean-courier-cache.mjs', import.meta.url))] }).start();
+const stopAsked = () => existsSync(stopPath) || heartbeat.stopRequested();
 let active = false, stopping = false, maintenance = null;
 const maintain = () => {
   if (maintenance || stopping) return;
@@ -189,7 +198,7 @@ const tradeGoods = on => setOceanTradeGoods(call, on);
 log('courier online', { pid: process.pid, agent, room });
 maintain();
 try {
-  while (!stopping && !existsSync(stopPath)) {
+  while (!stopping && !stopAsked()) {
     try {
       const carrier = await status(agent);
       const recovery = oceanCourierReturnSteps(carrier, { fleet, server });
@@ -236,6 +245,8 @@ try {
   }
 } finally {
   clearInterval(timer);
+  heartbeat.stopping();
   await maintenance;
   if (Number(readFileSync(lockPath, 'utf8')) === process.pid) unlinkSync(lockPath);
+  heartbeat.stop();
 }
