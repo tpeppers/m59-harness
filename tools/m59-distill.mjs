@@ -650,7 +650,7 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
           const block = !o.has_weapon ? 'unarmed' : roadBlock(s.room);
           const action = { kind: 'farm', item: need.item, amount: Math.min(amount, c.farm_count), creature: s.creature,
                            level: s.level, karma: s.karma, room: s.room, per_roll_percent: s.per_roll_percent,
-                           minutes: c.farm_minutes, road: true };
+                           minutes: c.farm_minutes, home: c.home, road: true };   // home: the walk back (2026-11-13 it was undefined)
           if (approved && !block && !gate('farm', need.item)) {
             take(action, `${need.item} short ${amount}; ${s.creature} (L${s.level}) in ${s.room} is the safest source, and it is allow-listed`);
             supplied = true; break;

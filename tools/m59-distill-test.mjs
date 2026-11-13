@@ -608,3 +608,10 @@ console.log(`\n${n} passed`);
   if (/not at home/.test(t3.why ?? '') && !/153 or 714/.test(t3.why)) { console.log('FAIL the refusal names both homes'); process.exitCode = 1; }
   else console.log('ok - homes named together');
 }
+
+// A farm action carries its walk home (Beaker, 2026-11-13: "a walk to undefined").
+{
+  const src = (await import('node:fs')).readFileSync(new URL('./m59-distill.mjs', import.meta.url), 'utf8');
+  if (!/kind: 'farm'[\s\S]{0,400}home: c\.home/.test(src)) { console.log('FAIL the farm action must carry home'); process.exitCode = 1; }
+  else console.log('ok - farm action carries home');
+}
