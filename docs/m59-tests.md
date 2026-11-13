@@ -1,5 +1,22 @@
 # The offline test suites, and what each one pins
 
+`m59-navmesh-test.mjs`, `m59-navmesh-adapters-test.mjs`,
+`m59-navmesh-session-test.mjs`, `m59-navmesh-objectives-test.mjs` and
+`m59-navmesh-lab-test.mjs` guard the
+[enhanced navigation mesh](m59-navmesh.md). They cover exact native wire proof,
+state fingerprints, one-way declared jumps, live bodies, caller constraints,
+compact lazy room shards, and actual Session packet ownership/confirmation.
+The objective tests distinguish all thirteen Mana Nodes from their game
+prerequisites, including the Ice Cave's independent gates and guest-only access.
+The pure lab tests also refuse wrong lab endpoints, missing native baselines,
+nonmovement actions, inconsistent authored starts and candidate falls without
+explicit opt-in before any adapter or login. These five suites are part of
+`m59-movement-suite.mjs` and require no npm package, broker or server.
+The authoring tests additionally require `npm ci --prefix experiments/navmesh`,
+then `node experiments/navmesh/enhanced-bake-test.mjs`; they check generic
+Recast/native compilation against narrow Ancient and stateful Konima geometry
+under a bounded worker heap.
+
 `node --test tools/m59-activity-telemetry-test.mjs` checks shared runner/broker
 receipts, nested arrow shopping, zero-mana Mystic Touch fizzles, queued/trance
 unknowns, real guild withdrawal receipts, foreign-fleet exclusion, verified-result

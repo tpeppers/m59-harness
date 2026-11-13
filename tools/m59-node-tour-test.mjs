@@ -25,7 +25,9 @@ test('retained cancellation receipt is not an active job',()=>assert.equal(trave
 test('retained success receipt is not an active job',()=>assert.equal(travelJobActive({last_action:'walk to Tos',took_s:4}),false));
 test('measured Badlands return survives the old 400k cap and reaches the exit square',()=>{
   const geo=roomGeometry(45),from={x:46080,y:64448};
-  const step=tourPlan().find(s=>s.kind==='cut'&&s.room===45),{proof,points}=cutTourWalk(geo,from,step);
+  // This assertion targets the native fallback's historical search cap. A mesh
+  // can solve the same movement goal without visiting400k lattice points.
+  const step={...tourPlan().find(s=>s.kind==='cut'&&s.room===45),navmesh:false},{proof,points}=cutTourWalk(geo,from,step);
   assert.ok(proof.visited>400000);assert.ok(points.length>1);assert.deepEqual(points[0],from);
   const last=points.at(-1);assert.equal(Math.floor(last.x/1024)+1,53);assert.equal(Math.floor(last.y/1024)+1,1);
   const edge=edgeOf(geo);assert.ok(points.slice(1).every((p,i)=>edge(points[i],p)));
@@ -38,18 +40,26 @@ test('in-room Badlands plan: cut to the rail start, rail, meld, cut back to the 
   assert.deepEqual(p[3],tourPlan().find(s=>s.kind==='cut'&&s.room===45));
 });
 test('in-room plan refuses a stone it has no measured rail start for',()=>assert.throws(()=>inRoomNodePlan('victoria'),/no_in_room_plan_for_victoria/));
-test('a Badlands farmer on the common floor (r28c18) cuts to the rail start; r54c47 under the mesa does not',()=>{
+test('a Badlands farmer on the common floor cuts to the rail start; the native fallback retains its old under-mesa refusal',()=>{
   const geo=roomGeometry(45),step=inRoomNodePlan('badlands')[0],edge=edgeOf(geo);
   const farm={x:18*1024+512,y:28*1024+512},{points}=cutTourWalk(geo,farm,step);
   assert.ok(points&&points.length>1);assert.equal(points[0].x,farm.x);assert.equal(points[0].y,farm.y);
   const end=points.at(-1);assert.ok(Math.hypot(end.x-53856,end.y-992)<=64,JSON.stringify(end));assert.equal(end.f,1664); // one lattice step from the rail's first waypoint, on its floor
   assert.ok(points.slice(1).every((q,i)=>edge(points[i],q)));
-  assert.equal(cutTourWalk(geo,{x:47*1024+512,y:54*1024+512},step).points,null);
+  assert.equal(cutTourWalk(geo,{x:47*1024+512,y:54*1024+512},{...step,navmesh:false}).points,null);
+});
+test('mesh reaches the Badlands rail head from the historical under-mesa pose with full native proof',()=>{
+  const geo=roomGeometry(45),step=inRoomNodePlan('badlands')[0],from={x:47*1024+512,y:54*1024+512};
+  const {points,proof}=cutTourWalk(geo,from,step);
+  assert.equal(proof.source,'navmesh');assert.ok(points.length>1);
+  assert.deepEqual({x:points[0].x,y:points[0].y},from);
+  const end=points.at(-1);assert.equal(end.x,step.x);assert.equal(end.y,step.y);assert.equal(end.f,1664);
+  assert.ok(points.slice(1).every((p,i)=>geo.traceFineMoveClient(points[i].x,points[i].y,p.x,p.y,{slide:false})?.arrived===true));
 });
 // Two waypoints of the 2026-10-19 Badlands to_node bake: #1468 on the 2816 shelf, and the last, on the stone's mesa.
 const BADLANDS_RAIL=[{x:46080,y:64448,f:4096},{x:33024,y:31808,f:2816}];
-test('a body already on the Badlands rail shelf (Bunsen r37c33) boards the nearest rail waypoint, not the unreachable head',()=>{
-  const geo=roomGeometry(45),step=inRoomNodePlan('badlands')[0],edge=edgeOf(geo),from={x:33024,y:37120};
+test('the native fallback boards the nearby Badlands rail shelf when its old head cut is unreachable',()=>{
+  const geo=roomGeometry(45),step={...inRoomNodePlan('badlands')[0],navmesh:false},edge=edgeOf(geo),from={x:33024,y:37120};
   assert.equal(cutTourWalk(geo,from,step).points,null); // what body_seeded_cut_failed was, 02:49Z
   const b=railBoardingCut(geo,from,step,BADLANDS_RAIL);
   assert.ok(b.points,JSON.stringify(b.attempts));assert.equal(b.target.index,1);
@@ -57,8 +67,8 @@ test('a body already on the Badlands rail shelf (Bunsen r37c33) boards the neare
   const end=b.points.at(-1);assert.ok(Math.hypot(end.x-33024,end.y-31808)<=64,JSON.stringify(end));
   assert.ok(b.points.slice(1).every((q,i)=>edge(b.points[i],q)));
 });
-test('boarding still refuses a body under the mesa, after trying each candidate and the head',()=>{
-  const geo=roomGeometry(45),step=inRoomNodePlan('badlands')[0];
+test('native boarding retains its under-mesa refusal after trying each candidate and head',()=>{
+  const geo=roomGeometry(45),step={...inRoomNodePlan('badlands')[0],navmesh:false};
   const b=railBoardingCut(geo,{x:47*1024+512,y:54*1024+512},step,[BADLANDS_RAIL[0]]);
   assert.equal(b.points,null);assert.deepEqual(b.attempts.map(a=>a.index),[0,'head']);
 });

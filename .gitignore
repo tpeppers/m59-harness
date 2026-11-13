@@ -1098,3 +1098,8 @@ substrate/rescue-travel/
 /substrate/farm-gear-cache-*.json
 /substrate/farm-sale-cache-ward-*.json
 /substrate/ocean-courier-*.lock
+
+# Intermediate offline mesh books; the default index and its referenced shards
+# are versioned geometry assets. Native lab configs/evidence stay under scratch/.
+/substrate/m59-navmesh-*.json.gz
+/substrate/navmesh/*.tmp

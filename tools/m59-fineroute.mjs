@@ -46,12 +46,13 @@
 // real. `confidence` on the plan says which half you are holding.
 
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sharedRoomGeometry, CLIENT_FINENESS as F, MAX_STEP_HEIGHT } from './m59-roo.mjs';
 import { fallJumpsIn } from './m59-falljump.mjs';
 import { clientToProtocol, protocolToClient } from './m59-finepos.mjs';
 import { quantizeRailPoint } from './m59-railfollow.mjs';
+import { planNavMesh, navMeshExecutionAims } from './m59-navmesh.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -207,6 +208,7 @@ export function fineRouter(roomNum, {
   exactWalk = false,
   worldMap = null,
   geometry = null,     // live animated sectors, when supplied by a Session
+  navmesh = true, navmeshMaxMs = 2000, navmeshMaxNodes = 200000,
 } = {}) {
   const world = worldMap ?? JSON.parse(readFileSync(join(REPO, 'substrate', 'm59-map.json'), 'utf8'));
   const room = world.rooms?.[roomNum] ?? world.rooms?.[String(roomNum)];
@@ -532,8 +534,77 @@ export function fineRouter(roomNum, {
     return { kind: 'walk', waypoints, biggest_drop: worst, walk_proof: { checked: unproved.length === 0, unproved } };
   }
 
+  // Typed mesh legs retain the existing walk/jump boundary. A jump is offered
+  // only to plan() callers that permit one, and remains a declared operation for
+  // the existing guarded jump executor rather than becoming a walking chord.
+  function meshWalk(from,to,options={}) {
+    if(!navmesh)return null;
+    const maxJumps=Math.max(0,options.maxJumps??0);
+    const mesh=planNavMesh(geo,from,to,{allowedKinds:maxJumps>0?['walk','jump']:['walk'],maxJumps,maxWalkDrop:maxDescend,
+      goalSquare:options.goalSquare,maxMs:options.maxMs??navmeshMaxMs,
+      maxNodes:options.maxNodes??navmeshMaxNodes,deadline:options.deadline,
+      avoidSquares:options.avoidSquares,minimumFloor:options.minimumFloor,
+      obstacles:options.obstacles??[],roomFlags:options.roomFlags??0,overrideDepths:options.overrideDepths});
+    if(!mesh.available||!mesh.found||mesh.complete===false)return null;
+    const source=mesh.legs?.length?mesh.legs:Array.isArray(mesh.waypoints)?[{kind:'walk',waypoints:mesh.waypoints}]:[];
+    const legs=[];let jumps=0;
+    const near=(a,b)=>a&&b&&Math.hypot(a.x-b.x,a.y-b.y)<=.05;
+    for(const typed of source){
+      if(typed.kind==='walk'){
+        if(!Array.isArray(typed.waypoints)||!typed.waypoints.length)return null;
+        // Node rails persist rounded 64-client-unit spans. A 128-unit mesh
+        // proof is not permission to invent those intermediate points: a shelf
+        // lip can refuse one of them. Decline this provider before the rail
+        // writer sees a candidate it cannot keep completely checked.
+        for(let i=1;i<typed.waypoints.length;i++){
+          const a=typed.waypoints[i-1],b=typed.waypoints[i],n=Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/64));
+          let previous=a;
+          for(let j=1;j<=n;j++){
+            const point={x:Math.round(a.x+(b.x-a.x)*j/n),y:Math.round(a.y+(b.y-a.y)*j/n)};
+            if(point.x===previous.x&&point.y===previous.y)continue;
+            const trace=geo.traceFineMoveClient(previous.x,previous.y,point.x,point.y,{slide:true});
+            if(trace?.arrived!==true||trace?.moved!==true||Math.hypot(trace.x-point.x,trace.y-point.y)>.05)return null;
+            const floor=p=>geo.floorBaseAtClient(p.x,p.y,geo.leafAtClient(p.x,p.y));
+            if(Number.isFinite(maxDescend)&&floor(previous)-floor(point)>maxDescend)return null;
+            previous=point;
+          }
+        }
+        const execution=navMeshExecutionAims(geo,{waypoints:typed.waypoints},{...options,maxMs:250,maxDistance:maxGap,
+          maxFloorDelta:MAX_STEP_HEIGHT,maxWalkDrop:maxDescend});
+        // Existing node/rail executors consume aims, while exact mesh proof
+        // remains separate. Recheck their rounded64 serialization too.
+        for(let i=1;i<execution.aims.length;i++){
+          const a=execution.aims[i-1],b=execution.aims[i],n=Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/64));let previous=a;
+          for(let j=1;j<=n;j++){
+            const p={x:Math.round(a.x+(b.x-a.x)*j/n),y:Math.round(a.y+(b.y-a.y)*j/n)};
+            if(near(previous,p))continue;
+            const trace=geo.traceFineMoveClient(previous.x,previous.y,p.x,p.y,{slide:false});
+            if(trace?.arrived!==true||Math.hypot(trace.x-p.x,trace.y-p.y)>.05)return null;
+            previous=p;
+          }
+        }
+        const leg=walkLeg(execution.aims);if(!leg.walk_proof.checked)return null;
+        leg.sourceWaypoints=typed.waypoints;
+        legs.push(leg);continue;
+      }
+      if(typed.kind!=='jump'||typed.declared!==true||++jumps>maxJumps)return null;
+      const fromSquare=typed.fromSquare,toSquare=typed.toSquare;
+      const known=declared.find(j=>j.from.row===fromSquare?.row&&j.from.col===fromSquare?.col&&
+        j.to.row===toSquare?.row&&j.to.col===toSquare?.col);
+      if(!known||!near(known.fromFine,typed.declaredFrom)||!near(known.toFine,typed.declaredTo)||
+        !near(typed.fromFine,typed.from)||!near(typed.toFine,typed.to))return null;
+      legs.push({kind:'jump',from:{...known.from},to:{...known.to},fromFine:{...typed.fromFine},toFine:{...typed.toFine},
+        declared_from:{...known.fromFine},declared_to:{...known.toFine},declared:true,requires:known.requires??null});
+    }
+    if(!legs.length)return null;
+    return {ok:true,room:roomNum,from,to,jumps,all_declared:true,legs,
+      source:'navmesh',navmesh_identity:mesh.identity,
+      confidence:jumps?'native-checked mesh route retaining declared jump operations':'native-checked mesh walking; no jump involved'};
+  }
+
   // Plan to a measured fine point without replacing its shelf with a square representative.
-  function planWalkToPoint(from, to) {
+  function planWalkToPoint(from, to, options = {}) {
+    const mesh=meshWalk(from,to,{...options,maxJumps:0});if(mesh)return mesh;
     const start = snapToFloor(from);
     if (!start || floorAt(to.x, to.y) == null)
       return { ok: false, why: 'fine walk endpoint has no floor', room: roomNum };
@@ -548,12 +619,16 @@ export function fineRouter(roomNum, {
       confidence: 'checked walking closure to the exact fine destination', legs: [leg] };
   }
 
-  function plan(from, to, { maxJumps = 4, allowCandidates = false, branch = 12 } = {}) {
+  function plan(from, to, { maxJumps = 4, allowCandidates = false, branch = 12,
+    maxMs = navmeshMaxMs, maxNodes = navmeshMaxNodes, deadline = undefined } = {}) {
     const startPt = from.x != null && from.y != null
       ? snapToFloor({ x: from.x, y: from.y }) : footing(from.row, from.col);
     if (!startPt) return { ok: false, why: `no footing anywhere inside ${from.row},${from.col}` };
     const goalPt = footing(to.row, to.col);
     if (!goalPt) return { ok: false, why: `no footing anywhere inside ${to.row},${to.col}` };
+    // Candidate mode is an explicit geometry-audit request; the mesh only
+    // contains executable declarations and cannot stand in for that search.
+    const mesh=allowCandidates?null:meshWalk(startPt,goalPt,{goalSquare:to,maxMs,maxNodes,deadline,maxJumps});if(mesh)return {...mesh,from,to};
 
     const inTarget = seen => {
       for (const p of seen.values()) { const s = sqOf(p.x, p.y); if (s.row === to.row && s.col === to.col) return true; }
@@ -679,8 +754,7 @@ export function fineRouter(roomNum, {
 }
 
 // ---------------------------------------------------------------- CLI
-if (import.meta.url === `file://${process.argv[1]}` ||
-    process.argv[1]?.endsWith('m59-fineroute.mjs')) {
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const argv = process.argv.slice(2);
   const has = n => argv.includes('--' + n);
   const flag = (n, d = null) => {

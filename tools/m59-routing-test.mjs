@@ -45,6 +45,7 @@
 // nothing is worse than one that says it did.
 
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RoomGeometry, protocolToward, STEP_MASK_DIRS, KOD_FINENESS, CLIENT_FINENESS,
@@ -608,42 +609,52 @@ if (!existsSync(movementMapFile())) {
     }
   }
 
-  // 3. THE OPERATOR'S OWN EVIDENCE, and the only assertion here not derived from the same
-  //    .roo as the predicate. A real client stood in every one of these squares; 137 of
-  //    them are squares the coarse grid calls wall. If any is not standable, the predicate
-  //    is still deleting ground somebody walks on.
+  // 3. Independent human observations, bound to stable room numbers in the
+  // committed crossing book. Ambient proxy logs only carry transient object
+  // ids; a later server can reuse one for a different map. Without a source
+  // identity, object1088 alone cannot bind a later capture to room2113.
   {
-    const walksDir = WALKS_DIR;
-    const byObj = new Map();
-    for (const [n, r] of Object.entries(map.rooms)) if (r.objId) byObj.set(r.objId, n);
-    let stood = 0, notStood = 0, gridSaidWall = 0;
-    const offenders = [];
-    if (existsSync(walksDir)) {
-      for (const f of readdirSync(walksDir)) {
-        if (!f.endsWith('.jsonl')) continue;
-        for (const line of readFileSync(join(walksDir, f), 'utf8').split('\n')) {
-          if (!line) continue;
-          let p; try { p = JSON.parse(line); } catch { continue; }
-          const num = byObj.get(p.room); if (!num) continue;
-          const room = map.rooms[num];
-          if (p.row < 1 || p.col < 1 || p.row > room.rows || p.col > room.cols) continue;
-          let geo = null; try { geo = sharedRoomGeometry(room); } catch { continue; }
-          if (!geo?.collisionReady) continue;
-          stood++;
-          if (!geo.walkable(p.row, p.col)) gridSaidWall++;
-          if (!geo.standable(p.row, p.col)) {
-            notStood++;
-            if (offenders.length < 5) offenders.push(`${num} ${p.row},${p.col}`);
-          }
+    const recorded=JSON.parse(readFileSync(new URL('../substrate/m59-crossings.json',import.meta.url),'utf8')).pairs;
+    let stood=0,notStood=0,gridSaidWall=0;const offenders=[];
+    for(const [crossing,points] of Object.entries(recorded)){
+      const roomNum=Number(crossing.split('>')[0]),room=map.rooms[roomNum];
+      for(const p of points){
+        const geo=room?.roo?sharedRoomGeometry(room):null;
+        if(!geo?.collisionReady||!geo.inBounds(p.row,p.col)||!geo.standable(p.row,p.col)){
+          notStood++;offenders.push(`${roomNum} r${p.row}c${p.col}`);continue;
         }
+        stood++;if(!geo.walkable(p.row,p.col))gridSaidWall++;
       }
     }
-    if (!stood) skip('every square a person stood in is standable', 'no walk logs here');
-    else {
-      ok(`every square a real client stood in is standable (${stood} positions)`,
-         notStood === 0, offenders.join(' '));
-      ok('and the grid would have refused a real chunk of them',
-         gridSaidWall > 0, `${gridSaidWall} of ${stood} are squares the coarse grid calls wall`);
+    ok('the committed human standing evidence retains at least 25 explicit room-bound endpoints',stood+notStood>=25);
+    ok(`every source-bound recorded client endpoint is standable (${stood+notStood} positions)`,notStood===0,offenders.slice(0,5).join(' '));
+    ok(`the recorded footing includes ground the grid rejects (${gridSaidWall} of ${stood} positions)`,gridSaidWall>0);
+
+    // Optional ambient audit. A manifest must identify this exact map and each
+    // immutable log, and explicitly bind its object ids to stable room numbers:
+    // {format:'m59-walk-audit/1',map_sha256,files:[{file,sha256,rooms:{objId:roomNum}}]}.
+    // Unbound evidence is indeterminate, never a geometry pass or failure.
+    const manifestFile=process.env.M59_ROUTING_WALKS_MANIFEST;
+    if(process.env.M59_ROUTING_WALKS_AUDIT==='1'||manifestFile){
+      const manifest=manifestFile?JSON.parse(readFileSync(manifestFile,'utf8')):null;
+      const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+      const bindings=manifest?.format==='m59-walk-audit/1'&&manifest.map_sha256===hash(readFileSync(mapFile))
+        ?new Map((manifest.files??[]).map(f=>[f.file,f])):new Map();
+      let audited=0,unbound=0,refused=0;const failures=[];
+      if(existsSync(WALKS_DIR))for(const file of readdirSync(WALKS_DIR)){
+        if(!file.endsWith('.jsonl'))continue;
+        const bytes=readFileSync(join(WALKS_DIR,file)),binding=bindings.get(file),matched=binding?.sha256===hash(bytes);
+        for(const line of bytes.toString('utf8').split('\n')){
+          if(!line)continue;let p;try{p=JSON.parse(line);}catch{continue;}
+          const num=matched?binding.rooms?.[p.room]:null,room=map.rooms[num];
+          if(!room){unbound++;continue;}
+          if(p.row<1||p.col<1||p.row>room.rows||p.col>room.cols)continue;
+          const geo=sharedRoomGeometry(room);if(!geo?.collisionReady){unbound++;continue;}
+          audited++;if(!geo.standable(p.row,p.col)){refused++;if(failures.length<5)failures.push(`${num} r${p.row}c${p.col}`);}
+        }
+      }
+      if(audited)ok(`source-identified ambient standing audit (${audited} positions)`,refused===0,failures.join(' '));
+      console.log(`  walk audit: ${audited} source-identified positions; ${unbound} indeterminate without matching map/log identity and explicit room bindings`);
     }
   }
 

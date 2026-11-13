@@ -27,6 +27,8 @@ const ok = (what, cond) => {
 function harness() {
   const calls = [], notes = [];
   const ap = Object.create(Autopilot.prototype);
+  // The real stage authority and danger watcher inspect their owning Session.
+  ap.s = { world: { room: { num: 2013 } }, client: {} };
   for (const stage of PASS_STAGES) ap[stage] = async () => { calls.push(stage); return CONTINUE; };
   ap.note = (what, detail) => notes.push({ what, detail });
   ap.tally = {};

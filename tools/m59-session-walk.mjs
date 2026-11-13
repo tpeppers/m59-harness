@@ -33,9 +33,10 @@ import { isTerminalMovementReason } from './m59-movement.mjs';
 // `physics as fallPhysics` — the ALIAS matters: m59-falljump.mjs exports it as `physics`,
 // and the name the method bodies use is the alias m59-game.mjs gave it.
 import { traversable as fallJumpTraversable, physics as fallPhysics } from './m59-falljump.mjs';
-import { clientToProtocol, CLIENT_FINENESS, elideLoops, protocolToClient } from './m59-roo.mjs';
+import { clientToProtocol, CLIENT_FINENESS, CLIP_STEP_COST, elideLoops, protocolToClient } from './m59-roo.mjs';
 import { boundsAround, fineRouteDetour, finePath, fineReachableSquares, pullFine, pointOfSquare } from './m59-finepath.mjs';
-import { planBodyDetour } from './m59-body-detour.mjs';
+import { planBodyDetour,blockingBodySnapshot } from './m59-body-detour.mjs';
+import {planNavMesh,navMeshFor,navMeshExecutionAims} from './m59-navmesh.mjs';
 import {planRailDeparture,rememberedDeparture,rememberDeparture,forgetDeparture} from './m59-pocket-rails.mjs';
 import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
@@ -303,6 +304,64 @@ export function sessionWalkPrototype(deps) {
     return {...result,via:'body_held_square'};
   }
 
+  // A loaded mesh supplies a plan; the ordinary Session executor still owns
+  // every paced packet, survival interruption and final body confirmation.
+  // null means no packet was attempted and the established planner may continue.
+  async walkViaNavMesh(goal,{goalSquare=null,maxSteps=120,hardCap=maxSteps,
+    movementGeneration=this.movementGeneration,controlToken=null,beforeMutation=null,
+    avoidSquares=null,blockedEdges=null,squareCosts=null,maxMs=100}={}) {
+    const c=this.need(),geo=this.world?.geometry,roomId=c.room.id;
+    if(!geo?.collisionReady||![goal?.x,goal?.y].every(Number.isFinite)||
+       typeof this.walkDepartureLegs!=='function'||this.shelterPolicy?.need)return null;
+    const targetSquare=goalSquare??{row:Math.floor(goal.y/64),col:Math.floor(goal.x/64)};
+    if(targetSquare.row<1||targetSquare.col<1||targetSquare.row>geo.rows||targetSquare.col>geo.cols)return null;
+    const meshStarted=performance.now();
+    const context={roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths};
+    if(!navMeshFor(geo,context).mesh)return null;
+    if(this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps:0});
+    let me=c.self;
+    if(me?.predicted||this.finePositionUnknown){
+      const confirmed=await this.confirmPosition?.({timeoutMs:1500});
+      if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps:0});
+      if(c.room.id!==roomId)return {arrived:false,left_room:true,steps:0,source:'navmesh'};
+      if(!confirmed||c.self?.predicted)return {arrived:false,steps:0,source:'navmesh',reason:'position_confirmation_timeout'};
+      me=c.self;
+    }
+    if(!me||![me.x,me.y].every(Number.isFinite))return null;
+    const avoid=new Set([...(avoidSquares??[]),...(this.hazardSquares?.()??[])]);
+    const point=p=>({x:protocolToClient(p.x),y:protocolToClient(p.y)}),from=point(me);
+    let cost=null;
+    if(squareCosts){
+      const {threats=[],clearance=0,extraCost=null}=squareCosts;
+      if(threats.length&&typeof geo.threatField!=='function'||clearance&&typeof geo.clearanceField!=='function')return null;
+      const danger=geo.threatField?.(threats),clear=geo.clearanceField?.({weight:clearance});
+      // Price each traversed fraction with the existing square fields. The
+      // selected tactical destination keeps its clearance/jitter/clip exemption.
+      cost=(a,b)=>{const row=Math.floor(b.y/1024)+1,col=Math.floor(b.x/1024)+1;
+        const atGoal=row===targetSquare.row&&col===targetSquare.col;
+        const penalty=(danger?.(row,col)??0)+(atGoal?0:(clear?.(row,col)??0)+(extraCost?.(row,col)??0)+
+          (CLIP_STEP_COST&&geo.walkable?.(row,col)===false?CLIP_STEP_COST:0));
+        return Math.hypot(b.x-a.x,b.y-a.y)*(1+penalty);};
+    }
+    const options={...context,obstacles:blockingBodySnapshot(c.room.objects,c.selfId),avoidSquares:avoid,
+      blockedEdges,cost,goalSquare,allowedKinds:['walk'],maxMs:Math.max(0,maxMs-(performance.now()-meshStarted)),
+      deadline:meshStarted+maxMs,maxNodes:20000};
+    const plan=planNavMesh(geo,from,point(goal),options);
+    if(!plan.available||!plan.found||plan.complete===false)return null;
+    const execution=navMeshExecutionAims(geo,plan,{...options,maxMs:25});
+    const waypoints=execution.aims.slice(1).map(p=>({x:clientToProtocol(p.x),y:clientToProtocol(p.y)}));
+    const limit=Math.max(0,Math.min(maxSteps,hardCap));
+    if(waypoints.length>limit||limit===0)return null;
+    if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps:0});
+    if(c.room.id!==roomId)return {arrived:false,left_room:true,steps:0,source:'navmesh'};
+    if(!c.self||Math.hypot(c.self.x-me.x,c.self.y-me.y)>0.01)return null;
+    const result=await this.walkDepartureLegs(waypoints,targetSquare,
+      {movementGeneration,controlToken,beforeMutation,maxSteps:limit});
+    const exact=goalSquare||!result.arrived||c.self&&!c.self.predicted&&Math.hypot(c.self.x-goal.x,c.self.y-goal.y)<=1;
+    return {...result,...(!exact?{arrived:false,reason:'navigation fine arrival unconfirmed'}:{}),source:'navmesh',
+      navmesh_identity:plan.identity,navmesh_proof_points:plan.waypoints.length,navmesh_aims:waypoints.length};
+  }
+
   async walkDepartureLegs(waypoints,square,{movementGeneration=this.movementGeneration,controlToken,beforeMutation=null,maxSteps=48,shelterFallback=true}={}) {
     const c=this.need(),roomId=c.room.id;
     if(waypoints.length>maxSteps)return {arrived:false,reason:'departure detour exceeds step budget'};
@@ -380,6 +439,27 @@ export function sessionWalkPrototype(deps) {
   claimPassageMove(target) { return claimPassageMove(this, target); }
   releaseConfirmedPassage() { return releaseConfirmedPassage(this); }
   passageExitNeedsConfirmation(target) { return passageExitNeedsConfirmation(this, target); }
+  // A predicted body may already have cleared its previous admission. Refresh
+  // that fact before the next entry is attempted; only the confirmed-body
+  // release function may retire the old claim. Recheck movement ownership after
+  // the ordered read so a takeover or room change cannot resume this move.
+  async refreshPassagePosition(target,{movementGeneration=this.movementGeneration,controlToken=null}={}) {
+    const c=this.need(),roomId=c.room.id;
+    if(!this._passage||!c.self?.predicted||!this.passageExitNeedsConfirmation?.(target))return null;
+    const owns=()=>this.client===c&&!this.movementWasCancelled(movementGeneration,controlToken);
+    if(!owns())return {...this.cancelledMovement(),moved:false,left_room:false};
+    const confirmed=await this.confirmPosition();
+    if(!owns())return {...this.cancelledMovement(),moved:false,left_room:c.room.id!==roomId};
+    if(c.room.id!==roomId)return {moved:false,left_room:true,reason:'room_changed'};
+    if(!confirmed||!c.self||c.self.predicted){
+      this.finePositionUnknown=true;
+      return {moved:false,left_room:false,reason:'position_confirmation_timeout',predicted:true,
+        note:'passage admission needs a confirmed body before another move'};
+    }
+    this._finePredicted=0;
+    this.releaseConfirmedPassage?.();
+    return null;
+  }
   // WALK THE ROUTE THAT WAS PROVED, NOT THE LATTICE IT WAS DERIVED FROM.
   //
   // THIS IS THE ANSWER TO "WHY DOES THE FLEET DEVIATE FROM ITS PLAN AT ALL". Almost
@@ -963,6 +1043,9 @@ export function sessionWalkPrototype(deps) {
                          movementGeneration = this.movementGeneration,controlToken = null } = {}) {
     const c = this.need();
     const roomId = c.room.id;
+    const passage=await this.refreshPassagePosition?.({x:aimX??col*KOD_FINENESS+32,y:aimY??row*KOD_FINENESS+32},
+      {movementGeneration,controlToken});
+    if(passage)return passage;
     const before = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : null;
     const stepGeneration=movementGeneration;
     const ownsStep=()=>(this.client===undefined||this.client===c)&&this.movementGeneration===stepGeneration
@@ -1634,6 +1717,8 @@ export function sessionWalkPrototype(deps) {
     const c = this.need();
     const generation=options?.movementGeneration??this.movementGeneration,token=options?.controlToken;
     const startRoom = c.room.id;
+    const passage=await this.refreshPassagePosition?.({x,y},{movementGeneration:generation,controlToken:token});
+    if(passage)return passage;
     if (this.finePositionUnknown) {
       const recovered = await this.confirmPosition();
       if (!recovered) return { moved: false, left_room: false,
@@ -1807,6 +1892,11 @@ export function sessionWalkPrototype(deps) {
     const exhausted = () => ({ arrived: false, steps: taken, reason: 'ran out of steps',
       position: c.self ? { col: c.self.col, row: c.self.row } : null });
     if (budget <= 0) return exhausted();
+    if(typeof this.walkViaNavMesh==='function'){
+      const mesh=await this.walkViaNavMesh(goal,{goalSquare,maxSteps:budget,hardCap:budget,
+        movementGeneration,controlToken,avoidSquares,maxMs:35});
+      if(mesh)return mesh;
+    }
 
     // A WALL SQUARE IS ONE THE MOVER REFUSES TO ENTER FROM ITS COARSE NEIGHBOURS. That is
     // not an obstacle to the safe-spot search, it is the DEFINITION of what it looks for
@@ -1828,7 +1918,7 @@ export function sessionWalkPrototype(deps) {
     // body rule reports it.
     if (typeof geo.finePathProtocol === 'function') {
       let path = geo.finePathProtocol(me.x, me.y, goal.x, goal.y,
-        { step: 8, margin: 4 * KOD_FINENESS, maxNodes: 4000 });
+        { step: 8, margin: 4 * KOD_FINENESS, maxNodes: 4000, maxWaypoints:budget });
       if (!path?.found && (goalSquare || this._blockingBodies?.().length)) {
         path = planBodyDetour(geo,c.self,goal,{objects:c.room?.objects,selfId:c.selfId,
           roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,avoidSquares,goalSquare});
@@ -3126,6 +3216,12 @@ export function sessionWalkPrototype(deps) {
         p = geo.path(r, cc, row, col, { avoid, blockedEdges, threats, clearance, collision: false, extraCost: jitterCost });
       return p;
     };
+    if(typeof this.walkViaNavMesh==='function'){
+      const goal=geo.standPointWire?.(row,col)??{x:col*KOD_FINENESS+(KOD_FINENESS>>1),y:row*KOD_FINENESS+(KOD_FINENESS>>1)};
+      const mesh=await this.walkViaNavMesh(goal,{goalSquare:{row,col},maxSteps,hardCap,movementGeneration,controlToken,
+        beforeMutation,avoidSquares,blockedEdges,squareCosts:{threats,clearance,extraCost:jitterCost}});
+      if(mesh)return mesh;
+    }
     let plan = replan(from.row, from.col);
     // NO ROUTE FROM HERE USUALLY MEANS "HERE IS A POCKET", NOT "THERE IS UNREACHABLE".
     //

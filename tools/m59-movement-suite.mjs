@@ -35,6 +35,11 @@ import {resolve} from 'node:path';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-navmesh-test.mjs','fingerprinted native mesh queries preserve directed walks, explicit declared jumps, bodies, hard constraints, exact wire proof and bounded room shards'],
+  ['m59-navmesh-adapters-test.mjs','mesh body detours, fine rails and route adapters retain native fallback, pressure costs, budgets and worker geometry identity'],
+  ['m59-navmesh-session-test.mjs','actual Session mesh packets retain arrival confirmation, doors, live bodies, cancellation and movement ownership without replay after a send'],
+  ['m59-navmesh-objectives-test.mjs','all thirteen Mana Node objectives preserve acquisition ranges, guest boundaries, conditional Ice gates and Yeti timing'],
+  ['m59-navmesh-lab-test.mjs','pure native lab guards refuse wrong ports, missing baseline, nonmovement actions, unbound scenes and unapproved candidate falls before login'],
   ['m59-cooperative-combat-test.mjs','optional private cooperation preserves one damaging tag per quarry with checked approaches and emergency overrides'],
   ['m59-bow-supply-test.mjs','stationary trainee-owned supply preserves worn kit and donor floors without moving farmers or replaying uncertain accepted gifts'],
   ['m59-brax-farm-init-test.mjs','finite Brax task initialization retains source loadouts, confirms roles and confines ledge supply; managed workers refuse duplicate/ambiguous starts and parallel issuers stay isolated'],

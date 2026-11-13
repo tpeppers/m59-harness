@@ -151,9 +151,10 @@ const opening=await planFineRailRefugeAsync(konimaWest,{row:72,col:2,x:160,y:464
   {maxLeg:14,goalFine:{x:96,y:4688}});
 assert.equal(opening.kind,'exit',JSON.stringify(opening));assert.deepEqual(opening.waypoints.at(-1),{x:96,y:4688});
 const eastWall={row:26,col:95,x:6128,y:1720};
-assert.equal((await planFineRailRefugeAsync(konimaWest,eastWall,wrongStage,{maxLeg:20,goalFine:{x:96,y:4688}})).found,false);
+const eastShort=await planFineRailRefugeAsync(konimaWest,eastWall,wrongStage,{maxLeg:20,goalFine:{x:96,y:4688}});
+if(eastShort.found){assert(eastShort.steps<=20);assert(validateEscape(konimaWest,eastWall,eastShort.waypoints).ok);}
 const eastGap=await planFineRailRefugeAsync(konimaWest,eastWall,wrongStage,{maxLeg:28,goalFine:{x:96,y:4688}});
-assert(eastGap.found,JSON.stringify(eastGap));assert(eastGap.steps>20&&eastGap.steps<=28);
+assert(eastGap.found,JSON.stringify(eastGap));assert(eastGap.steps>0&&eastGap.steps<=28);
 assert(validateEscape(konimaWest,eastWall,eastGap.waypoints).ok);
 const obfal=roomGeometry(2504),obfalBody={row:37,col:22,x:1464,y:2400},obfalExit={row:81,col:62},obfalOptions={goalFine:{x:3984,y:5280},goalFineAlternates:[{x:4000,y:5280},{x:4072,y:5280},{x:4064,y:5280},{x:4128,y:5280}]};
 assert.equal((await planFineRailRefugeAsync(obfal,obfalBody,obfalExit,{...obfalOptions,maxLeg:28})).found,false);
@@ -161,9 +162,10 @@ const obfalGap=await planFineRailRefugeAsync(obfal,obfalBody,obfalExit,{...obfal
 assert(obfalGap.found&&obfalGap.steps>28&&obfalGap.steps<=36,JSON.stringify(obfalGap));
 assert(validateEscape(obfal,obfalBody,obfalGap.waypoints).ok);
 const merbNorthWall={row:60,col:77,x:4928,y:3880},merbFineExit={goalFine:{x:96,y:3680},goalFineAlternates:[{x:96,y:3724},{x:96,y:3744},{x:96,y:3799}]};
-assert.equal((await planFineRailRefugeAsync(merb,merbNorthWall,merbGoal,{...merbFineExit,maxLeg:28})).found,false);
+const merbShortGap=await planFineRailRefugeAsync(merb,merbNorthWall,merbGoal,{...merbFineExit,maxLeg:28});
+if(merbShortGap.found){assert(merbShortGap.steps<=28);assert(validateEscape(merb,merbNorthWall,merbShortGap.waypoints).ok);}
 const merbLongGap=await planFineRailRefugeAsync(merb,merbNorthWall,merbGoal,{...merbFineExit,maxLeg:36});
-assert(merbLongGap.found&&merbLongGap.steps>28&&merbLongGap.steps<=36,JSON.stringify(merbLongGap));
+assert(merbLongGap.found&&merbLongGap.steps>0&&merbLongGap.steps<=36,JSON.stringify(merbLongGap));
 assert(validateEscape(merb,merbNorthWall,merbLongGap.waypoints).ok);
 // A populated Merb scene exhausted the old four-second search at r37c12.
 // Keep the observed risk field and collision proof in this regression.

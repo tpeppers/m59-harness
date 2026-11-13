@@ -1,0 +1,828 @@
+{
+  "format": "m59-enhanced-native-evidence/1",
+  "createdAt": "2026-11-13T01:40:59.471Z",
+  "scope": "Owned isolated quiet native movement trials. No node activation, acquisition, combat or automatic acquisition-circuit promotion.",
+  "coordinates": "Named CLIENT/BSP x/y;1024units per square. Endpoint tolerances and independent observed floor are retained.",
+  "trials": [
+    {
+      "scope": "boarding-flight",
+      "receiptSha256": "46a4358a124a2f755c51fca483bf3e3b640f5e4763dc499aebb8d0533336ccf3",
+      "at": "2026-11-13T01:33:20.552Z",
+      "complete": true,
+      "quiet": true,
+      "baselineRestored": true,
+      "sceneSha256": "110bf4529c3ae47b8eabdf2874358cf8ca9512eac6f8ff561f7045f6728db50f",
+      "planSha256": "bcfb00c8865a6bb89dc9556e58ce770c0c6a41b7615104f38c4c997a42e93f47",
+      "runs": [
+        {
+          "trial": 1,
+          "finished": true,
+          "arrived": true,
+          "baselineRestored": true,
+          "elapsedMs": 7133,
+          "server": {
+            "image_id": "sha256:1f6d74022530f07c8a69f8f6944d59adcb8e2275f60f435b91ec2e8d3612bd36",
+            "temporary_account_delete": "v1",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "ab79891bfe2243a606ba8b63bbe28bbf4a883aba17f0519381e1df6839758938"
+          },
+          "events": [
+            {
+              "kind": "fall_landing",
+              "label": "approach",
+              "legIndex": 0,
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 8064,
+                "wantedFloor": 8064,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "position": {
+                "client": {
+                  "x": 7264,
+                  "y": 24224
+                },
+                "floor": 8064,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "route_endpoint",
+              "label": "approach",
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 8064,
+                "wantedFloor": 8064,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "goal": {
+                "kind": "point",
+                "x": 7264,
+                "y": 24224
+              },
+              "matched": true,
+              "position": {
+                "client": {
+                  "x": 7264,
+                  "y": 24224
+                },
+                "floor": 8064,
+                "hp": 36
+              }
+            }
+          ],
+          "harness": {
+            "commit": "ff75c0ea2a85daa3148490080ad9a101f20516f5",
+            "dirty": true,
+            "node": "v25.2.1",
+            "sourceManifestSha256": "a3abca5dd47eb7d9618ac16aef8486bdaaf9f40ffbf15e8c1a2520627758ca6a",
+            "physicsSha256": "c81ab3ba991c40d36350da9c0d798b33e36eb9cfd3c524252e28614d9acf99e2",
+            "fallModelSha256": "5f4a673efb35450286f7c5d8ece568fab0d350791b18cb348ec9428e19eaa964"
+          }
+        },
+        {
+          "trial": 2,
+          "finished": true,
+          "arrived": true,
+          "baselineRestored": true,
+          "elapsedMs": 7027,
+          "server": {
+            "image_id": "sha256:1f6d74022530f07c8a69f8f6944d59adcb8e2275f60f435b91ec2e8d3612bd36",
+            "temporary_account_delete": "v1",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "ab79891bfe2243a606ba8b63bbe28bbf4a883aba17f0519381e1df6839758938"
+          },
+          "events": [
+            {
+              "kind": "fall_landing",
+              "label": "approach",
+              "legIndex": 0,
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 8064,
+                "wantedFloor": 8064,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "position": {
+                "client": {
+                  "x": 7264,
+                  "y": 24224
+                },
+                "floor": 8064,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "route_endpoint",
+              "label": "approach",
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 8064,
+                "wantedFloor": 8064,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "goal": {
+                "kind": "point",
+                "x": 7264,
+                "y": 24224
+              },
+              "matched": true,
+              "position": {
+                "client": {
+                  "x": 7264,
+                  "y": 24224
+                },
+                "floor": 8064,
+                "hp": 36
+              }
+            }
+          ],
+          "harness": {
+            "commit": "ff75c0ea2a85daa3148490080ad9a101f20516f5",
+            "dirty": true,
+            "node": "v25.2.1",
+            "sourceManifestSha256": "a3abca5dd47eb7d9618ac16aef8486bdaaf9f40ffbf15e8c1a2520627758ca6a",
+            "physicsSha256": "c81ab3ba991c40d36350da9c0d798b33e36eb9cfd3c524252e28614d9acf99e2",
+            "fallModelSha256": "5f4a673efb35450286f7c5d8ece568fab0d350791b18cb348ec9428e19eaa964"
+          }
+        }
+      ]
+    },
+    {
+      "scope": "complete-approach-and-return",
+      "receiptSha256": "3afd76a5e628932c724149233a3f9fd75c7e150d9f39c8a1e27199b5728064d2",
+      "at": "2026-11-13T01:34:19.103Z",
+      "complete": true,
+      "quiet": true,
+      "baselineRestored": true,
+      "sceneSha256": "eea5523a246267a5a329f3fd6db9df981cb4240cf6742beea978738dc0c02552",
+      "planSha256": "bcfb00c8865a6bb89dc9556e58ce770c0c6a41b7615104f38c4c997a42e93f47",
+      "runs": [
+        {
+          "trial": 1,
+          "finished": true,
+          "arrived": true,
+          "baselineRestored": true,
+          "elapsedMs": 127521,
+          "server": {
+            "image_id": "sha256:1f6d74022530f07c8a69f8f6944d59adcb8e2275f60f435b91ec2e8d3612bd36",
+            "temporary_account_delete": "v1",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "ab79891bfe2243a606ba8b63bbe28bbf4a883aba17f0519381e1df6839758938"
+          },
+          "events": [
+            {
+              "kind": "walk_prepared",
+              "label": "approach",
+              "legIndex": 0,
+              "aims": 97,
+              "position": {
+                "client": {
+                  "x": 31232,
+                  "y": 50688
+                },
+                "floor": 5056,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "fall_landing",
+              "label": "approach",
+              "legIndex": 1,
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 8064,
+                "wantedFloor": 8064,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "position": {
+                "client": {
+                  "x": 7264,
+                  "y": 24224
+                },
+                "floor": 8064,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "walk_prepared",
+              "label": "approach",
+              "legIndex": 2,
+              "aims": 4,
+              "position": {
+                "client": {
+                  "x": 7264,
+                  "y": 24224
+                },
+                "floor": 8064,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "walk_prepared",
+              "label": "approach",
+              "legIndex": 3,
+              "aims": 21,
+              "position": {
+                "client": {
+                  "x": 5824,
+                  "y": 24000
+                },
+                "floor": 8448,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "fall_landing",
+              "label": "approach",
+              "legIndex": 4,
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 10080,
+                "wantedFloor": 10080,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "position": {
+                "client": {
+                  "x": 10128,
+                  "y": 23408
+                },
+                "floor": 10080,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "walk_prepared",
+              "label": "approach",
+              "legIndex": 5,
+              "aims": 16,
+              "position": {
+                "client": {
+                  "x": 10128,
+                  "y": 23408
+                },
+                "floor": 10080,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "route_endpoint",
+              "label": "approach",
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 11104,
+                "wantedFloor": 11104,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "goal": {
+                "kind": "square",
+                "row": 20,
+                "col": 17
+              },
+              "matched": true,
+              "position": {
+                "client": {
+                  "x": 16768,
+                  "y": 19840
+                },
+                "floor": 11104,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "walk_prepared",
+              "label": "return",
+              "legIndex": 0,
+              "aims": 64,
+              "position": {
+                "client": {
+                  "x": 16768,
+                  "y": 19840
+                },
+                "floor": 11104,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "route_endpoint",
+              "label": "return",
+              "landing": {
+                "ok": true,
+                "distance": 22.627416997969522,
+                "floor": 5056,
+                "wantedFloor": 5056,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "goal": {
+                "kind": "point",
+                "x": 31232,
+                "y": 50688
+              },
+              "matched": true,
+              "position": {
+                "client": {
+                  "x": 31248,
+                  "y": 50672
+                },
+                "floor": 5056,
+                "hp": 36
+              }
+            }
+          ],
+          "harness": {
+            "commit": "ff75c0ea2a85daa3148490080ad9a101f20516f5",
+            "dirty": true,
+            "node": "v25.2.1",
+            "sourceManifestSha256": "a3abca5dd47eb7d9618ac16aef8486bdaaf9f40ffbf15e8c1a2520627758ca6a",
+            "physicsSha256": "c81ab3ba991c40d36350da9c0d798b33e36eb9cfd3c524252e28614d9acf99e2",
+            "fallModelSha256": "5f4a673efb35450286f7c5d8ece568fab0d350791b18cb348ec9428e19eaa964"
+          }
+        },
+        {
+          "trial": 2,
+          "finished": true,
+          "arrived": true,
+          "baselineRestored": true,
+          "elapsedMs": 127710,
+          "server": {
+            "image_id": "sha256:1f6d74022530f07c8a69f8f6944d59adcb8e2275f60f435b91ec2e8d3612bd36",
+            "temporary_account_delete": "v1",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "ab79891bfe2243a606ba8b63bbe28bbf4a883aba17f0519381e1df6839758938"
+          },
+          "events": [
+            {
+              "kind": "walk_prepared",
+              "label": "approach",
+              "legIndex": 0,
+              "aims": 97,
+              "position": {
+                "client": {
+                  "x": 31232,
+                  "y": 50688
+                },
+                "floor": 5056,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "fall_landing",
+              "label": "approach",
+              "legIndex": 1,
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 8064,
+                "wantedFloor": 8064,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "position": {
+                "client": {
+                  "x": 7264,
+                  "y": 24224
+                },
+                "floor": 8064,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "walk_prepared",
+              "label": "approach",
+              "legIndex": 2,
+              "aims": 4,
+              "position": {
+                "client": {
+                  "x": 7264,
+                  "y": 24224
+                },
+                "floor": 8064,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "walk_prepared",
+              "label": "approach",
+              "legIndex": 3,
+              "aims": 21,
+              "position": {
+                "client": {
+                  "x": 5824,
+                  "y": 24000
+                },
+                "floor": 8448,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "fall_landing",
+              "label": "approach",
+              "legIndex": 4,
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 10080,
+                "wantedFloor": 10080,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "position": {
+                "client": {
+                  "x": 10128,
+                  "y": 23408
+                },
+                "floor": 10080,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "walk_prepared",
+              "label": "approach",
+              "legIndex": 5,
+              "aims": 16,
+              "position": {
+                "client": {
+                  "x": 10128,
+                  "y": 23408
+                },
+                "floor": 10080,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "route_endpoint",
+              "label": "approach",
+              "landing": {
+                "ok": true,
+                "distance": 0,
+                "floor": 11104,
+                "wantedFloor": 11104,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "goal": {
+                "kind": "square",
+                "row": 20,
+                "col": 17
+              },
+              "matched": true,
+              "position": {
+                "client": {
+                  "x": 16768,
+                  "y": 19840
+                },
+                "floor": 11104,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "walk_prepared",
+              "label": "return",
+              "legIndex": 0,
+              "aims": 64,
+              "position": {
+                "client": {
+                  "x": 16768,
+                  "y": 19840
+                },
+                "floor": 11104,
+                "hp": 36
+              }
+            },
+            {
+              "kind": "route_endpoint",
+              "label": "return",
+              "landing": {
+                "ok": true,
+                "distance": 22.627416997969522,
+                "floor": 5056,
+                "wantedFloor": 5056,
+                "tolerance": 48,
+                "floorKnown": true
+              },
+              "goal": {
+                "kind": "point",
+                "x": 31232,
+                "y": 50688
+              },
+              "matched": true,
+              "position": {
+                "client": {
+                  "x": 31248,
+                  "y": 50672
+                },
+                "floor": 5056,
+                "hp": 36
+              }
+            }
+          ],
+          "harness": {
+            "commit": "ff75c0ea2a85daa3148490080ad9a101f20516f5",
+            "dirty": true,
+            "node": "v25.2.1",
+            "sourceManifestSha256": "a3abca5dd47eb7d9618ac16aef8486bdaaf9f40ffbf15e8c1a2520627758ca6a",
+            "physicsSha256": "c81ab3ba991c40d36350da9c0d798b33e36eb9cfd3c524252e28614d9acf99e2",
+            "fallModelSha256": "5f4a673efb35450286f7c5d8ece568fab0d350791b18cb348ec9428e19eaa964"
+          }
+        }
+      ]
+    }
+  ],
+  "ice": {
+    "receiptSha256": "e3cdbf64a4491169c1ae63b4ffe8603637b85a408d0b6ce94ba03f770a656a21",
+    "at": "2026-11-13T02:02:00.814Z",
+    "quiet": true,
+    "elapsedMs": 364224,
+    "finished": true,
+    "result": {
+      "arrived": true,
+      "approach_verified": true,
+      "return_verified": true,
+      "connected_approach_verified": null,
+      "connected_return_verified": null,
+      "start_room": 750,
+      "end_room": 750
+    },
+    "baselineRestored": true,
+    "health": {
+      "min": 36,
+      "max": 36
+    },
+    "firstDoor": {
+      "opened": true,
+      "sector": 1,
+      "name": "YETI_DOOR",
+      "at": {
+        "row": 24,
+        "col": 10
+      },
+      "animation_ms": 4350,
+      "shuts_after_ms": 10000,
+      "reason": "sector 1 moved; the live geometry has changed and the route can be planned again",
+      "observed_at": 1794535496907
+    },
+    "returnDoor": {
+      "opened": true,
+      "sector": 1,
+      "name": "YETI_DOOR",
+      "at": {
+        "row": 24,
+        "col": 11
+      },
+      "animation_ms": 4350,
+      "shuts_after_ms": 10000,
+      "reason": "sector 1 moved; the live geometry has changed and the route can be planned again",
+      "observed_at": 1794535526074
+    },
+    "approach": {
+      "arrived": true,
+      "position": {
+        "row": 25,
+        "col": 20,
+        "x": 1288,
+        "y": 1608,
+        "units": "KOD/protocol"
+      }
+    },
+    "return": {
+      "arrived": true,
+      "position": {
+        "row": 46,
+        "col": 25,
+        "x": 1659,
+        "y": 2969,
+        "units": "KOD/protocol"
+      }
+    },
+    "server": {
+      "image_id": "sha256:1f6d74022530f07c8a69f8f6944d59adcb8e2275f60f435b91ec2e8d3612bd36",
+      "temporary_account_delete": "v1",
+      "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+      "patch_sha256": "ab79891bfe2243a606ba8b63bbe28bbf4a883aba17f0519381e1df6839758938"
+    },
+    "harness": {
+      "commit": "ff75c0ea2a85daa3148490080ad9a101f20516f5",
+      "dirty": true,
+      "node": "v25.2.1",
+      "sourceManifestSha256": "10d455dfbd0698fdeb1aeb9af0245cfa9de5f87070649cdd3f5301ccee581ca9",
+      "physicsSha256": "c81ab3ba991c40d36350da9c0d798b33e36eb9cfd3c524252e28614d9acf99e2"
+    },
+    "legs": [
+      {
+        "label": "door-approach",
+        "source": "navmesh",
+        "audit": {
+          "ok": true,
+          "room": 750,
+          "planned": true,
+          "planning_failure": null,
+          "jumps": 0,
+          "legs": [
+            {
+              "leg": 0,
+              "waypoints": 218,
+              "wire_points": 218
+            }
+          ],
+          "failures": [],
+          "scope": "geometry and wire rounding only; live doors, bodies, arrival and return require a server trial"
+        },
+        "observedSectorHeights": [
+          [
+            1,
+            {
+              "height": 380,
+              "type": 5,
+              "speed": 0,
+              "at": 1794535325670
+            }
+          ],
+          [
+            2,
+            {
+              "height": 380,
+              "type": 5,
+              "speed": 0,
+              "at": 1794535325670
+            }
+          ]
+        ],
+        "proofPoints": 1652,
+        "aims": 213
+      },
+      {
+        "label": "node-approach",
+        "source": "navmesh",
+        "audit": {
+          "ok": true,
+          "room": 750,
+          "planned": true,
+          "planning_failure": null,
+          "jumps": 0,
+          "legs": [
+            {
+              "leg": 0,
+              "waypoints": 16,
+              "wire_points": 16
+            }
+          ],
+          "failures": [],
+          "scope": "geometry and wire rounding only; live doors, bodies, arrival and return require a server trial"
+        },
+        "observedSectorHeights": [
+          [
+            1,
+            {
+              "height": 448,
+              "type": 5,
+              "speed": 16,
+              "at": 1794535493802
+            }
+          ],
+          [
+            2,
+            {
+              "height": 380,
+              "type": 5,
+              "speed": 0,
+              "at": 1794535325670
+            }
+          ]
+        ],
+        "proofPoints": 116,
+        "aims": 15
+      },
+      {
+        "label": "return-door",
+        "source": "navmesh",
+        "audit": {
+          "ok": true,
+          "room": 750,
+          "planned": true,
+          "planning_failure": null,
+          "jumps": 0,
+          "legs": [
+            {
+              "leg": 0,
+              "waypoints": 13,
+              "wire_points": 13
+            }
+          ],
+          "failures": [],
+          "scope": "geometry and wire rounding only; live doors, bodies, arrival and return require a server trial"
+        },
+        "observedSectorHeights": [
+          [
+            1,
+            {
+              "height": 380,
+              "type": 5,
+              "speed": 24,
+              "at": 1794535503805
+            }
+          ],
+          [
+            2,
+            {
+              "height": 380,
+              "type": 5,
+              "speed": 0,
+              "at": 1794535325670
+            }
+          ]
+        ],
+        "proofPoints": 98,
+        "aims": 13
+      },
+      {
+        "label": "return",
+        "source": "navmesh",
+        "audit": {
+          "ok": true,
+          "room": 750,
+          "planned": true,
+          "planning_failure": null,
+          "jumps": 0,
+          "legs": [
+            {
+              "leg": 0,
+              "waypoints": 220,
+              "wire_points": 220
+            }
+          ],
+          "failures": [],
+          "scope": "geometry and wire rounding only; live doors, bodies, arrival and return require a server trial"
+        },
+        "observedSectorHeights": [
+          [
+            1,
+            {
+              "height": 448,
+              "type": 5,
+              "speed": 16,
+              "at": 1794535522972
+            }
+          ],
+          [
+            2,
+            {
+              "height": 380,
+              "type": 5,
+              "speed": 0,
+              "at": 1794535325670
+            }
+          ]
+        ],
+        "proofPoints": 1664,
+        "aims": 218
+      }
+    ],
+    "scope": "Authored normal room entrance, quiet native first-door approach, Yeti chamber and return. Mana gate remained closed; no Yeti kill, node activation, acquisition or monster-survival claim."
+  },
+  "iceInitialRefusals": [
+    {
+      "receiptSha256": "eb6cb4b6788f7676a8888876a6fb961c7fbb310006b57f417c26937e45ee7fec",
+      "at": "2026-11-13T01:43:17.835Z",
+      "elapsedMs": 59252,
+      "arrived": false,
+      "reason": "ran out of steps",
+      "failedWaypoint": 92,
+      "baselineRestored": true,
+      "scope": "Earlier implementation refused at overlapping corridor zones; retained as the before-fix evidence, not a successful route."
+    },
+    {
+      "receiptSha256": "db6ac88a418004c721270c36b9331ca9d531b4fdb686a392ed38ba4b92f69796",
+      "at": "2026-11-13T01:50:48.836Z",
+      "elapsedMs": 75096,
+      "arrived": false,
+      "reason": "ran out of steps",
+      "failedWaypoint": 92,
+      "baselineRestored": true,
+      "passage": {
+        "heldZone": "14,42",
+        "requestedZone": "11,44",
+        "note": "the previous passage exit is not confirmed"
+      },
+      "scope": "Earlier implementation refused at overlapping corridor zones; retained as the before-fix evidence, not a successful route."
+    }
+  ],
+  "cleanup": {
+    "nativeBaselinesRestored": true,
+    "isolatedContainerSavedExitCode": 0
+  }
+}
