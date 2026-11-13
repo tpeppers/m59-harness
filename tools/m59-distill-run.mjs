@@ -153,7 +153,15 @@ async function observe() {
     const st = await call('status', { agent: row.agent, brief: true }, 60_000).catch(() => null);
     let loadout = null;
     try { loadout = row.character ? loadoutFor(row.character)?.policy ?? null : null; } catch { /* no loadout */ }
-    chars.push(observation(row, { spells: Array.isArray(ab?.spells) ? ab.spells : null, karma: st?.karma?.value ?? null, loadout }));
+    // THE FLEET ROW'S ordered_by OUTLIVES THE MOVE. Measured 2026-11-13: eight characters home in the inn for up to
+    // two hours still carried `fleetscript:learn-skill#...` on the row while the keeper's own movement.order was null,
+    // and the distiller skipped every one as "mid-errand" on every pass. Ask the keeper before believing the row.
+    let live = row;
+    if (row.ordered_by && !/^keeper/i.test(String(row.ordered_by))) {
+      const ap = await call('autopilot', { agent: row.agent, action: 'status' }, 60_000).catch(() => null);
+      if (ap?.movement && ap.movement.order == null) live = { ...row, ordered_by: null };
+    }
+    chars.push(observation(live, { spells: Array.isArray(ab?.spells) ? ab.spells : null, karma: st?.karma?.value ?? null, loadout }));
   }
   return chars;
 }
