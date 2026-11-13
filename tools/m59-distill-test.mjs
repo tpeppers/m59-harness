@@ -497,3 +497,16 @@ console.log(`\n${n} passed`);
   if (same(want, want) !== true) { console.log('FAIL identical drills must be the same'); process.exitCode = 1; }
   else console.log('ok - identical drills are the same');
 }
+
+
+// 2026-11-13: a QUEUED learn (ok) that is still 'next' is not re-sent for learn_repeat_ms; a refused one keeps the 30-min cooldown.
+{
+  const { historyGate, config } = await import('./m59-distill.mjs');
+  const c = config({});
+  const now = Date.parse('2026-11-13T10:00:00Z');
+  const hist = [{ agent: 't14', kind: 'learn', key: 'scimitar wielding', phase: 'outcome', ok: true, at: now - 40 * 60_000 }];
+  const g = historyGate(hist, { agent: 't14', kind: 'learn', key: 'scimitar wielding' }, c, now);
+  if (!g?.cooling) { console.log('FAIL a queued learn 40 min ago must not be re-sent'); process.exitCode = 1; } else console.log('ok - queued learn not re-sent within 6 h');
+  const g2 = historyGate(hist, { agent: 't14', kind: 'learn', key: 'scimitar wielding' }, c, now + 6 * 3600_000);
+  if (g2) { console.log('FAIL after 6 h the learn may be tried again'); process.exitCode = 1; } else console.log('ok - after 6 h it may be tried again');
+}

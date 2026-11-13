@@ -88,6 +88,7 @@ export const DEFAULTS = Object.freeze({
   buy_prefer_rooms: [],
   buy_margin: 50,             // shillings over the estimate when withdrawing
   cooldown_ms: 30 * 60_000,   // after a failure or refusal
+  learn_repeat_ms: 6 * 3600_000,   // a learn that was sent and still is not held is not re-sent for this long
   inflight_max_ms: 2 * 3600_000,    // a start with no outcome older than this no longer marks the body busy
   train_level_cap: 45,        // skill improve chance saturates at prey level 45
 });
@@ -197,6 +198,11 @@ export function historyGate(history = [], { agent, kind, key = null }, c, now = 
   if (!last) return null;
   if (last.phase === 'start' && now - last.at < c.inflight_max_ms) return { busy: true, why: `our ${last.kind} ${last.key ?? ''} is still in flight (since ${new Date(last.at).toISOString()})` };
   const outcome = [...mine].reverse().find(h => h.phase === 'outcome');
+  // A QUEUED LEARN IS NOT A LEARNED ONE. The errand may come back refused (spent nothing) and leave no record, and the
+  // ability is still 'next' -- so without this the same wasted trip was re-sent every pass (2026-11-13: Piggy scimitar
+  // wielding, Pepe spiritual hammer). If the ability had been learned it would no longer be next.
+  if (kind === 'learn' && outcome?.ok && now - outcome.at < c.learn_repeat_ms)
+    return { cooling: true, why: `${outcome.key} was sent ${Math.round((now - outcome.at) / 60000)} min ago and is still not held; not re-sent for ${Math.round(c.learn_repeat_ms / 3600000)} h` };
   if (!outcome || outcome.ok) return null;
   if (outcome.kind === 'learn' && outcome.code === 1) return { barred: true, why: `${outcome.key}: the last attempt may have spent money and did not deliver — not retried` };
   if (now - outcome.at < c.cooldown_ms) return { cooling: true, why: `${outcome.kind} ${outcome.key ?? ''} failed ${Math.round((now - outcome.at) / 60000)} min ago (${outcome.why ?? 'no reason'}); cooling down` };
