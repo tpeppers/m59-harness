@@ -1,6 +1,6 @@
 {
   "format": "m59-navmesh-artifact-audit/1",
-  "createdAt": "2026-11-13T02:23:27.766Z",
+  "createdAt": "2026-11-13T02:32:27.333Z",
   "native": true,
   "nativeMode": "declared-actions-and-incident-walks",
   "scope": "Offline static artifact and stored-walk validation only. No execution, activation, combat, acquisition or survival evidence.",
@@ -2124,8 +2124,8 @@
     },
     {
       "file": "tools/m59-navmesh-adapters-test.mjs",
-      "bytes": 15538,
-      "sha256": "fbdc1609eb4b51dd97403271ab5f30282a3b2e102f8a6d43bc5bd11d580babae"
+      "bytes": 15563,
+      "sha256": "766e2b554e644adc5f39c1b10e868a43384f5cdbd2c67ef47ec6e6962811ea82"
     },
     {
       "file": "tools/m59-navmesh-bake.mjs",
@@ -3208,11 +3208,11 @@
     "sha256": "c81ab3ba991c40d36350da9c0d798b33e36eb9cfd3c524252e28614d9acf99e2"
   },
   "memory": {
-    "rss": 427405312,
-    "heapTotal": 276054016,
-    "heapUsed": 196489872,
-    "external": 79036633,
-    "arrayBuffers": 76842648
+    "rss": 423636992,
+    "heapTotal": 276316160,
+    "heapUsed": 196826464,
+    "external": 79036658,
+    "arrayBuffers": 76842673
   },
-  "maxRssKiB": 492064
+  "maxRssKiB": 492588
 }

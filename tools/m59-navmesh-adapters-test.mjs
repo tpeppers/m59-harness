@@ -155,7 +155,7 @@ function declaredScene(){
   buildStepMask:()=>new Uint8Array(10000),attachStepMask:()=>true,
   traceFineMoveClient(x,y,tx,ty,options={}){
    const p={x,y},q={x:tx,y:ty};
-   const arrived=options.timedFall===true||near(p,a)&&near(q,a)||near(p,b)&&near(q,b);
+   const arrived=options.timedFall===true||options.airborne===true||near(p,a)&&near(q,a)||near(p,b)&&near(q,b);
    return {available:true,moved:arrived&&Math.hypot(tx-x,ty-y)>0,arrived,blocked:!arrived,x:arrived?tx:x,y:arrived?ty:y};
   }};
  const action={declared:true,room:d.room,from:d.from,to:d.to,fromFine:a,toFine:b,declaredFrom:a,declaredTo:b,requires:d.requires};
