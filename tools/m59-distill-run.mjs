@@ -380,6 +380,9 @@ async function pass() {
       const hall = a.kind === 'hall_draw';
       if (hall) hallBusy++;
       try { await runAction(a, pass_id); } finally { if (hall) hallBusy--; }
+      // A TRIP JUST CAME HOME, AND STOPPED IN THE DOORWAY THE NEXT TRIP IS WALKING OUT OF (Scooter, 2026-11-13 21:08:
+      // three buyers back from Frisconar on r3c1/r3c2/r4c2 while he tried to leave). Clear it after every trip.
+      if (cfg.doorway.length && cfg.park.length && cfg.home != null && waiting.length) await clearDoorway().catch(() => {});
     }
   };
   await Promise.all(Array.from({ length: Math.min(width, road.length) }, worker));
