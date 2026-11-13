@@ -76,7 +76,10 @@ export const script = {
       }, 'taking the wants out of the chests, read back off the pack'),
       // ALWAYS: a refused draw (a guild door that would not open, 2026-11-13) used to end the run where it stood, and
       // Bunsen waited in the Barloque vaultman's office for 16 minutes with nothing driving him home.
-      { ...walk(Number(p.home), { why: 'bring it to the raid' }), always: true },
+      // HOME IS THE HALL: stay by the chests. A walk to the room the body is already in is routed to the hall's
+      // arrival square, which crosses the chest-room door OUTWARD by a press -- door 3 answers only to the
+      // password -- so Gonzo (2026-11-13) was left standing on its trigger and two draws behind him failed.
+      ...(Number(p.home) === HALL ? [] : [{ ...walk(Number(p.home), { why: 'bring it to the raid' }), always: true }]),
     ];
   },
 };
