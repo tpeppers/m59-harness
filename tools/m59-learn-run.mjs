@@ -21,7 +21,7 @@
 //
 //   node tools/m59-learn-run.mjs --agent t21 --skill punch --price 500 \
 //        --teacher Rook --teacher-room 154 --home 544
-import { fleetScript } from './m59-fleetscript.mjs';
+import { fleetScript, call } from './m59-fleetscript.mjs';
 import { script } from './fleetscripts/learn-skill.mjs';
 
 const argv = process.argv.slice(2);
@@ -39,6 +39,21 @@ if (!agent || !skill || !Number.isFinite(price)) {
   process.exit(2);
 }
 
+// WHAT THE PURSE HOLDS, READ LIVE WHEN NOT GIVEN. The broker spawns this without --carrying, and the default of 0
+// sent every purchase to the bank first: on 2026-11-13 Zoot carried 15,482 for a 4,000 deflect and was turned back at
+// Barloque by "You have no money to withdraw!" (his mainland account was empty). Unreadable falls back to 0, the old
+// behaviour, so the errand still tries the bank rather than arriving unable to pay.
+async function carryingNow() {
+  const given = flag('carrying');
+  if (given != null) return Number(given) || 0;
+  try {
+    const f = await call('fleet', {}, 120_000);
+    const purse = Number((f?.fleet ?? []).find(r => r.agent === agent)?.purse);
+    if (Number.isFinite(purse) && purse >= 0) { console.log(`${agent} carrying ${purse} (read live)`); return purse; }
+  } catch { /* unread: fall back */ }
+  return 0;
+}
+
 // The planner names the teacher and the room; both are passed in rather than looked up
 // here, because two merchants can share a name and the ROOM is the address.
 const params = {
@@ -47,7 +62,7 @@ const params = {
   teacherRoom: Number(flag('teacher-room', 154)),
   price,
   bankRoom: Number(flag('bank-room', 54)),
-  carrying: Number(flag('carrying', 0)),
+  carrying: await carryingNow(),
   home: Number(flag('home', 544)),
 };
 
