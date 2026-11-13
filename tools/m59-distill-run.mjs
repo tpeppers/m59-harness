@@ -371,6 +371,7 @@ async function pass() {
   const road = todo.filter(a => a.road);
   const width = Math.max(1, Number(cfg.parallel) || 1), hallWidth = Math.max(1, Number(cfg.hall_parallel) || 1);
   let hallBusy = 0;
+  const onRoad = new Set();
   const waiting = [...road];
   const worker = async () => {
     for (;;) {
@@ -379,10 +380,11 @@ async function pass() {
       const [a] = waiting.splice(i, 1);
       const hall = a.kind === 'hall_draw';
       if (hall) hallBusy++;
-      try { await runAction(a, pass_id); } finally { if (hall) hallBusy--; }
+      onRoad.add(a.agent);
+      try { await runAction(a, pass_id); } finally { if (hall) hallBusy--; onRoad.delete(a.agent); }
       // A TRIP JUST CAME HOME, AND STOPPED IN THE DOORWAY THE NEXT TRIP IS WALKING OUT OF (Scooter, 2026-11-13 21:08:
       // three buyers back from Frisconar on r3c1/r3c2/r4c2 while he tried to leave). Clear it after every trip.
-      if (cfg.doorway.length && cfg.park.length && cfg.home != null && waiting.length) await clearDoorway().catch(() => {});
+      if (cfg.doorway.length && cfg.park.length && cfg.home != null && waiting.length) await clearDoorway(onRoad).catch(() => {});
     }
   };
   await Promise.all(Array.from({ length: Math.min(width, road.length) }, worker));
@@ -406,7 +408,7 @@ async function runAction(a, pass_id) {
 // coming home stops. On 2026-11-13 sixteen idle characters stood on and around it and four buyers spent fifteen
 // minutes unable to leave ("route_progressing_exits_exhausted"). Before each pass, anybody idle on a --doorway
 // square of the home room is walked to a free --park square (squares a body has been seen to stand on).
-async function clearDoorway() {
+async function clearDoorway(onRoad = new Set()) {
   let rows;
   try { rows = (await call('fleet', {}, 120_000))?.fleet ?? []; } catch { return; }
   const key = p => `${p?.row},${p?.col}`;
@@ -415,9 +417,12 @@ async function clearDoorway() {
   const free = cfg.park.filter(p => !occupied.has(key(p)));
   for (const x of rows) {
     if (x.room_num !== cfg.home || !x.position || !door.has(key(x.position))) continue;
-    if (x.piloted || x.human_held || (x.ordered_by && !/^keeper/i.test(String(x.ordered_by)))) {
+    if (x.piloted || x.human_held) continue;
+    if (onRoad.has(x.agent)) continue;   // one of this pass's own trips, on its way out or back: leave it
+    if (x.ordered_by && !/^keeper/i.test(String(x.ordered_by)) && !/^fleetscript:(buy|hall-draw|distill-|learn-skill|come-home)/i.test(String(x.ordered_by))) {
+      // Somebody ELSE's errand (an operator script): ask the keeper, and leave a body that is genuinely moving.
       const ap = await call('autopilot', { agent: x.agent, action: 'status' }, 60_000).catch(() => null);
-      if (!ap?.movement || ap.movement.order != null) continue;   // genuinely on its way somewhere: leave it
+      if (!ap?.movement || ap.movement.order != null) continue;
     }
     while (free.length) {
       const p = free.shift();
