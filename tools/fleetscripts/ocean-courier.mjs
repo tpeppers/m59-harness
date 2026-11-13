@@ -19,6 +19,7 @@ import {
   oceanTradeGoodsSale, oceanUnitsFit, OCEAN_COURIER_KEEP, OCEAN_FARMER_RESERVE, oceanCountMap, oceanCourierRequests,
   oceanDepartureWithhold, oceanFarmerSurplus, oceanParcelSale,
   oceanRequestDelivery, oceanRequestsFor, oceanRequestShortfall,
+  OCEAN_REQUEST_ROUTE, OCEAN_REQUEST_ROUTE_FROM, OCEAN_REQUEST_SHOPS, oceanRequestBuyPlan, oceanRequestTripAllowed,
   readOceanGearCargo, readOceanSaleAuthorization, readOceanSaleDeposits, recordOceanGearCargo, retireOceanGearCargo,
   selectOceanGearCargo, selectOceanSalePiles, writeOceanCache,
 } from '../m59-ocean-courier-cache.mjs';
@@ -32,6 +33,19 @@ const courierScriptName = 'ocean-courier';
 const toTown = [552, 544, 534, 200, TOAD];
 const fromTown = [200, 534, 544, 552];
 const corridor = [552, 544, 534, 535, 200, TOAD, SMITH];
+// THE REQUEST DETOUR (OCEAN_REQUEST_ROUTE): from 544 on the way home, through Cor Noth to Frisconar in Tos and back to
+// 544, only on a lap whose plan found a requested reagent worth buying (oceanRequestBuyPlan). Its confinement is the
+// corridor plus the route, set at 544 before the first step out and restored at 544 after the last step back.
+const detourCorridor = [...corridor, ...OCEAN_REQUEST_ROUTE];
+const detourBack = [...OCEAN_REQUEST_ROUTE.slice(0, -1)].reverse().concat(OCEAN_REQUEST_ROUTE_FROM);
+// Crossed, not settled in: every route room but the shop itself (arrival is enough, as in OCEAN_TRANSIT_ROOMS).
+const detourTransit = OCEAN_REQUEST_ROUTE.slice(0, -1);
+// Vigor at 544 before the detour: twenty more rooms, and the counter wants OCEAN_TOWN_VIGOR on arrival.
+export const OCEAN_REQUEST_TRIP_VIGOR = 80;
+/** A detour leg's destination: `to` on a request trip; otherwise where the lap already is (544 when out, else home). */
+export const oceanDetourTarget = (to, plan) => plan?.requestTrip ? to : plan?.go ? OCEAN_REQUEST_ROUTE_FROM : room;
+// The last request trip's outcome in this process ({ at, bought }), for oceanRequestTripAllowed.
+let lastRequestTrip = null;
 // TRANSIT ROOMS ARE CROSSED, NOT SETTLED IN (operator 2026-11-11: "Zheng should be able to survive a few hits from
 // Fungus Beasts ... just have Zheng keep running the laps and it's not a problem if they die 1-2x"). The first lap of
 // deploy-2026-11-11-1 aborted in the Valley of Ileria because a fungus beast and a groundworm larva camped beside him
@@ -163,7 +177,8 @@ export function oceanCourierArrivedWaiting(s, expected) {
     [!s?.ridealong?.piloted && !p?.recovering_from_death, 'piloted or recovering from death'],
   ]);
 }
-export const oceanCourierSettled = (s, expected, minVigor = 0) => OCEAN_TRANSIT_ROOMS.includes(expected)
+export const oceanCourierSettled = (s, expected, minVigor = 0) =>
+  OCEAN_TRANSIT_ROOMS.includes(expected) || detourTransit.includes(expected)
   ? oceanCourierArrivedWaiting(s, expected) === null
   : oceanCourierReady(s, expected, minVigor);
 
@@ -180,11 +195,16 @@ async function waitForBody(rpc, expected, minVigor = 0) {
 export function oceanCourierReturnSteps(s, { fleet, server } = {}) {
   const origin = s?.room?.num;
   // A live fight is the keeper's (survival owns the body); a merely unquiet transit room is not a reason to stay.
-  if (!corridor.includes(origin) || s?.combat?.active || !oceanCourierSettled(s, origin, OCEAN_TOWN_VIGOR) ||
+  // Interrupted on the request detour (its own confinement): back along the route to 544, then home.
+  const confined = s?.autopilot_status?.policy?.confineRooms?.join(',');
+  const onDetour = OCEAN_REQUEST_ROUTE.includes(origin);
+  if (!(corridor.includes(origin) || onDetour) || s?.combat?.active || !oceanCourierSettled(s, origin, OCEAN_TOWN_VIGOR) ||
       s.autopilot_status.faculties?.work !== 'keeper' ||
-      s.autopilot_status.policy.confineRooms?.join(',') !== corridor.join(',')) return null;
+      !(confined === corridor.join(',') || confined === detourCorridor.join(','))) return null;
+  if (onDetour && confined !== detourCorridor.join(',')) return null;
   const resumeFrom = origin === 535 ? 534 : origin;
-  const remaining = fromTown.includes(resumeFrom) ? fromTown.slice(fromTown.indexOf(resumeFrom) + 1) : fromTown;
+  const remaining = onDetour ? [...detourBack.slice(detourBack.indexOf(origin) + 1), room]
+    : fromTown.includes(resumeFrom) ? fromTown.slice(fromTown.indexOf(resumeFrom) + 1) : fromTown;
   const steps = [];
   for (const to of remaining) {
     steps.push(walk(to, { minHealth: 1, why: 'resume the verified courier return corridor' }),
@@ -374,8 +394,8 @@ export async function sellTradeGoods(rpc, keeper, plan, seller, expected) {
   plan.trade = left;
 }
 
-async function buySupplies(rpc, plan, seller, expected, fleet, holdBack = 0) {
-  const wanted = OCEAN_SHOPS[seller].filter(supply => plan.wanted[supply.name] > 0);
+async function buySupplies(rpc, plan, seller, expected, fleet, holdBack = 0, supplies = OCEAN_SHOPS[seller]) {
+  const wanted = supplies.filter(supply => plan.wanted[supply.name] > 0);
   if (!wanted.length) return;
   await waitForBody(rpc, expected, OCEAN_TOWN_VIGOR);
   const merchantId = await merchant(rpc, seller, expected);
@@ -774,10 +794,11 @@ export async function deliverRequestedReagents(rpc, fleet, picture = null) {
 // body on the road. Only with both bodies quiet in the Toad in one save epoch, and judged by both purses: an exact
 // transfer or nothing moved; anything else stops the lap for inspection.
 export const OCEAN_PURSE_FLOAT = 2000;
-export async function depositPurseWithDesk(rpc) {
+// `keepExtra`: shillings on top of the float for a purchase still ahead on this lap (the request detour's planned cost).
+export async function depositPurseWithDesk(rpc, keepExtra = 0) {
   const [courier, raphael, giver, taker] = await Promise.all([
     read(rpc, agent), read(rpc, deskAgent).catch(() => null), inventory(rpc), inventory(rpc, deskAgent).catch(() => null)]);
-  const amount = purse(giver) - OCEAN_PURSE_FLOAT;
+  const amount = purse(giver) - OCEAN_PURSE_FLOAT - Math.max(0, Number(keepExtra) || 0);
   if (amount < 100) return null;
   const coins = giver.items.filter(item => matches(item, 'shilling'));
   if (!oceanCourierReady(courier, TOAD) || !oceanDeskReady(raphael) || coins.length !== 1 ||
@@ -1015,7 +1036,12 @@ export const script = {
       const saleValue = oceanSaleValue(plan.trade);
       const have = pack.carry?.load?.bulk, free = pack.carry?.room_for?.bulk;
       const breadStock = floorCount(bread) + count(pack, bread);
-      const due = oceanLapDue({ parcels: plan.sales.size, saleValue,
+      // REQUESTED REAGENTS TO BUY (plain mushrooms from Frisconar, by way of Cor Noth): what requesters in the Ocean
+      // still lack after delivery and brokering, less what he carries, bounded by pack, purse (with this lap's sales) and
+      // the per-lap cap. Under OCEAN_REQUEST_TRIP_MIN it is null and the lap is exactly as it was.
+      plan.requestBuy = oceanRequestTripAllowed(lastRequestTrip)
+        ? oceanRequestBuyPlan(plan.requestHold, pack, { extra: saleValue }) : null;
+      const due = oceanLapDue({ parcels: plan.sales.size, saleValue, requestBuy: plan.requestBuy,
         fullness: Number.isFinite(have) && Number.isFinite(free) && have + free > 0 ? have / (have + free) : 0,
         axeWork: plan.axeNeed > 0 && (deskReady > 0 || !!spare),
         breadShort: breadStock < OCEAN_LAP.breadLow && (purse(pack) - reserve + saleValue) >= OCEAN_BREAD.target * 120 / 4,
@@ -1036,7 +1062,8 @@ export const script = {
         await setCorridor(rpc, corridor);
       }
       report('lap plan', { departing: plan.go, why: plan.why, sale_value: saleValue, wanted: plan.wanted, sales: Object.fromEntries(plan.sales),
-        trade: plan.trade, axe_need: plan.axeNeed, desk_dedicated: deskReady, desk_blanks: deskBlanks });
+        trade: plan.trade, axe_need: plan.axeNeed, desk_dedicated: deskReady, desk_blanks: deskBlanks,
+        request_buy: plan.requestBuy });
       return true;
     }, 'verify Zheng and collect only ledger-bound surplus at the ward')];
     const leg = (to, gate = () => plan.go, stay = room) =>
@@ -1055,7 +1082,7 @@ export const script = {
       await collectDeskSpare(rpc, fleet, plan);
       const axeHold = plan.wanted[AXE] > 0 ? OCEAN_SHOPS.Colhorr.find(supply => supply.name === AXE).price : 0;
       await buySupplies(rpc, plan, 'Morrigan', TOAD, fleet, axeHold);
-      await depositPurseWithDesk(rpc);           // sale proceeds above the float stay with Raphael
+      await depositPurseWithDesk(rpc, plan.requestBuy?.cost ?? 0);   // proceeds above the float (and the detour) to Raphael
       const stock = await inventory(rpc);
       plan.gear = stock.ids_stale === false && (oceanCanVisitSmith(stock, plan.wanted) || plan.trade.length > 0);
     }), 'sell the ward parcels and stock herbs, elderberries, and food'));
@@ -1088,7 +1115,48 @@ export const script = {
     steps.push(verify(async ({ call: rpc }) => !returnToDesk() || bounded('desk intake',
       () => handoffNewAxe(rpc, fleet, plan)), 'hand one verified unworn new axe to Raphael without moving him'));
     steps.push(smithLeg(200, returnToDesk), settled(200, returnToDesk));
-    for (const to of fromTown.slice(1)) steps.push(leg(to), settled(to));
+    for (const to of fromTown.slice(1)) {
+      steps.push(leg(to), settled(to));
+      if (to === OCEAN_REQUEST_ROUTE_FROM) steps.push(...requestDetour());
+    }
+    function requestDetour() {
+      const out = [verify(async ({ call: rpc }) => {
+        if (!plan.go || plan.problem || !plan.requestBuy) return true;
+        const [body, pack] = await Promise.all([read(rpc, agent), inventory(rpc)]);
+        const trip = pack?.ids_stale === false ? oceanRequestBuyPlan(plan.requestHold, pack) : null;
+        if (!trip || !(body?.vigor?.value >= OCEAN_REQUEST_TRIP_VIGOR)) {
+          report('request trip skipped', { planned: plan.requestBuy, now: trip,
+            why: !trip ? 'no shortfall worth the trip with this pack and purse' : `vigor ${body?.vigor?.value} under ${OCEAN_REQUEST_TRIP_VIGOR}` });
+          return true;
+        }
+        await setCorridor(rpc, detourCorridor);
+        Object.assign(plan.wanted, trip.wanted);
+        plan.requestTrip = trip;
+        lastRequestTrip = { at: Date.now(), bought: 0 };
+        report('request trip', trip);
+        return true;
+      }, 'decide the requested-reagent detour by way of Cor Noth')];
+      const detourLeg = to => walk(() => oceanDetourTarget(to, plan),
+        { candidates: [...new Set([to, OCEAN_REQUEST_ROUTE_FROM, room])], minHealth: 1,
+          why: 'one verified leg of the requested-reagent detour' });
+      const onTrip = () => !!plan.requestTrip;
+      for (const to of OCEAN_REQUEST_ROUTE) out.push(detourLeg(to), settled(to, onTrip));
+      out.push(verify(async ({ call: rpc }) => {
+        if (!onTrip()) return true;
+        const { seller, room: shop } = plan.requestTrip;
+        await bounded('request purchase', () => buySupplies(rpc, plan, seller, shop, fleet, 0, OCEAN_REQUEST_SHOPS[seller].supplies));
+        const bought = Object.keys(plan.requestTrip.wanted).reduce((t, item) => t + (plan.purchased[item] ?? 0), 0);
+        lastRequestTrip = { at: Date.now(), bought };
+        report('request purchase', { seller, bought, purchased: plan.purchased });
+        return true;
+      }, 'buy the requested reagents at the counter'));
+      for (const to of detourBack) out.push(detourLeg(to), settled(to, onTrip));
+      out.push(verify(async ({ call: rpc }) => {
+        if (onTrip()) await setCorridor(rpc, corridor);
+        return true;
+      }, 'restore the courier corridor after the detour'));
+      return out;
+    }
     steps.push(verify(async ({ call: rpc }) => {
       if (!plan.go) return true;
       await setCorridor(rpc, [room]);

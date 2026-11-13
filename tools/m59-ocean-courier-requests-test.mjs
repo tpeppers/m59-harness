@@ -239,3 +239,88 @@ test('a broken requests file is loud, and the last reading that parsed still hol
   assert.deepEqual(none.hold, {});
   assert.deepEqual(oceanLastRequestHold(), {});
 });
+
+// PLAIN MUSHROOMS BOUGHT FOR THE REQUESTS (operator 2026-11-13). The Ocean farm never puts a farmer above its 48 reserve,
+// so brokering alone never filled Zoot's 100. A real shortfall now buys them from Frisconar in Tos, by way of Cor Noth,
+// bounded by the per-lap cap, the pack and the purse; no shortfall means no detour; nothing bought is ever sold.
+const {
+  oceanRequestBuyPlan, oceanRequestTripAllowed, oceanLapDue, OCEAN_REQUEST_SHOPS, OCEAN_REQUEST_ROUTE,
+  OCEAN_REQUEST_TRIP_MIN, OCEAN_REQUEST_RETRY_MS, OCEAN_COURIER,
+} = await import('./m59-ocean-courier-cache.mjs');
+const { oceanDetourTarget, oceanCourierReturnSteps } = await import('./fleetscripts/ocean-courier.mjs');
+const coins = n => row(99, 'shilling', n);
+const mushroomPrice = OCEAN_REQUEST_SHOPS.Frisconar.supplies[0].price;
+
+test('a plain-mushroom shortfall plans a purchase from Frisconar in Tos, by way of Cor Noth', () => {
+  const plan = oceanRequestBuyPlan({ mushroom: 95 }, pack([coins(5000)]));
+  assert.deepEqual(plan, { seller: 'Frisconar', room: 53, town: 'Tos', wanted: { mushroom: 95 }, cost: 95 * mushroomPrice });
+  assert.equal(OCEAN_REQUEST_ROUTE.at(-1), 53);
+  assert.ok(OCEAN_REQUEST_ROUTE.includes(150), 'the road goes through Cor Noth');
+  assert.ok(!OCEAN_REQUEST_ROUTE.includes(584), 'and not through the Flatlands');
+  // What he already carries for the requesters counts against the shortfall.
+  assert.deepEqual(oceanRequestBuyPlan({ mushroom: 95 }, pack([coins(5000), row(4, 'mushroom', 40)])).wanted, { mushroom: 55 });
+  // The per-lap cap.
+  assert.equal(oceanRequestBuyPlan({ mushroom: 400 }, pack([coins(20000)])).wanted.mushroom, 150);
+  // The lap is due for it, and says why.
+  const due = oceanLapDue({ requestBuy: plan });
+  assert.ok(due.go && /95 mushroom .*Frisconar in Tos/.test(due.why));
+});
+
+test('no shortfall worth the road: no purchase plan, no detour leg, the lap unchanged', () => {
+  assert.equal(oceanRequestBuyPlan({}, pack([coins(5000)])), null);
+  assert.equal(oceanRequestBuyPlan({ mushroom: OCEAN_REQUEST_TRIP_MIN - 1 }, pack([coins(5000)])), null);
+  assert.equal(oceanRequestBuyPlan({ mushroom: 95 }, pack([coins(5000), row(4, 'mushroom', 80)])), null);
+  // Never anything nobody requested, and never a requested item no table sells.
+  assert.equal(oceanRequestBuyPlan({ 'red mushroom': 100, 'purple mushroom': 100 }, pack([coins(5000)])), null);
+  assert.deepEqual(Object.keys(oceanRequestBuyPlan({ mushroom: 50, 'red mushroom': 100 }, pack([coins(5000)])).wanted), ['mushroom']);
+  assert.equal(oceanLapDue({ requestBuy: null }).go, false);
+  // Every detour leg stays put unless the trip was decided: at home before departure, at 544 on a lap without one.
+  for (const to of OCEAN_REQUEST_ROUTE) {
+    assert.equal(oceanDetourTarget(to, {}), 552);
+    assert.equal(oceanDetourTarget(to, { go: true }), 544);
+    assert.equal(oceanDetourTarget(to, { go: true, requestTrip: { seller: 'Frisconar' } }), to);
+  }
+  // A trip that bought nothing does not make the next lap go for it for an hour.
+  assert.equal(oceanRequestTripAllowed(null), true);
+  assert.equal(oceanRequestTripAllowed({ at: 0, bought: 30 }, 1), true);
+  assert.equal(oceanRequestTripAllowed({ at: 0, bought: 0 }, OCEAN_REQUEST_RETRY_MS - 1), false);
+  assert.equal(oceanRequestTripAllowed({ at: 0, bought: 0 }, OCEAN_REQUEST_RETRY_MS), true);
+});
+
+test('the purchase is bounded by the purse above his reserve, and by what the pack can hold', () => {
+  const reserve = OCEAN_COURIER.reserve;
+  assert.equal(oceanRequestBuyPlan({ mushroom: 100 }, pack([coins(reserve + 30 * mushroomPrice)])).wanted.mushroom, 30);
+  assert.equal(oceanRequestBuyPlan({ mushroom: 100 }, pack([coins(reserve + 10 * mushroomPrice)])), null);
+  // This lap's sales count toward the purse when the plan is made in the Ocean.
+  assert.equal(oceanRequestBuyPlan({ mushroom: 100 }, pack([coins(reserve)]), { extra: 40 * mushroomPrice }).wanted.mushroom, 40);
+  // Bulk 5 each: room for 25.
+  const tight = pack([coins(5000)], { carry: { load: { exact: true, bulk: 100, weight: 100 }, room_for: { weight: 2000, bulk: 125 } } });
+  assert.equal(oceanRequestBuyPlan({ mushroom: 100 }, tight).wanted.mushroom, 25);
+  // A pack that cannot say how full it is buys nothing.
+  assert.equal(oceanRequestBuyPlan({ mushroom: 100 }, pack([coins(5000)], { carry: { load: { exact: false } } })), null);
+});
+
+test('bought mushrooms are never sold, even once nobody is short of them', () => {
+  const zheng = pack([row(1, 'mushroom', 120), row(2, 'red mushroom', 30)]);
+  const sale = (received, hold) => Object.fromEntries(oceanTradeGoodsSale(zheng, received, hold).map(r => [r.name, r.amount]));
+  assert.deepEqual(sale({}, {}), { 'red mushroom': 30 });
+  assert.deepEqual(sale({ mushroom: 120 }, {}), { 'red mushroom': 30 });
+});
+
+test('a lap interrupted on the detour walks back through Cor Noth to 544 and home', () => {
+  const corridor = [552, 544, 534, 535, 200, 202, 201];
+  const s = num => ({ character: 'Zheng He', in_game: true, connected: true, ids_stale: false, room: { num },
+    pid: 10, connection_revision: 1, last_save_at: 1000, you: { object_id: 7, row: 5, col: 5 }, hp: { value: 23, max: 23 },
+    vigor: { value: 120 }, karma: { value: 10 }, combat: { personal_threat: { level: 'quiet' } },
+    autopilot_status: { mode: 'survive', faculties: { work: 'keeper' },
+      policy: { neverAttack: true, townTrips: false, confineRooms: [...corridor, ...OCEAN_REQUEST_ROUTE] } } });
+  const walks = steps => steps.filter(step => step.do === 'walk').map(step => step.to);
+  assert.deepEqual(walks(oceanCourierReturnSteps(s(53))), [50, 586, 587, 576, 575, 150, 574, 564, 554, 544, 552]);
+  assert.deepEqual(walks(oceanCourierReturnSteps(s(150))), [574, 564, 554, 544, 552]);
+  // Back on the corridor with the detour's confinement still set: the ordinary return.
+  assert.deepEqual(walks(oceanCourierReturnSteps(s(544))), [552]);
+  // On the route without the detour's confinement, nothing walks.
+  const plain = s(150);
+  plain.autopilot_status.policy.confineRooms = corridor;
+  assert.equal(oceanCourierReturnSteps(plain), null);
+});

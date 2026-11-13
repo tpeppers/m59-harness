@@ -662,13 +662,18 @@ through a nested shelter order.
   farm loot he carries whether or not the ledger recorded it; a lap departs only when it is worth the road
   (`oceanLapDue`); medic herbs are bought only up to what the medic can take; purchases hold back for bread and the
   desk axe; a desk config with a UTF-8 BOM still reads.
-- `m59-ocean-courier-requests-test.mjs` (11): the Great Ocean courier serves `substrate/courier-requests.json`
+- `m59-ocean-courier-requests-test.mjs` (16): the Great Ocean courier serves `substrate/courier-requests.json`
   (2026-11-12, Zoot's mushroom / red / purple request). Item names match whole (`mushroom` is not `red mushroom`); the
   shortfall is the sum of max(0, target - held) over requesters, an unread pack holding none; Zheng's sale withholds
   only up to that shortfall (ward parcels too) and is unchanged with no requests; a missing file is no requests, a BOM
   reads, a file that will not parse is loud and the last good reading stands; a hand-over never passes the target, the
   giver's keep or what fits; a requester outside 552, or not quiet, is named and handed nothing, and nothing walks; when
   Zheng holds none, a farmer in 552 gives only above its strategy reserve and its own request, never the singer.
+  And plain mushrooms are BOUGHT for it (2026-11-13, `OCEAN_REQUEST_SHOPS`): a shortfall of at least 20 after brokering
+  plans a purchase from Frisconar in Tos by way of Cor Noth (not the Flatlands), less what Zheng carries, capped per lap
+  (150), by his purse above the reserve (this lap's sales counted) and by what the pack holds; no shortfall, or one of
+  something no table sells, is no plan and every detour leg stays put; a trip that bought nothing waits an hour; a
+  bought mushroom is never sold; a lap interrupted on the detour walks back through Cor Noth to 544 and home.
 - `m59-supervisor-heartbeat-test.mjs` (6): the harness half of DUM's supervisor registry contract (`m59-supervisor-heartbeat.mjs`): the schema-1 card is written atomically with repo/commit/dirty, a modified or untracked pinned path is dirty, DUM's `M59_SUPERVISOR_ID` wins, the `<id>.stop` request is honoured and cleared on start. The Ocean courier is its first user.
 - `m59-purse-lease-test.mjs` (22): an errand's purse lease (`m59-purse-lease.mjs`). A live lease raises every banking
   float and `bank_above` to its carry and lapses by itself; no keeper part reads `policy.walkingMoney` directly; the

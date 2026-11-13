@@ -411,7 +411,11 @@ test('every conditional courier leg declares its possible rooms for FleetScript 
     for (const leg of legs) {
       assert.ok(leg.candidates.length > 0);
       assert.ok(leg.candidates.includes(leg.to({})));
-      assert.ok(leg.candidates.every(room => [201, 202, 200, 534, 544, 552].includes(room)));
+      // The Marion corridor, plus the requested-reagent detour through Cor Noth to Frisconar in Tos.
+      assert.ok(leg.candidates.every(room => [201, 202, 200, 534, 544, 552,
+        554, 564, 574, 150, 575, 576, 587, 586, 50, 53].includes(room)));
+      // A fresh plan has not departed: no leg leaves the Ocean.
+      assert.equal(leg.to({}), 552);
     }
   } finally {
     if (prior === undefined) delete process.env.M59_FLEET;

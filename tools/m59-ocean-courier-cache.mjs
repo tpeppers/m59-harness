@@ -79,6 +79,33 @@ export const OCEAN_COURIER_KEEP = Object.freeze({ elderberry: 40, herb: 180,
 export const OCEAN_COURIER_SELLS = Object.freeze(['red mushroom', 'blue mushroom', 'purple mushroom', 'emerald', 'diamond', 'ruby',
   'sapphire', 'blue dragon scale', 'dark angel feather', 'bunch of grapes', 'elderberry', 'edible mushroom']);
 const NEVER_SOLD = new Set(['shilling', 'axe', 'leather armor', 'chalice of the rain', 'small round shield', 'hammer']);
+
+// REQUESTED REAGENTS HE BUYS (operator 2026-11-13: "add 'mushroom' to Zheng He's courier trips -- if Zheng He drops off a
+// lot of mushrooms it should unlock a lot of spells for the fleet"; then "Mushrooms will require Zheng He traveling to Cor
+// Noth, which is fine"). Plain mushroom is the reagent behind magic shield, bless, super strength, eagle eyes and glow,
+// and the Great Ocean farm does not drop enough of it: no farmer stands above its 48 reserve, so Zoot's standing request
+// for 100 was never once filled by brokering. No Marion counter sells it, and neither does Cor Noth's grocer (Solomon,
+// cngrocer.kod: torch, fairy wing, elderberry, blue and red mushroom, waterskin, bread, apple). The nearest counter that
+// does, by way of Cor Noth, is Frisconar's Mysticals in Tos (TsApoth.kod SetForSale: Create(&Mushroom,#number=5),
+// MERCHANT_DISCOUNT, so about 14 a mushroom against an item value of 10). Joguer in Barloque (104, bqapoth.kod) sells it
+// too and is closer (552>562>108>101>104) but crosses the Sewers; the operator chose the Cor Noth road.
+// ONLY WHAT A REQUESTER IN THE OCEAN STILL LACKS (oceanRequestShortfall, less what he already carries), never sold, and
+// the price ceiling is checked against the live shelf quote at buy time like every other OCEAN_SHOPS purchase.
+export const OCEAN_REQUEST_SHOPS = Object.freeze({
+  Frisconar: Object.freeze({ room: 53, town: 'Tos', supplies: Object.freeze([
+    Object.freeze({ name: 'mushroom', limit: 150, price: 20, batch: 20 })]) }),
+});
+// From the Valley of Ileria (544, on his way home from Marion) through Cor Noth to Frisconar's counter; every hop is one
+// map exit. The return is the same rooms reversed, back to 544. Not the Flatlands (584) and the Badlands border (585),
+// which findPath(552, 53) takes: the operator named Cor Noth, and 584's one-row corridor holds ants and spiders.
+export const OCEAN_REQUEST_ROUTE = Object.freeze([554, 564, 574, 150, 575, 576, 587, 586, 50, 53]);
+export const OCEAN_REQUEST_ROUTE_FROM = 544;
+// A detour of twenty rooms is worth it only for a real shortfall: under this many units bought, the lap stays as it was.
+export const OCEAN_REQUEST_TRIP_MIN = 20;
+// A trip that bought nothing (a shelf that did not quote, a refusal) does not make the next lap go for it again for an hour.
+export const OCEAN_REQUEST_RETRY_MS = 60 * 60_000;
+export const OCEAN_REQUEST_BUY_NAMES = Object.freeze([...new Set(Object.values(OCEAN_REQUEST_SHOPS)
+  .flatMap(shop => shop.supplies.map(supply => supply.name)))]);
 export const OCEAN_TRADE_GOODS_DUE = Object.freeze({ bulk: 500, fullness: 0.55 });
 
 // `withhold` ({ name: amount }): what the fleet's standing requests still lack (oceanRequestShortfall), kept back on top of
@@ -89,7 +116,7 @@ export function oceanTradeGoodsSale(pack, received = {}, withhold = {}) {
   const names = new Set([...owed.keys(), ...OCEAN_COURIER_SELLS]);
   const out = [];
   for (const name of names) {
-    if (!name || NEVER_SOLD.has(name)) continue;
+    if (!name || NEVER_SOLD.has(name) || OCEAN_REQUEST_BUY_NAMES.includes(name)) continue;
     const surplus = oceanItemCount(pack, name) - (OCEAN_COURIER_KEEP[name] ?? 0) - (held.get(name) ?? 0);
     const amount = OCEAN_COURIER_SELLS.includes(name) ? surplus : Math.min(owed.get(name) ?? 0, surplus);
     if (positive(amount)) out.push({ name, amount });
@@ -131,7 +158,7 @@ export function oceanSaleValue(sale, estimate = name => estimateItemSellValue(na
 // the desk for farmers who lack magic, bread running low (and affordable), or the longest wait with anything to do.
 export const OCEAN_LAP = Object.freeze({ saleValue: 1500, fullness: 0.55, breadLow: 8, maxWaitMs: 20 * 60_000, minValue: 200 });
 export function oceanLapDue({ parcels = 0, saleValue = 0, fullness = 0, axeWork = false, breadShort = false,
-  provision = false, sinceLastMs = 0 } = {}) {
+  provision = false, sinceLastMs = 0, requestBuy = null } = {}) {
   if (parcels > 0) return { go: true, why: 'ward sale parcels to carry' };
   if (saleValue >= OCEAN_LAP.saleValue) return { go: true, why: `about ${saleValue} shillings to sell` };
   // FULL OF WHAT? His own kit (armour, shield, hammer, axe, the Chalice) alone reads ~80% (2026-11-12 03:41Z: a lap left
@@ -139,6 +166,8 @@ export function oceanLapDue({ parcels = 0, saleValue = 0, fullness = 0, axeWork 
   if (fullness >= OCEAN_LAP.fullness && saleValue >= OCEAN_LAP.minValue) return { go: true, why: `pack ${Math.round(fullness * 100)}% full` };
   if (axeWork) return { go: true, why: 'dedicated desk axes for farmers without magic' };
   if (breadShort) return { go: true, why: 'the ward is short of bread' };
+  if (requestBuy) return { go: true, why: `requested ${Object.entries(requestBuy.wanted)
+    .map(([item, n]) => `${n} ${item}`).join(', ')} to buy from ${requestBuy.seller} in ${requestBuy.town}` };
   if (sinceLastMs >= OCEAN_LAP.maxWaitMs && (saleValue >= OCEAN_LAP.minValue || provision))
     return { go: true, why: `waited ${Math.round(sinceLastMs / 60_000)} min with work to do` };
   return { go: false, why: `waiting in the Ocean for trade goods (about ${saleValue} shillings so far)` };
@@ -476,10 +505,39 @@ export function oceanBuyQuantity(pack, offer, supply, wanted, holdBack = 0) {
   return oceanQuantityAtPrice(pack, supply, wanted, price, holdBack);
 }
 
-function oceanQuantityAtPrice(pack, supply, wanted, price, holdBack = 0) {
+// `extra`: shillings not yet in the purse but expected before the counter (a plan made in the Ocean, before the sales).
+function oceanQuantityAtPrice(pack, supply, wanted, price, holdBack = 0, extra = 0) {
   return Math.max(0, Math.min(wanted, supply.limit, oceanUnitsFit(pack, supply.name),
-    Math.floor((oceanItemCount(pack, 'shilling') - OCEAN_COURIER.reserve - Math.max(0, holdBack)) / price)));
+    Math.floor((oceanItemCount(pack, 'shilling') + Math.max(0, Number(extra) || 0) - OCEAN_COURIER.reserve -
+      Math.max(0, holdBack)) / price)));
 }
+
+/**
+ * What the request detour would buy now: per OCEAN_REQUEST_SHOPS supply, the shortfall less what he already carries for
+ * it, capped by the per-lap limit, his pack and his purse above the reserve (`extra`: shillings expected before the
+ * counter, the lap's sale value; `holdBack`: kept for something else). -> { seller, room, town, wanted, cost } with every
+ * line at least OCEAN_REQUEST_TRIP_MIN, or null: no trip. Nothing nobody requested is ever in `wanted`.
+ */
+export function oceanRequestBuyPlan(shortfall, pack, { extra = 0, holdBack = 0 } = {}) {
+  const short = oceanCountMap(shortfall);
+  for (const [seller, shop] of Object.entries(OCEAN_REQUEST_SHOPS)) {
+    const wanted = {};
+    let cost = 0;
+    for (const supply of shop.supplies) {
+      const need = (short.get(supply.name) ?? 0) - oceanItemCount(pack, supply.name);
+      if (need < OCEAN_REQUEST_TRIP_MIN) continue;
+      const n = oceanQuantityAtPrice(pack, supply, need, supply.price, holdBack, extra);
+      if (n < OCEAN_REQUEST_TRIP_MIN) continue;
+      wanted[supply.name] = n;
+      cost += n * supply.price;
+    }
+    if (Object.keys(wanted).length) return { seller, room: shop.room, town: shop.town, wanted, cost };
+  }
+  return null;
+}
+/** Whether a request trip may be planned: none yet, the last one bought something, or the retry hour has passed. */
+export const oceanRequestTripAllowed = (last, now = Date.now()) => !last || last.bought > 0 ||
+  now - last.at >= OCEAN_REQUEST_RETRY_MS;
 
 export function oceanHasProvisionBatch(pack, wanted) {
   return Object.values(OCEAN_SHOPS).flat().some(supply => positive(wanted[supply.name]) &&
