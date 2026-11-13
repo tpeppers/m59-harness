@@ -779,6 +779,10 @@ _verify2.mjs
 # file becomes a test case rather than a diary.
 /substrate/scratch/
 
+# SUPERVISOR HEARTBEATS (DUM's supervisor registry, tools/m59-supervisor-heartbeat.mjs): <id>.supervisor.json and
+# <id>.stop are runtime state about processes on THIS machine -- which pid, which commit -- never a fact about the repo.
+/substrate/supervisors/
+
 # ERRANDS THIS MACHINE CAN BE ORDERED TO RUN. m59-fleetlib.mjs has said since it was written
 # that substrate/fleetscripts/ is "THIS MACHINE'S. Gitignored, like substrate/loadouts and
 # substrate/tuning.json" -- and there was no rule here, so `git status` reported
