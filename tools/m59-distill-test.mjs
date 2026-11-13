@@ -526,3 +526,14 @@ console.log(`\n${n} passed`);
   const g = historyGate(closed, { agent: 't11', kind: 'hall_draw', key: 'fairy wing' }, config({}), now + 1000);
   if (g?.busy) { console.log('FAIL an abandoned start must no longer read as in flight'); process.exitCode = 1; } else console.log('ok - abandoned start no longer in flight');
 }
+
+// A known spell whose level reads null (bought this session, keeper not relogged) is named as needing a handoff.
+{
+  const { decide } = await import('./m59-distill.mjs');
+  const out = decide({ characters: [{ agent: 't99', character: 'X', in_game: true, in_roster: true, room: 153, hp: 50, hp_max: 50,
+    pack: [], spells: [{ name: 'light', school: 'Faren', ability: null }, { name: 'zap', school: 'Faren', ability: 26 }],
+    learning: { planned: { configured: true, active: [] } }, policy: {} }], config: { home: 153 }, data: {}, history: [] });
+  const n = out.decisions[0].notes.join(' | ');
+  if (!/needs keeper handoff: light reads null/.test(n)) { console.log('FAIL a null-level spell must be named for a handoff: ' + n); process.exitCode = 1; }
+  else console.log('ok - null-level spell named for a keeper handoff');
+}

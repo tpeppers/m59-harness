@@ -464,6 +464,11 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
     const mine = inflight(history, o.agent, c, now);
     if (mine) { skip(`our ${mine.kind} ${mine.key ?? ''} is still in flight`); continue; }
     if (!o.learning?.planned?.configured) { skip('no character plan (the party planner has assigned nothing)'); continue; }
+    // A SPELL BOUGHT THIS SESSION READS ITS LEVEL AS null UNTIL THE KEEPER RELOGS, and a drill of it never produces:
+    // measured 2026-11-13, Floyd's light 0 of 12 (6 refused, 6 failed rolls) until a one-character keeper handoff
+    // read it as 6. Named on every pass so the operator hands the keeper off (restart-keepers --agents <agent>).
+    const unread = (o.spells ?? []).filter(s => s && s.ability == null).map(s => s.name);
+    if (unread.length) d.notes.push(`needs keeper handoff: ${unread.join(', ')} read${unread.length > 1 ? '' : 's'} null until a relog`);
 
     const fragile = (o.hp_max ?? 0) < c.fragile_below;
     const confined = c.respect_confine && (o.policy?.confineRooms ?? []).length > 0;
