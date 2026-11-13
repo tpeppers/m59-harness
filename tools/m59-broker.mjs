@@ -16162,6 +16162,9 @@ const TOOLS = [
           ...(next.teacher?.name ? ['--teacher', String(next.teacher.name)] : []),
           ...(next.teacher?.room != null ? ['--teacher-room', String(next.teacher.room)] : []),
           ...(homeRoom != null ? ['--home', String(homeRoom)] : []),
+          // NAME THE FLEET (2026-11-13): without it m59-ledger resolves fleet-default, which on prod is
+          // '!require-explicit', so every errand died at import and the purchase was then refused until restart.
+          '--fleet', FLEET || '-',
         ], { detached: true, stdio: ['ignore', out, out], cwd: BROKER_ROOT, windowsHide: true });
         // WHAT HAPPENED, RECORDED WHILE THE BROKER IS STILL HERE TO HEAR IT. `unref` lets the
         // broker exit without waiting; it does not stop this listener firing meanwhile. The
