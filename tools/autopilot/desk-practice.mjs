@@ -16,10 +16,10 @@ import { withCastRite } from '../m59-castrite.mjs';
 import { liveMoveOrder } from '../m59-move-origin.mjs';
 import { readFleetHealth } from '../m59-fleet-health.mjs';
 import { castsAbove, folRoomsOf } from '../m59-chalice.mjs';
-import { buyHereWants, choosePractice, deskReserve, isReagent, normalizePractice, offeredServices, pickCreatureTarget, touchedCreatures } from '../m59-deskpractice.mjs';
+import { buyHereWants, choosePractice, deskReserve, isReagent, normalizePractice, offeredServices, pickCreatureTarget, spellCost, touchedCreatures } from '../m59-deskpractice.mjs';
 import { OF, affordances, buyLines } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
-import { practiceOutcome, tranceMs } from '../m59-trance.mjs';
+import { CAST_UNSUCCESSFUL, PRINCESS_SHIELD, TRANCE_BROKEN, practiceOutcome, tranceMs } from '../m59-trance.mjs';
 import { Autopilot, REST_VIGOR_CAP } from '../m59-autopilot.mjs';
 
 // How long a practice spell whose trance was BROKEN is set aside (at least refused_ms): long enough that a leak stops
@@ -400,13 +400,36 @@ export class DeskPracticePart {
     this._practiceAt = now;
     try { await skills.standToAct(s); } catch {}
     const manaBefore = c.vitals?.()?.mana?.value ?? null;
+    // WHAT THE SERVER SAYS AND WHAT LEAVES THE PACK, not only the price. A real cast is discounted (GetManaCost: up to
+    // 2 for spellpower, 5-25% for the Princess shield), so a completed cheap spell can cost what a failed roll costs on
+    // paper -- Pepe's remove curse, 2026-11-13: 40 of 41 completed casts filed as failed rolls. The reagents (a failed
+    // roll takes none) and "You were unsuccessful in casting" decide it first; practiceOutcome has the rest.
+    const since = Number.isFinite(c.evSeq) ? c.evSeq : null;
+    const recipe = spellCost(choice.cast.name)?.reagents ?? [];
+    const reagentsBefore = recipe.map(([n, k]) => ({ n, k, count: this.reagentOnHand(n) }));
+    const reagentsPaid = () => reagentsBefore.length && reagentsBefore.every(r => r.count - this.reagentOnHand(r.n) >= r.k)
+      ? true : null;
+    const saidSince = () => since != null && typeof c.eventsSince === 'function'
+      ? c.eventsSince(since).filter(e => e.kind === 'message' && e.text).map(e => String(e.text)) : [];
+    const decisive = () => reagentsPaid() || saidSince().some(l => CAST_UNSUCCESSFUL.test(l) || TRANCE_BROKEN.test(l.trim()));
+    let princess = null;
+    try {
+      const eq = c.equipment?.();
+      if (eq?.known !== false) princess = (eq?.equipped ?? []).some(e => PRINCESS_SHIELD.test(String(e?.name ?? ''))) || null;
+    } catch {}
     const castAt = Date.now();
     const sent = await withCastRite(s, { spell, targets: targets, why: 'practiceAtDesk' },
       () => s.pacer.submit('cast', () => c.cast(spell.id, targets), 1050));
     if (sent === false) return false;
     await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
+    // The mana moves first (SpellFailed: LoseMana, then the sentence; PayCosts: mana, then the reagents), so give the
+    // rest of the reply a moment when the first event did not settle it.
+    if (since != null && !decisive())
+      await c.waitFor({ since, kinds: ['message', 'inventory', 'changed', 'left'], timeoutMs: 700, match: () => decisive() })
+        .catch(() => ({ events: [] }));
     const manaAfter = c.vitals?.()?.mana?.value ?? null;
     const spent = manaBefore != null && manaAfter != null ? manaBefore - manaAfter : null;
+    const evidence = { said: saidSince(), reagentsPaid: reagentsPaid(), princess };
     // UNKNOWN IS NOT REFUSED. Only a reading that proves nothing was spent sets the spell aside.
     const landed = spent == null ? null : spent > 0;
     // A CAST WITH A TRANCE IS NOT OVER WHEN THE MANA MOVES. The price is taken at the start and the spell happens at
@@ -415,14 +438,18 @@ export class DeskPracticePart {
     // your whole will" -- and record the cast as worked, so a broken trance and a finished one read the same. Now it
     // stays for the trance, bounded at five seconds past it, and reads how it ended. A failed roll (half price) has
     // no trance to wait for.
-    const tranceFor = practiceOutcome({ name: choice.cast.name, spent }) === 'completed' ? tranceMs(choice.cast.name) : 0;
+    // An unknown outcome that spent mana is waited for too: a trance that is not waited for is a trance this drill
+    // can break with its next packet.
+    const first = practiceOutcome({ name: choice.cast.name, spent, ...evidence });
+    const tranceFor = first === 'completed' || (first == null && spent > 0) ? tranceMs(choice.cast.name) : 0;
     const endedSince = () => { const e = s.pacer?.lastTranceEnd; return e && e.at >= castAt ? e.why : null; };
     if (tranceFor > 0) {
       while ((Date.now() < castAt + tranceFor + 250 || s.pacer?.holdStatus?.().active)
              && Date.now() < castAt + tranceFor + 5000 && !/broken/i.test(endedSince() ?? ''))
         await new Promise(r => setTimeout(r, 100));
     }
-    const outcome = practiceOutcome({ name: choice.cast.name, spent, ended: endedSince() });
+    const outcome = practiceOutcome({ name: choice.cast.name, spent, ended: endedSince(), ...evidence,
+                                      said: saidSince(), reagentsPaid: reagentsPaid() });
     // A BROKEN TRANCE SETS THE SPELL ASIDE FOR TEN MINUTES, and says so. Something in this room or this keeper is
     // breaking it -- every break takes the full price and every reagent -- so the drill stops paying until a person or
     // the next window shows the cause is gone, rather than feeding the same leak a cast a minute.
