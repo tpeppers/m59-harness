@@ -251,6 +251,25 @@ await ok('--only practice: a buyer is given its practice instead of the learn', 
   assert.equal(kind(run([obs(row('t1', { learning: both }))], { only: ['supply'] }), 't1'), null);
 });
 
+await ok('REGRESSION deploy-2026-11-13-3: --only filters kinds and never changes the practice decision itself', () => {
+  // The runner normalises its config with config() and decide() normalises it again; a Set run through
+  // `[].concat` became "[object set]" and --only practice answered "nothing to do" for characters the
+  // unrestricted pass was practising.
+  const chars = () => [obs(row('t1')), obs(row('t17'))];
+  const base = { home: HOME, practice_creatures: false };
+  const plain = decide({ characters: chars(), config: config(base), data: DATA, now: 1e12 });
+  for (const only of [['practice'], ['practice', 'supply']]) {
+    for (const cfg of [{ ...base, only }, config({ ...base, only })]) {   // raw, and pre-normalised as the runner passes it
+      const out = decide({ characters: chars(), config: cfg, data: DATA, now: 1e12 });
+      for (const agent of ['t1', 't17']) {
+        assert.equal(kind(out, agent), 'practice', `${only} ${cfg.only instanceof Set ? 'normalised' : 'raw'} ${agent}: ${of(out, agent).why}`);
+        assert.deepEqual(of(out, agent).action, of(plain, agent).action, 'the same practice action with and without --only');
+      }
+    }
+  }
+  assert.deepEqual([...config(config({ only: ['Practice', 'supply'] })).only], ['practice', 'supply'], 'config() is idempotent');
+});
+
 // ------------------------------------------------------------------------------------------- (d) supply
 
 // A receiver whose drill is in force and who carries no mushrooms (bless and super strength need 2 each).

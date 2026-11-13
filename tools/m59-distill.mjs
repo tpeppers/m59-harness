@@ -104,7 +104,11 @@ const pair = s => { const m = /^\s*(-?\d+)\s*\/\s*(-?\d+)\s*$/.exec(String(s ?? 
 export function config(over = {}) {
   const c = { ...DEFAULTS, ...Object.fromEntries(Object.entries(over).filter(([, v]) => v !== undefined)) };
   c.exclude = [].concat(c.exclude ?? []).map(String).filter(Boolean);
-  c.only = c.only == null ? null : new Set([].concat(c.only).map(lc).filter(Boolean));
+  // IDEMPOTENT, because the runner normalises once and decide() normalises again. `[].concat(aSet)` is `[aSet]`, and
+  // its one element lower-cased is "[object set]": every kind was then "not allowed" and --only practice reported
+  // "nothing to do" for characters the unrestricted pass was practising (prod, deploy-2026-11-13-3).
+  const listOf = v => v instanceof Set || (v && typeof v !== 'string' && typeof v[Symbol.iterator] === 'function') ? [...v] : [].concat(v);
+  c.only = c.only == null ? null : new Set(listOf(c.only).map(lc).filter(Boolean));
   for (const k of ['trap_rooms', 'unreachable_rooms', 'buy_avoid_rooms', 'buy_prefer_rooms', 'risky_rooms'])
     c[k] = [].concat(c[k] ?? []).map(Number).filter(Number.isFinite);
   c.home = num(c.home);
