@@ -525,6 +525,27 @@ export function decide({ characters = [], config: over = {}, data = {}, history 
         continue;
       }
       d.notes.push(`learn ${next.name}: ${block}`);
+      // ANOTHER ABILITY AT THE SAME STAGE, WHEN THE PLANNED ONE IS OUT OF REACH. The planner names one `next`; when its
+      // teacher is on the island, past an unsafe road, or the ledger has barred it, the points are still banked and
+      // any other buyable ability of the same kind in the active stage spends them. Measured 2026-11-13: Scooter held
+      // 242/234 toward Kraanan 3 all night behind detect invisible (island) with free action, magic shield, night
+      // vision and shroud buyable on the mainland. Money and "not offered" blocks are not worked around, and only spells
+      // fall through: weaponcraft refusals at Quintor (scimitar wielding, 2026-11-13) say the skill eligibility is wrong.
+      if (next.kind === 'spell' && next.expected_buyable && price != null && money >= price) {
+        for (const alt of o.learning.planned.active ?? []) {
+          if (!alt || lc(alt.name) === lc(next.name) || alt.kind !== next.kind || !alt.expected_buyable) continue;
+          if (num(alt.remaining_required) > 0) continue;
+          const ap = num(alt.price);
+          if (ap == null || money < ap || !alt.teacher?.name || alt.teacher?.room == null) continue;
+          const ab = gate('learn', alt.name) ? 'ledger' : roadBlock(alt.teacher.room);
+          if (ab) continue;
+          take({ kind: 'learn', skill: alt.name, ability_kind: alt.kind, level: alt.level, price: ap, alt: true,
+                 instead_of: next.name, teacher: alt.teacher, room: num(alt.teacher.room), road: true },
+               `${alt.name} (${alt.kind} L${alt.level}) from ${alt.teacher.name} in ${alt.teacher.room}, instead of ${next.name} (${block})`);
+          break;
+        }
+        if (d.action) continue;
+      }
     } else if (!next) {
       const first = (o.learning.planned.active ?? [])[0];
       if (first?.blocked_by?.length) d.notes.push(`${first.name}: ${first.blocked_by.join('; ')}`);

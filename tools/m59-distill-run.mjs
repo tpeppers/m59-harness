@@ -34,10 +34,10 @@
 //
 // --fleet IS REQUIRED and never defaulted: a distiller pointed at the wrong roster sends the wrong characters on the
 // roads. With --apply, `m59-which.mjs` is asked first and a mismatch or INDETERMINATE refuses the pass.
-import { readFileSync, appendFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'node:fs';
+import { readFileSync, appendFileSync, existsSync, readdirSync, statSync, mkdirSync, openSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -192,6 +192,23 @@ async function execute(a) {
   };
   switch (a.kind) {
     case 'learn': {
+      // AN ALTERNATIVE IS NOT THE BROKER'S `next`, so buy_next_planned_skills would buy the blocked one. Spawn the same
+      // runner it spawns, naming the ability, and record the exit code when it lands: 1 (money may have moved) bars it,
+      // 2 (spent nothing) cools it. A runner restart before the exit leaves the queued outcome standing.
+      if (a.alt) {
+        const args = [join(HERE, 'm59-learn-run.mjs'), '--agent', a.agent, '--skill', a.skill, '--price', String(a.price),
+          '--teacher', String(a.teacher.name), '--teacher-room', String(a.teacher.room), '--home', String(cfg.home), '--fleet', FLEET];
+        const out = openSync(join(REPO, 'substrate', `learn-${a.agent}.log`), 'a');
+        const child = spawn(process.execPath, args, { cwd: REPO, env: { ...process.env, M59_FLEET: FLEET },
+          detached: true, stdio: ['ignore', out, out], windowsHide: true });
+        const id = `${a.agent}-learn-exit-${Date.now().toString(36)}`;
+        child.on('exit', code => {
+          record({ phase: 'outcome', id, agent: a.agent, kind: 'learn', key: a.skill, ok: code === 0, code: code ?? undefined,
+                   why: `errand exited ${code} (0 learned, 2 spent nothing, 1 money may have moved)` });
+          say(`${a.agent}: learn ${a.skill} errand exited ${code}`);
+        });
+        return { ok: true, queued: true, why: `errand pid ${child.pid} (${a.skill} instead of ${a.instead_of})` };
+      }
       const r = await call('buy_next_planned_skills', { agents: [a.agent] }, 120_000);
       const row = (r?.results ?? []).find(x => x.agent === a.agent) ?? null;
       // QUEUED IS NOT LEARNED. The broker's errand runs on; its exit is the broker's to record (the burnt-purchase

@@ -553,3 +553,21 @@ console.log(`\n${n} passed`);
   else if (got.t5 !== 'learn' || got.t1 === 'learn') { console.log('FAIL the slot must go to the longer-waiting t5: ' + JSON.stringify(got)); process.exitCode = 1; }
   else console.log('ok - away slot goes to the longest-waiting character');
 }
+
+// A blocked next (island teacher) falls through to another buyable ability at the same stage; money is not worked around.
+{
+  const { decide } = await import('./m59-distill.mjs');
+  const row = purse => ({ agent: 't21', character: 'S', in_game: true, in_roster: true, room: 153, hp: 50, hp_max: 50, pack: [], spells: [],
+    purse, bank: 0, policy: {},
+    learning: { planned: { configured: true,
+      next: { kind: 'spell', name: 'detect invisible', level: 3, price: 2000, expected_buyable: true, remaining_required: 0, teacher: { name: 'Bone', room: 2141 } },
+      active: [{ kind: 'spell', name: 'detect invisible', level: 3, price: 2000, expected_buyable: true, remaining_required: 0, teacher: { name: 'Bone', room: 2141 } },
+               { kind: 'spell', name: 'martyrs battleground', level: 3, price: 2000, expected_buyable: false, remaining_required: 0 },
+               { kind: 'spell', name: 'free action', level: 3, price: 2000, expected_buyable: true, remaining_required: 0, teacher: { name: 'Jonas', room: 371 } }] } } });
+  const out = decide({ characters: [row(5000)], config: { home: 153, away_limit: 2 }, data: {}, history: [] });
+  const a = out.decisions[0].action;
+  if (a?.kind !== 'learn' || a.skill !== 'free action' || !a.alt || a.instead_of !== 'detect invisible') { console.log('FAIL blocked next must fall through to free action: ' + JSON.stringify(a)); process.exitCode = 1; }
+  else console.log('ok - blocked next falls through to a reachable alternative');
+  const poor = decide({ characters: [row(100)], config: { home: 153, away_limit: 2 }, data: {}, history: [] });
+  if (poor.decisions[0].action) { console.log('FAIL money is not worked around'); process.exitCode = 1; } else console.log('ok - an unaffordable next takes no alternative');
+}
