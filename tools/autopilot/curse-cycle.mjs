@@ -8,13 +8,20 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 9 methods: curseCycleInputs, curseCycleWornCursed, curseCycleLoose, curseCycleNote,
-//   applyCurseCycle, curseCycleHall, passCurseCycle, applyUnrevealedWeaponLoot, unrevealedWeaponStatus
+// 16 methods: curseCycleInputs, curseCycleWornCursed, curseCycleLoose, curseCycleNote,
+//   applyCurseCycle, curseCycleHall, passCurseCycle, applyUnrevealedWeaponLoot, unrevealedWeaponStatus,
+//   cursedWornCount, tendCurseServices, rewearCursedItems, askUncurseDesk, uncurseDeskPublish, serveUncurseDesk,
+//   uncurseDeskStatus
 import { CURSE_CYCLE_REAGENT, CURSE_CYCLE_SPELL, curseCycleGate, normalizeCurseCycle, uncurseAffordable } from '../m59-curse-cycle.mjs';
 import { norm } from '../m59-loadout.mjs';
 import * as skills from '../m59-skills.mjs';
 import { CONTINUE, HANDLED } from '../m59-autopilot.mjs';
 import { readUnrevealedWeaponMode, unrevealedWeaponGate } from '../m59-unrevealed-weapons.mjs';
+import { readRewearCursed, readUncurseDesk, rewearDue, shouldAskUncurse, uncurseCustomers, uncurseDeskMenu,
+         UNCURSE_REAGENT, UNCURSE_SPELL } from '../m59-uncurse-service.mjs';
+import { claimRequest, finishRequest, openRequests } from '../rpg/requests.mjs';
+import { OF } from '../m59-parse.mjs';
+import { TITHE_FLEET } from '../m59-autopilot.mjs';
 
 export class CurseCyclePart {
   // @part 1
@@ -107,6 +114,14 @@ export class CurseCyclePart {
   }
 
   async passCurseCycle(ctx) {
+    // THE NON-CHALICE REMOVE-CURSE DESK AND THE AMULET RE-WEAR (m59-uncurse-service.mjs) share this rung: both are inert
+    // (CONTINUE) unless policy.uncurseDesk / policy.rewearCursed name this character, or it is a farmer wearing a curse
+    // with a desk offering in its room.
+    const svc = await this.tendCurseServices(ctx).catch(e => {
+      this.curseCycleNote('services-threw', 'remove-curse services failed', { why: e?.message ?? String(e) }, 60_000);
+      return CONTINUE;
+    });
+    if (svc === HANDLED) return HANDLED;
     const cfg = this._curseCycleCfg;
     if (!cfg) return CONTINUE;
     const s = this.s, c = ctx?.c ?? s?.client;
@@ -232,6 +247,141 @@ export class CurseCyclePart {
     if (!g) return { policy, mode: readUnrevealedWeaponMode(policy).mode, allow: null, desk: null, why: 'not computed yet', problem: null };
     return { policy, mode: g.mode, allow: g.allow, desk: g.desk ?? null, in_confinement: g.in_confinement ?? null,
              why: g.why ?? null, problem: g.problem ?? null };
+  }
+
+  // ------------------------------------------------------------------ the remove-curse desk, the re-wear, the ask
+  //
+  // m59-uncurse-service.mjs has the operator's order (2026-11-13, Pepe and Sweetums in the Great Ocean) and the kod. The
+  // keeper's half: put a practice amulet back on, ask a desk for a curse we did not choose, and -- for a desk -- publish
+  // the record the farmers' `lootUnrevealedWeapons: 'desk'` gate reads, and cast on whoever asked.
+
+  /** Cursed items worn now: the server's grade or this session's mark, plus anything worn from rewearCursed. null unread. */
+  cursedWornCount(c = this.s?.client) {
+    if (!c?.equipment || c.equipment()?.known !== true) return null;
+    const ids = new Set(this.chaliceCursedWorn().map(o => o.id));
+    const rewear = new Set(readRewearCursed(this.policy?.rewearCursed));
+    if (rewear.size) {
+      const worn = new Set((c.equipment()?.equipped ?? []).map(e => e.id));
+      for (const o of c.inventory ?? [])
+        if (worn.has(o.id) && rewear.has(String(c.rsc?.get?.(o.nameRsc) || o.name || '').trim().toLowerCase())) ids.add(o.id);
+    }
+    return ids.size;
+  }
+
+  /** The rung's work, in order: re-wear, ask, desk. HANDLED when something was done with the body this pass. */
+  async tendCurseServices(ctx) {
+    const c = ctx?.c ?? this.s?.client;
+    if (!c) return CONTINUE;
+    if (await this.rewearCursedItems(c)) return HANDLED;
+    this.askUncurseDesk(c);
+    const { cfg, problem } = readUncurseDesk(this.policy?.uncurseDesk ?? null);
+    if (problem) this.curseCycleNote('uncurse-desk-problem', 'uncurse desk: policy value refused', { problem });
+    if (!cfg) { this._uncurseDesk = null; return CONTINUE; }
+    // A CHALICE HOLDER ALREADY PUBLISHES A DESK UNDER THIS NAME, with uncurse on it; two writers would fight over one record.
+    if (this.chaliceRole?.() === 'holder') { this._uncurseDesk = { able: false, why: 'the chalice desk serves here' }; return CONTINUE; }
+    const able = this.uncurseDeskPublish(cfg, c);
+    if (!able) return CONTINUE;
+    return (await this.serveUncurseDesk(cfg, c)) ? HANDLED : CONTINUE;
+  }
+
+  /** Put back on what policy.rewearCursed names and a remove curse took off. True when a use was sent. */
+  async rewearCursedItems(c) {
+    const rewear = readRewearCursed(this.policy?.rewearCursed);
+    if (!rewear.length || c.equipment?.()?.known !== true) return false;
+    if (Date.now() - (this._rewearAt ?? 0) < 30_000) return false;
+    if ((this.threat?.().landing ?? 0) > 0 || this.s?.combat?.active) return false;
+    const v = c.vitals?.()?.health;
+    if (v?.max > 0 && v.value / v.max < 0.8) return false;
+    const equipped = c.equipment()?.equipped ?? [];
+    const due = rewearDue({ rewear, wornIds: new Set(equipped.map(e => e.id)),
+      wornNames: equipped.filter(e => !(Number(e.id) >= 0)).map(e => String(e.name ?? '')).filter(Boolean),
+      pack: (c.inventory ?? []).map(o => ({ id: o.id, name: c.rsc?.get?.(o.nameRsc) || o.name || '' })) });
+    if (!due.length) return false;
+    this._rewearAt = Date.now();
+    for (const r of due) await this.s.pacer.submit('use', () => c.use(r.id)).catch(() => {});
+    this.tally.rewore_cursed = (this.tally.rewore_cursed || 0) + due.length;
+    this.note('put a cursed item back on', { items: due.map(r => r.name), why: 'policy.rewearCursed: worn on purpose for remove curse practice' });
+    try { this.ledgerEvent('rewear_cursed', { items: due.map(r => r.name), room: this.s?.world?.room?.num ?? null }); } catch {}
+    return true;
+  }
+
+  /** A farmer wearing a curse it did not choose asks the board, while a desk offers in its room. At most once a minute. */
+  askUncurseDesk(c) {
+    const gate = this._unrevealedWeaponGate;
+    if (!gate?.desk || Date.now() - (this._uncurseAskAt ?? 0) < 60_000) return null;
+    const cursedWorn = this.chaliceCursedWorn().map(o => String(c.rsc?.get?.(o.nameRsc) || o.name || ''));
+    const v = shouldAskUncurse({ cursedWorn, suspect: this._curseSuspect ?? null, rewear: readRewearCursed(this.policy?.rewearCursed),
+                                 desk: gate.desk, room: this.hereRoom() });
+    if (!v.ask) return null;
+    this._uncurseAskAt = Date.now();
+    const req = this.s?.joints?.effects?.request;
+    if (typeof req !== 'function') return null;
+    try {
+      req({ service: 'uncurse', target: this.who(), character: this.who(), from: this.s?.name ?? null, why: v.why,
+            pak: 'keeper:uncurse-ask', ttl_ms: 5 * 60_000 });
+      this.curseCycleNote('uncurse-asked', 'asked the remove-curse desk', { desk: gate.desk.name, why: v.why });
+    } catch {}
+    return v;
+  }
+
+  /** Publish this desk's record (once a minute, or at once when it changes). Returns whether it can cast now. */
+  uncurseDeskPublish(cfg, c, now = Date.now()) {
+    const key = s => String(s ?? '').trim().toLowerCase();
+    const knows = (c.spells ?? []).some(sp => key(c.rsc?.get?.(sp.nameRsc) || sp.name) === UNCURSE_SPELL);
+    const floor = Number(this.chaliceReagentFloor?.()?.[UNCURSE_REAGENT]) || 0;
+    const here = this.hereRoom();
+    const m = uncurseDeskMenu(cfg, { here, knows, karma: c.stat?.('karma') ?? null, mana: c.vitals?.()?.mana?.value ?? null,
+                                     emeralds: this.reagentOnHand(UNCURSE_REAGENT), floor });
+    const was = this._uncurseDesk;
+    this._uncurseDesk = { able: m.able, why: m.why, room: cfg.room ?? here, at: was?.at ?? null, served: was?.served ?? 0 };
+    if (!was || was.able !== m.able || now - (was.at ?? 0) >= 60_000) {
+      try { this.chaliceStore().setDesk(this.who(), { menu: m.menu, room: cfg.room ?? (Number.isFinite(here) ? here : null) }, now); } catch {}
+      this._uncurseDesk.at = now;
+      if (!was || was.able !== m.able) this.note(m.able ? 'uncurse desk open' : 'uncurse desk closed', { room: cfg.room ?? here, why: m.why });
+    }
+    return m.able;
+  }
+
+  /** Cast Remove Curse on the oldest asker standing here. True when a cast was made. */
+  async serveUncurseDesk(cfg, c, now = Date.now()) {
+    if (this.errand || this.townTrip || this.suspendedJourney || this.busyStatus?.() || (this.inert && !this.inert.travelling)) return false;
+    if ((this.threat?.().landing ?? 0) > 0) return false;
+    if (now - (this._uncurseServeAt ?? 0) < 10_000) return false;
+    this._uncurseServeAt = now;
+    let requests = [];
+    try { requests = openRequests({ service: 'uncurse', fleet: TITHE_FLEET, now }); } catch { return false; }
+    if (!requests.length) return false;
+    const players = [...(c.room?.objects?.values?.() ?? [])]
+      .filter(o => (o.flags & OF.PLAYER) && o.id !== c.selfId).map(o => ({ id: o.id, name: c.rsc?.get?.(o.nameRsc) || '' }));
+    this._uncurseLast ??= new Map();
+    const [next] = uncurseCustomers({ requests, players, room: this.hereRoom(), me: this.who(), now,
+                                      lastCast: this._uncurseLast, cooldownMs: cfg.cooldown_ms });
+    if (!next) return false;
+    const by = this.who();
+    try { claimRequest({ id: next.request.id, by, fleet: TITHE_FLEET, now }); } catch {}
+    this.doing = `remove curse for ${next.player.name}`;
+    const mana0 = c.vitals?.()?.mana?.value ?? null, em0 = this.reagentOnHand(UNCURSE_REAGENT);
+    const r = await this.chaliceCast(UNCURSE_SPELL, next.player.id).catch(e => ({ cast: false, why: e?.message ?? String(e) }));
+    const mana1 = c.vitals?.()?.mana?.value ?? null, em1 = this.reagentOnHand(UNCURSE_REAGENT);
+    // THE VERDICT IS WHAT IT COST: remcurse.kod refuses a target with nothing cursed BEFORE any mana or emerald is spent.
+    const lifted = (mana0 != null && mana1 != null && mana1 < mana0) || em1 < em0;
+    this._uncurseLast.set(String(next.player.name).toLowerCase(), Date.now());
+    const outcome = !r?.cast ? 'not_cast' : lifted ? 'lifted' : 'nothing_cursed';
+    if (r?.cast) try { finishRequest({ id: next.request.id, by, outcome, fleet: TITHE_FLEET }); } catch {}
+    if (this._uncurseDesk) this._uncurseDesk.served = (this._uncurseDesk.served ?? 0) + (lifted ? 1 : 0);
+    this.tally.uncurse_desk_casts = (this.tally.uncurse_desk_casts || 0) + (r?.cast ? 1 : 0);
+    const row = { for: next.player.name, outcome, why: r?.why ?? null, request: next.request.id, room: this.hereRoom() };
+    this.note('uncurse desk: served', row);
+    try { this.ledgerEvent('uncurse_desk', row); } catch {}
+    return !!r?.cast;
+  }
+
+  /** For `autopilot status`: null when this character is not a desk. */
+  uncurseDeskStatus() {
+    const { cfg, problem } = readUncurseDesk(this.policy?.uncurseDesk ?? null);
+    if (!cfg && !problem) return null;
+    return { policy: cfg, problem, ...(this._uncurseDesk ?? { able: null, why: 'not computed yet' }),
+             rewear: readRewearCursed(this.policy?.rewearCursed) };
   }
   // @end 1
 }

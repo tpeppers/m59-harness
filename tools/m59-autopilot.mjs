@@ -2458,6 +2458,12 @@ export class Autopilot {
       // HUNT ON THE ROAD (m59-travel-hunt.mjs; a strategy's `travelHunt`): on the keeper's own journeys, fight in-band
       // monsters in reach, then walk on. null is off: a journey swings only at what blocks it (clear_path).
       travelHunt: null,
+      // A REMOVE-CURSE DESK THAT IS NOT A CHALICE HOLDER (m59-uncurse-service.mjs): { enabled, room, reserve, cooldown_ms }.
+      // Publishes an uncurse-only service-board record while it can cast in its room and casts on whoever asks. null is
+      // off. And `rewearCursed`: names of cursed items this character wears on purpose (an Amulet of Shadows for remove
+      // curse practice) and puts back on after a remove curse took them off. null is none. Operator, 2026-11-13.
+      uncurseDesk: null,
+      rewearCursed: null,
       // COOK FROM THE ROAD (m59-cook-food.mjs; a strategy's `cookFood`): cast create food from looted
       // reagents before eating bought food while below the vigor ceiling. null keeps the old rule: cook only when the
       // larder is empty.
