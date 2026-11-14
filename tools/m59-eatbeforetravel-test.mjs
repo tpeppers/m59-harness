@@ -78,7 +78,7 @@ try {
   }
   {
     const { ap } = rig();
-    ap.larder = () => { throw new Error('boom'); };
+    ap.larder = ap.optionalLarder = () => { throw new Error('boom'); };
     ok('it never throws into travel', await ap.eatBeforeTravel(2) === null);
   }
 

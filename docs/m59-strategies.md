@@ -98,6 +98,7 @@ export default {
 | `lootOnly` | `lootOnly` | economy | `lootOnlySpec`, items resolved |
 | `lootUnrevealedWeapons` | `lootUnrevealedWeapons` | economy | `unrevealedWeaponMode`: `'always'` \| `'desk'` \| `'never'`; see [Unidentified weapons](#unidentified-weapons-lootunrevealedweapons-a-cursed-one-wields-itself) |
 | `protect` | `protectedItems` | economy | items resolved; **added to** the existing list, never replacing it |
+| `neverEat` | `neverEat` | economy | items resolved; **added to** the existing list. Food skipped by every optional meal (mid-hunt, before travel, the climb's first try); still eaten below the fight floor when nothing else feeds the body |
 | `overfarm` | `overfarm` | economy | `normalizeOverfarm`, unknown keys refused |
 | `weapons.touchSpell` | `touchSpell` | work | `touchSpellName` |
 | `weapons.touchSpellTiming` | `touchSpellTiming` | work | `touchCastTiming` |

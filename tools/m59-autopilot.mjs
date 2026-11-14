@@ -2340,6 +2340,10 @@ export class Autopilot {
       // must stay in the pack. Unlike vaultItems this is never deposited: faction
       // errands use it for the item that has to be offered to a quest recipient.
       protectedItems: [],
+      // FOOD NEVER EATEN AS AN OPTIONAL MEAL (autopilot `never_eat`; inventory.mjs neverEatNames): edible cargo such as
+      // a guild hall's mugs of brew. Skipped by the mid-hunt and before-travel top-offs and the climb's first try; the
+      // climb still falls back to it below the fight floor when nothing else feeds the body. [] is the old behaviour.
+      neverEat: [],
       // Cursed items this character may loot (see lootFloor's NEVER PICK THESE UP). Empty
       // refuses both, which is every character that is not a Shal'ille trainee.
       pickupCursed: [],

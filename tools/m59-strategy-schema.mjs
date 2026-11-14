@@ -145,6 +145,10 @@ export const STRATEGY_FIELDS = Object.freeze([
   // sell would take them (memory: reagents-need-protected-items).
   { path: 'protect', keys: ['protectedItems'], faculty: 'economy', arg: 'protect_items',
     normalize: normItems('protect'), merge: 'union' },
+  // FOOD NEVER EATEN AS AN OPTIONAL MEAL (inventory.mjs neverEatNames). ADDITIVE for the same reason as `protect`: a
+  // file that replaced the list would hand an operator's quest cargo back to the mid-hunt top-off (Zoot, 2026-11-14).
+  { path: 'neverEat', keys: ['neverEat'], faculty: 'economy', arg: 'never_eat',
+    normalize: normItems('neverEat'), merge: 'union' },
   { path: 'overfarm', keys: ['overfarm'], faculty: 'economy', arg: 'overfarm', normalize: normOverfarm },
   // WHEN A FULL PACK GOES TO TOWN (sellAtLoad, 0..1): 1.0 is "sell only when the pack is full". Where it goes is the town
   // table for where the character stands (m59-autopilot.mjs townTable: the island sells at Ko'catan, never the mainland).

@@ -8,9 +8,9 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 13 methods: carryFloors, protectedItemNames, inheritedProtectedNames, stockpileKeptNames,
-//   chestSourcedNames, saleProtectedNames, islandSaleRelease, saleLoadout, guildWantedNames, notOursToEat, larder,
-//   giveableLarder, uneatableReserve
+// 17 methods: carryFloors, protectedItemNames, inheritedProtectedNames, stockpileKeptNames,
+//   chestSourcedNames, saleProtectedNames, islandSaleRelease, saleLoadout, guildWantedNames, notOursToEat,
+//   reagentFoodNames, neverEatNames, optionalMealExclude, optionalLarder, larder, giveableLarder, uneatableReserve
 import { CHALICE } from '../m59-chalice.mjs';
 import { restrictPlan } from '../m59-curse-cycle.mjs';
 import { spellCost } from '../m59-deskpractice.mjs';
@@ -278,6 +278,28 @@ export class InventoryPart {
     for (const name of spells) for (const [item] of spellCost(name)?.reagents ?? []) if (item) names.add(String(item));
     this._reagentFood = { key, names: [...names] };
     return this._reagentFood.names;
+  }
+
+  // FOOD THIS CHARACTER MUST NOT EAT AS AN OPTIONAL MEAL (policy.neverEat, autopilot `never_eat`): cargo that happens
+  // to be edible. 2026-11-14: Zoot carried 102 mugs of brew as quest cargo for a guild hall and ate every one as
+  // mid-hunt top-offs (185 'ate' events in a day), with fight_above_vigor lowered to 40. protectedItems could not
+  // say this, and must not -- see the bread note above notOursToEat. Like a reagent food, a never-eat item is
+  // skipped by every OPTIONAL meal (mid-hunt, before travel, the first try of the climb) and is still eaten by the
+  // climb's fallback when nothing else aboard feeds the body below its fight floor: a keep list never starves a body.
+  neverEatNames() {
+    const list = this.policy?.neverEat;
+    return Array.isArray(list) ? list.map(String).filter(Boolean) : [];
+  }
+
+  // Everything an OPTIONAL meal skips: what is not ours, the practice's reagents, and the never-eat list.
+  optionalMealExclude(c = this.s?.client) {
+    return [...new Set([...this.notOursToEat(), ...this.reagentFoodNames(c), ...this.neverEatNames()])];
+  }
+
+  // The larder an optional meal may draw from. A wait or a loop that exists only to eat optionally asks THIS, or a
+  // pack holding nothing but reserved food reads as a larder and the keeper waits for a meal it will never take.
+  optionalLarder(c = this.s.client) {
+    return skills.larderOf(c, { exclude: this.optionalMealExclude(c) });
   }
 
   larder(c = this.s.client) {

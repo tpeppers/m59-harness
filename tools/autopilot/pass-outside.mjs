@@ -316,7 +316,10 @@ export class PassOutsidePart {
       const hp = v?.health?.max ? v.health.value / v.health.max : null;
       if (hp === null || hp < (p.restBelow ?? 0.85)) return null;
       if (this.inReachOfUs?.()?.length) return null;
-      const larder = this.larder(c);
+      // THE OPTIONAL LARDER: a meal before a journey is never a need, so it skips what every optional meal skips --
+      // the practice's reagents and policy.neverEat (Zoot's quest brew, 2026-11-14). A pack holding only those has
+      // nothing to eat here, and the overdrive climb below must not wait out a stomach for food it will not take.
+      const larder = this.optionalLarder(c);
       if (!larder.length) return null;
       // travel() is called often; ask the server for nothing when our own stomach says no room.
       const smallest = Math.min(...larder.map(x => Number(x.food?.filling) || 0));
@@ -342,24 +345,24 @@ export class PassOutsidePart {
         const startHealth = healthNow();
         const disturbed = () => !!this.inReachOfUs?.()?.length || (Number.isFinite(startHealth) && healthNow() < startHealth);
         let now = vigor;
-        while (Date.now() < until && now < overdriveReachable(od.target, this.larder(c)) - 5 && !this.stopping && !disturbed()) {
+        while (Date.now() < until && now < overdriveReachable(od.target, this.optionalLarder(c)) - 5 && !this.stopping && !disturbed()) {
           const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: od.target,
-                                               exclude: [...this.notOursToEat(), ...this.reagentFoodNames()] }).catch(() => null);
+                                               exclude: this.optionalMealExclude(c) }).catch(() => null);
           if (r?.ate?.length) { e.ate.push(...r.ate); now = r.vigor?.after ?? now; this.tally.meals = (this.tally.meals || 0) + 1; continue; }
-          if (!this.larder(c).length) break;
+          if (!this.optionalLarder(c).length) break;
           const wait = Math.min(60, Math.max(5, this.stomach?.secondsUntilRoomFor?.(smallest) ?? 30));
           for (const end = Date.now() + wait * 1000; Date.now() < end && !this.stopping && !disturbed();)
             await new Promise(res => setTimeout(res, 1000));
           now = this.s?.client?.vitals?.()?.vigor?.value ?? now;
         }
         e.vigor.after = now;
-        this.endOverdrive(now, now >= overdriveReachable(od.target, this.larder(c)) - 5 ? 'reached the target' : 'set out before the target');
+        this.endOverdrive(now, now >= overdriveReachable(od.target, this.optionalLarder(c)) - 5 ? 'reached the target' : 'set out before the target');
         if (e.ate.length) { this.recordAte(e, 'overdrive before travel'); return 'ate'; }
         return null;
       }
       for (let round = 0; round < 6; round++) {
         const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: ceiling,
-                                             exclude: [...this.notOursToEat(), ...this.reagentFoodNames()] });
+                                             exclude: this.optionalMealExclude(c) });
         if (!r?.ate?.length) break;
         e.ate.push(...r.ate);
         e.vigor.after = r.vigor?.after ?? e.vigor.after;

@@ -156,9 +156,12 @@ export class ProvisionPart {
         // COOK FROM THE ROAD FIRST (m59-cook-food.mjs, a strategy's `cookFood`): looted elderberry and herbs become a
         // meal before the bought bread is touched. Off unless asked for; one cast a pass, and the pass ends on it.
         if (await this.cookFirst(v, ceiling || floor, larder).catch(() => false)) return 'ate';
-        // Other food first; a reagent food only when nothing else would feed the climb (reagentFoodNames).
+        // Other food first; a reagent food (reagentFoodNames) or a never-eat item (policy.neverEat) only when nothing
+        // else would feed the climb. THE FALLBACK IS THE BREAD LESSON (see notOursToEat): a keep list never starves a
+        // body. Below its fight floor, with nothing else that goes down, the character eats the reserved food rather
+        // than fighting starved -- and only up to the floor, never to the ceiling.
         let e = await skills.eat(s, { stomach: this.stomach, upToVigor: ceiling || undefined,
-                                     exclude: [...this.notOursToEat(), ...this.reagentFoodNames()] })
+                                     exclude: this.optionalMealExclude() })
                             .catch(() => ({ ate: [] }));
         if (!e.ate?.length && vigor < floor)
           e = await skills.eat(s, { stomach: this.stomach, upToVigor: floor,
@@ -172,6 +175,21 @@ export class ProvisionPart {
             stomach: Math.round(this.stomach.level), strategy: p.strategy });
           this.progress('ate to raise vigor');
           return 'ate';
+        }
+        // ONLY RESERVED FOOD ABOARD, AND THE FLOOR IS MET: the climb above the floor is optional, and everything in
+        // the pack is food an optional meal skips. Without this the stomach wait below reads 0 (there IS room) and
+        // the keeper waits for ever for a meal it has been told not to take.
+        if (vigor >= floor && !this.optionalLarder(s.client).length) {
+          this.climbing = false;
+          if (this.overdrive?.active) this.endOverdrive(vigor, 'only reserved food aboard');
+          // With no floor the latch re-trips every pass, so say it at most once in five minutes.
+          if (!this._reservedOnlyNoted || Date.now() - this._reservedOnlyNoted > 300_000) {
+            this._reservedOnlyNoted = Date.now();
+            this.note('setting out: only reserved food aboard', { vigor, floor, ceiling,
+              reserved: larder.map(x => x.name),
+              why: 'never_eat items and practice reagents are eaten only below the fighting floor' });
+          }
+          return false;
         }
         // NOTHING FITS UNDER THE CEILING: every food aboard would carry vigor past 200, which `eat`
         // refuses — and the stomach wait reads 0 because there IS room, so the rule below would wait
@@ -245,7 +263,8 @@ export class ProvisionPart {
     // one item per pass — a pass is eight seconds and the room reappears on a clock
     // measured in minutes. `eat` declines anything that would overshoot 200.
     if (ceiling && this.stomach.roomFor(smallest.filling)) {
-      const exclude = [...this.notOursToEat(), ...this.reagentFoodNames()];   // optional: never the practice's reagents
+      // Optional: never the practice's reagents, never policy.neverEat (Zoot's 102 mugs of brew, 2026-11-14).
+      const exclude = this.optionalMealExclude();
       // Keep the exact Relay reagent through optional top-offs. A farmer short of its
       // fight floor may still eat it in the climb above, and emergency meals are untouched.
       if (this.mode === 'farm' && p.relayBeforeRest === true && vigor >= Math.max(150, floor) &&

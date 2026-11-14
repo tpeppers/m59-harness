@@ -12739,6 +12739,10 @@ const TOOLS = [
         description: 'item names to protect from eating/selling/gifting/dropping and deposit at the Barloque vault during town loops' },
       protect_items: { type: 'array', items: { type: 'string' },
         description: 'temporary cargo to protect from eating/selling/gifting/dropping while keeping it in the pack' },
+      never_eat: { type: 'array', items: { type: 'string' },
+        description: 'NEVER EAT AS AN OPTIONAL MEAL: edible cargo (a guild hall cargo of mugs of brew) the mid-hunt and before-travel ' +
+          'top-offs and the first try of the vigor climb skip. Still eaten below the fight floor when nothing else aboard feeds ' +
+          'the body, so it can never starve one. Full item names, at most 24; [] clears' },
       pickup_cursed: { type: 'array', items: { type: 'string', enum: ['amulet of shadows', 'ring of lethargy'] },
         description: 'cursed items this character MAY loot, at most one of each held. Picking one up is ' +
           'WEARING it (item.kod:514) and it cannot come off without remove curse. For a Shal\'ille ' +
@@ -13839,6 +13843,12 @@ const TOOLS = [
           throw new Error('protect_items must be a list of item names');
         if (a.protect_items.length > 24) throw new Error('protect_items may contain at most 24 items');
         p.policy.protectedItems = resolveItemNames(a.protect_items);
+      }
+      if (a.never_eat !== undefined) {
+        if (!Array.isArray(a.never_eat) || a.never_eat.some(v => typeof v !== 'string'))
+          throw new Error('never_eat must be a list of item names');
+        if (a.never_eat.length > 24) throw new Error('never_eat may contain at most 24 items');
+        p.policy.neverEat = resolveItemNames(a.never_eat);
       }
       if (a.pickup_cursed !== undefined) {
         const allowed = ['amulet of shadows', 'ring of lethargy'];
