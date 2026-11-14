@@ -232,7 +232,11 @@ export class FarmStrategyEngine {
     this.resolveItem = resolveItem;
     this.budgetMs = budgetMs;
     this.now = now;
-    this.assigned = null;     // the name in policy.farmStrategy we are serving
+    this.assigned = null;     // the strategy in force: policy.farmStrategy, or the stage it has graduated to
+    this.order = null;        // policy.farmStrategy itself, the name the ORDERS carry
+    this.graduation = null;   // { from, to, maxHealth, path } while the order has been outgrown, else null
+    this.gradCache = new Map();  // strategy name -> { mtime, graduate } (graduation reads every link each pass)
+    this.gradMax = null;      // the last max HP read; a transient unknown keeps the last stage rather than flap
     this.loaded = null;       // the last GOOD load of that name
     this.refused = null;      // the last failed load, while it is the newest attempt
     this.triedMtime = undefined;
@@ -254,7 +258,7 @@ export class FarmStrategyEngine {
   stationLootPickup() {
     const { mode, policy, s, inert, suspendedJourney, townTrip } = this.host;
     const station = this.loaded?.strategy?.desired.assignedRoom;
-    if (!policy.lootPickup?.length || !this.wrote.has('lootPickup') || this.assigned !== policy.farmStrategy ||
+    if (!policy.lootPickup?.length || !this.wrote.has('lootPickup') || this.order !== policy.farmStrategy ||
         mode !== 'farm' || station == null || s?.world?.room?.num !== station || policy.assignedRoom !== station ||
         inert || suspendedJourney || townTrip || s?.combat?.active || s?.moveOrder?.kind === 'travel' ||
         (s?.job?.kind === 'travel' && !s.job.done) || ['work', 'movement', 'economy'].some(k => this.heldBy(k)))
@@ -277,14 +281,69 @@ export class FarmStrategyEngine {
     return owner;
   }
 
+  /** This body's max HP, or null while unread. */
+  maxHealth() {
+    try {
+      const v = this.host.s?.client?.vitals?.()?.health?.max;
+      return Number.isFinite(v) && v > 0 ? v : null;
+    } catch { return null; }
+  }
+
+  /** { ok, graduate }: whether the file loads, and its `graduate` clause; re-read only when the file changes. */
+  async graduateOf(name) {
+    let file = null;
+    try { file = strategyFile(name, this.dir); } catch { return { ok: false, graduate: null }; }
+    const mtime = mtimeOf(file);
+    if (mtime == null) return { ok: false, graduate: null };
+    const hit = this.gradCache.get(name);
+    if (hit && hit.mtime === mtime) return hit;
+    const r = await loadFarmStrategy(name, { dir: this.dir, resolveItem: this.resolveItem }).catch(() => null);
+    const out = { mtime, ok: !!r?.ok, graduate: r?.ok ? (r.strategy.graduate ?? null) : null };
+    this.gradCache.set(name, out);
+    return out;
+  }
+
+  /**
+   * GRADUATION (operator 2026-11-14): "automatically graduate from target to target as max hp increases".
+   * Follow the order's `graduate` chain while this body's max HP is at or above each stage's `maxHealth`, and
+   * return the stage in force. Derived every pass from the ORDER and the body, never stored: a death that drops
+   * max HP below a threshold puts the body back on the easier stage, which is the rule this file already states
+   * for a death spiral. The chain stops at a loop, at a link that will not load, and after 16 links.
+   */
+  async graduate(order) {
+    const max = this.maxHealth() ?? this.gradMax;
+    if (max == null) return this.graduation?.from === order ? this.graduation.to : order;
+    this.gradMax = max;
+    const path = [order];
+    let at = order, last = null;
+    for (let i = 0; i < 16; i++) {
+      const g = (await this.graduateOf(at)).graduate;
+      if (!g || max < g.maxHealth || path.includes(g.next)) break;
+      if (!(await this.graduateOf(g.next)).ok) {   // a next stage that will not load is no stage: stay here, say so
+        this.noteOnce(`graduate:refused:${g.next}`, 'farm strategy cannot graduate', { from: at, next: g.next, max_health: max });
+        break;
+      }
+      last = g; at = g.next; path.push(at);
+    }
+    const was = this.graduation?.to ?? order;
+    this.graduation = at === order ? null : { from: order, to: at, maxHealth: max, at: last.maxHealth, path };
+    if (at !== was)
+      this.noteOnce(`graduate:${order}>${at}`, at === order ? 'farm strategy back to its first stage' : 'farm strategy graduated',
+        { order, from: was, to: at, max_health: max, path }, { every: 0 });
+    return at;
+  }
+
   /**
    * Bring the policy into line with the assignment and the file. Called at the top of every pass
    * and after every push or rejoin. Cheap when nothing changed: one stat, no import, no await.
    */
   async converge(reason = 'pass') {
     const policy = this.host.policy;
-    const want = typeof policy?.farmStrategy === 'string' && policy.farmStrategy.trim()
+    const order = typeof policy?.farmStrategy === 'string' && policy.farmStrategy.trim()
       ? policy.farmStrategy.trim() : null;
+    this.order = order;
+    // GRADUATION: the order names the first stage; the body's max HP picks the stage in force.
+    const want = order ? await this.graduate(order) : null;
     if (want !== this.assigned) {
       if (this.assigned) this.release(want ? `reassigned to ${want}` : 'unassigned');
       this.assigned = want; this.serving = want;
@@ -472,7 +531,7 @@ export class FarmStrategyEngine {
     // A PUSH THAT CHANGES THE ASSIGNMENT ECHOES NOTHING. With the file leaving (or being replaced) in this
     // same push, nothing will reassert over a restatement, so every key it carries is an order and goes
     // live -- `confine_rooms: null` beside `farm_strategy: null` (Janice, 2026-10-12) must clear it.
-    if (Object.hasOwn(fields, 'farmStrategy') && (fields.farmStrategy ?? null) !== (this.assigned ?? null))
+    if (Object.hasOwn(fields, 'farmStrategy') && (fields.farmStrategy ?? null) !== (this.order ?? this.assigned ?? null))
       return { echo, restated };
     for (const k of Object.keys(fields)) {
       if (!this.wrote.has(k)) continue;
@@ -845,6 +904,7 @@ export class FarmStrategyEngine {
       : yieldedKeys.length ? 'partly yielded' : 'applied';
     return {
       assigned: this.assigned, ...(this.serving && this.serving !== this.assigned ? { serving: this.serving } : {}),
+      ...(this.graduation ? { ordered: this.order, graduated: this.graduation } : {}),
       state, file: this.loaded?.file ?? this.refused?.file ?? null,
       describe: strat?.describe ?? null,
       loaded_mtime: this.loaded?.mtime ?? null, reloads: this.reloads, reasserts: this.reasserts,

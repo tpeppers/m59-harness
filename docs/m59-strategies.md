@@ -870,6 +870,28 @@ the assigned file.
 fallback names no fallback of its own: it either works or stands down. Set a floor the quarry can honestly meet: a
 mundane-armed troll crew may still land the odd kill, so one per 30 minutes would not catch it.
 
+## Graduation: the next stage when the body has outgrown this one
+
+Operator, 2026-11-14: *"automatically graduate from target to target as max hp increases"*. Two newbies farmed giant
+rats at 30 max HP, past their stage, because the only thing that advanced the ladder was a bot that was stopped.
+
+```js
+graduate: { maxHealth: 30, next: 'newbie-ileria-fungus' },   // at or above 30 max HP, serve that file instead
+```
+
+Assign the FIRST stage once (`farm_strategy=newbie-raza-mummies`). Every pass the engine reads the body's max HP and
+walks the chain: while max HP is at or above a stage's `graduate.maxHealth`, the next stage is the one in force. So:
+
+- **The order never changes.** `policy.farmStrategy` keeps naming the first stage and is what is pushed and carried;
+  status says `assigned` (the stage in force), `ordered` (the order) and `graduated: { from, to, maxHealth, at, path }`.
+- **It is derived, not stored**, so a death that drops max HP under a threshold puts the body back on the easier stage
+  (the death-spiral rule in CLAUDE.md), and a keeper restart lands on the right stage at once.
+- **A missing or broken next stage stops the chain where it is** (`farm strategy cannot graduate` note), as does a
+  loop; an unread max HP holds the current stage rather than flap.
+- Each stage keeps its own floor and escalation, keyed by its own name. The last stage simply has no `graduate`.
+
+`m59-strategy-engine-test.mjs` "graduation" pins it.
+
 ## Private strategy directories
 
 A strategy file is an order, so it is this machine's — and some orders belong in a PRIVATE repository

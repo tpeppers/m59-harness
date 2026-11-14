@@ -368,7 +368,7 @@ export const PROTECTED_NAMES = Object.freeze({
   farmStrategy: 'is the assignment itself and cannot be set from inside a strategy',
 });
 // `requires` and `floor` are not policy keys: they gate the farm (m59-strategy-gate.mjs) rather than set it.
-const KNOWN_TOP = new Set(['name', 'describe', 'hooks', 'requires', 'floor', 'otherwise',
+const KNOWN_TOP = new Set(['name', 'describe', 'hooks', 'requires', 'floor', 'otherwise', 'graduate',
   ...STRATEGY_FIELDS.filter(f => !f.path.includes('.')).map(f => f.path), ...GROUPS]);
 
 const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -452,6 +452,20 @@ export function validateStrategy(exported, { file = null, resolveItem = null } =
     else if (s.otherwise === s.name) problems.push({ path: 'otherwise', why: 'otherwise cannot name the strategy itself' });
     else otherwise = s.otherwise;
   }
+  // AND WHEN THE BODY HAS OUTGROWN IT: at or above `maxHealth` max HP, the engine serves `next` instead
+  // (m59-strategy-engine.mjs graduation). Operator 2026-11-14: a newbie ladder that only a stopped bot advanced
+  // left two characters on rats past the stage's ceiling.
+  let graduate = null;
+  if (s.graduate != null) {
+    const g = s.graduate;
+    if (!isPlainObject(g)) problems.push({ path: 'graduate', why: 'graduate must be { maxHealth: <n>, next: "<strategy>" }' });
+    else if (!Number.isFinite(g.maxHealth) || g.maxHealth <= 0)
+      problems.push({ path: 'graduate.maxHealth', why: 'graduate.maxHealth must be a positive number of max hit points' });
+    else if (typeof g.next !== 'string' || !STRATEGY_NAME.test(g.next))
+      problems.push({ path: 'graduate.next', why: 'graduate.next must name another farm strategy file' });
+    else if (g.next === s.name) problems.push({ path: 'graduate.next', why: 'graduate.next cannot name the strategy itself' });
+    else graduate = { maxHealth: g.maxHealth, next: g.next };
+  }
 
   const hooks = {};
   if (s.hooks !== undefined) {
@@ -467,5 +481,5 @@ export function validateStrategy(exported, { file = null, resolveItem = null } =
     return refuse('the file declares no field and no hook, so assigning it would change nothing — ' +
                   'which reads exactly like a strategy that works');
   return { ok: true, why: null, problems, unrecognised,
-           strategy: { name: s.name, describe: s.describe ?? null, desired, faculties, fields, hooks, requires, floor, otherwise } };
+           strategy: { name: s.name, describe: s.describe ?? null, desired, faculties, fields, hooks, requires, floor, otherwise, graduate } };
 }

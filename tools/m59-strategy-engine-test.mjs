@@ -650,6 +650,60 @@ console.log('the residue: unassigning in the same push as an explicit value, wit
   }
 }
 
+// ------------------------------------------------------------------ graduation
+// Operator 2026-11-14: "automatically graduate from target to target as max hp increases". Two newbies sat on
+// giant rats at 30 max HP because the only thing that advanced the ladder was a stopped bot.
+console.log('graduation: the body\'s max HP picks the stage, the order stays the first stage');
+{
+  writeStrategy('g1', strat('g1', `hunt: ['mummy'], graduate: { maxHealth: 25, next: 'g2' }`));
+  writeStrategy('g2', strat('g2', `hunt: ['giant rat'], graduate: { maxHealth: 30, next: 'g3' }`));
+  writeStrategy('g3', strat('g3', `hunt: ['fungus beast']`));
+  const v = schema.validateStrategy({ name: 'gx', hunt: ['rat'], graduate: { maxHealth: 0, next: 'g2' } });
+  ok('schema: a non-positive maxHealth is refused', v.ok === false && /graduate\.maxHealth/.test(v.why), v.why);
+  const v2 = schema.validateStrategy({ name: 'gx', hunt: ['rat'], graduate: { maxHealth: 30, next: 'gx' } });
+  ok('schema: graduating to itself is refused', v2.ok === false && /itself/.test(v2.why), v2.why);
+  const v3 = schema.validateStrategy({ name: 'gx', hunt: ['rat'], graduate: { maxHealth: 30, next: 'g3' } });
+  ok('schema: a good clause is carried', v3.ok && v3.strategy.graduate?.next === 'g3', JSON.stringify(v3.strategy?.graduate));
+
+  let max = 22;
+  const h = fakeHost({ farmStrategy: 'g1' });
+  h.s.client.vitals = () => ({ health: { value: max, max }, mana: { value: 1, max: 1 }, vigor: { value: 150, max: 200 } });
+  const e = new FarmStrategyEngine(h);
+  let st = await e.converge('pass');
+  ok('below the first threshold: the order itself is in force', st.assigned === 'g1' && !st.graduated
+     && String(h.policy.hunt) === 'mummy', JSON.stringify({ a: st.assigned, hunt: h.policy.hunt }));
+  max = 27;
+  st = await e.converge('pass');
+  ok('at 27 max HP: graduated to g2, the order still reads g1', st.assigned === 'g2' && st.ordered === 'g1'
+     && h.policy.farmStrategy === 'g1' && String(h.policy.hunt) === 'giant rat',
+     JSON.stringify({ a: st.assigned, o: st.ordered, hunt: h.policy.hunt }));
+  ok('...and a note says so', h.notes.some(n => n.what === 'farm strategy graduated' && n.data?.to === 'g2'));
+  max = 31;
+  st = await e.converge('pass');
+  ok('at 31: two links walked, g3 in force', st.assigned === 'g3' && JSON.stringify(st.graduated.path) === '["g1","g2","g3"]'
+     && String(h.policy.hunt) === 'fungus beast', JSON.stringify(st.graduated));
+  ok('a broker push restating the ORDER echoes like any restatement (not read as a reassignment)',
+     Array.isArray(e.pushEcho({ farmStrategy: 'g1', hunt: h.policy.hunt }).echo)
+     && e.pushEcho({ farmStrategy: 'g1', hunt: h.policy.hunt }).echo.includes('hunt'));
+  h.s.client.vitals = () => null;
+  st = await e.converge('pass');
+  ok('max HP unread for a moment: the stage holds (no flap back to g1)', st.assigned === 'g3');
+  h.s.client.vitals = () => ({ health: { value: 29, max: 29 }, mana: { value: 1, max: 1 }, vigor: { value: 150, max: 200 } });
+  st = await e.converge('pass');
+  ok('a death drops max HP to 29: back to g2, the easier stage', st.assigned === 'g2'
+     && String(h.policy.hunt) === 'giant rat', JSON.stringify({ a: st.assigned, hunt: h.policy.hunt }));
+  writeStrategy('g2', strat('g2', `hunt: ['giant rat'], graduate: { maxHealth: 30, next: 'nonesuch' }`));
+  h.s.client.vitals = () => ({ health: { value: 40, max: 40 }, mana: { value: 1, max: 1 }, vigor: { value: 150, max: 200 } });
+  st = await e.converge('pass');
+  ok('a next stage with no file stops the chain where it is', st.assigned === 'g2', st.assigned);
+  writeStrategy('g2', strat('g2', `hunt: ['giant rat'], graduate: { maxHealth: 30, next: 'g1' }`));
+  st = await e.converge('pass');
+  ok('a loop back to an earlier stage stops the chain', st.assigned === 'g2', st.assigned);
+  h.policy.farmStrategy = null;
+  st = await e.converge('pass');
+  ok('unassigned: nothing in force, the hunt given back', st === null && h.policy.hunt === 'living tree', JSON.stringify(h.policy.hunt));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 try { rmSync(tmp, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);
