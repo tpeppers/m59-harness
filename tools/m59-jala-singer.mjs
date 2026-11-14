@@ -11,7 +11,7 @@ export function jalaSinger(ap) {
   if (!(eq.equipped || []).some(o => /\b(lute|flute|drum|horn|harp|lyre|instrument)\b/i.test(nameOf(o)))) return false;
   const drill = normalizePractice(ap.policy?.practiceSpells)?.spells ?? [];
   const known = new Map((typeof c.spells === 'function' ? c.spells() : c.spells ?? [])
-    .map(sp => [String(sp?.name ?? '').toLowerCase(), sp]));
+    .map(sp => [String(sp?.name ?? c?.rsc?.get?.(sp?.nameRsc) ?? '').toLowerCase(), sp]));   // the live client carries nameRsc, not name
   return drill.some(entry => {
     const sp = known.get(String(entry?.name ?? entry ?? '').toLowerCase());
     return sp && (sp.school === 6 || /jala/i.test(String(sp.school ?? '')));
