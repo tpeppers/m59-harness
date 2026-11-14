@@ -414,11 +414,11 @@ try {
   });
 
   // ---------------------------------------------------------------- the pit team, four bodies in parallel
-  function pitWorld({ misplace = null } = {}) {
+  function pitWorld({ misplace = null, start = 2501 } = {}) {
     const P = { bodies: {}, floor: {}, hall: [], deposits: [], leverPulled: 0, killed: false, packs: {} };
     const team = ['ta', 'tb', 'tc', 'td'];
     const PIT_ROOM = { A: 2507, B: 2508 };
-    for (const a of team) { P.bodies[a] = { room: 2501, row: 10, col: 10, pending: [], seq: 0 }; P.packs[a] = []; }
+    for (const a of team) { P.bodies[a] = { room: start, row: 10, col: 10, pending: [], seq: 0 }; P.packs[a] = []; }
     const ctxOf = a => {
       const b = P.bodies[a];
       const call = async (name, args) => {
@@ -458,7 +458,14 @@ try {
         if (!P.leverPulled || b.room !== PIT_ROOM[side]) throw Error(`exit before the lever or from ${b.room}`);
         P.exits = [...(P.exits ?? []), `${a}:${side}:${solution}`]; return { ok: true, side };
       };
-      return { agent: a, fleet: 'offline', state: {}, call, keeper: async () => ({}), hollowsTransit, pitExit };
+      // Back to the chamber (m59-orc-pit-exit.mjs approachChamber, pinned in m59-orc-pit-floors-test).
+      const pitApproach = async (_ctx, side) => {
+        P.approaches = [...(P.approaches ?? []), `${a}:${side}`];
+        if (side === 'A') await hollowsTransit(_ctx, { room: 2502, to: 2507 }); else b.room = 2508;
+        return { ok: true };
+      };
+      const pitHop = async to => { P.hops = [...(P.hops ?? []), `${a}:${b.room}->${to}`]; b.room = to; return { ok: true }; };
+      return { agent: a, fleet: 'offline', state: {}, call, keeper: async () => ({}), hollowsTransit, pitExit, pitApproach, pitHop };
     };
     const runOne = async (a, params) => {
       const ctx = ctxOf(a), b = P.bodies[a];
@@ -494,8 +501,20 @@ try {
     assert.deepEqual(P.deposits.sort(), ['mystic sword', 'orc pit boss head'], JSON.stringify({ d: P.deposits, packs: P.packs }));
     assert.ok(!Object.values(P.packs).some(p => p.some(i => i.name === 'orc pit boss head')));
     assert.deepEqual(P.hollows, ['ta'], 'only chamber A crosses the Hollows north edge, once');
+    assert.deepEqual((P.approaches ?? []).sort(), ['ta:A', 'tb:B', 'tc:B', 'td:B'], 'every body walks back to its own chamber');
     assert.deepEqual((P.exits ?? []).sort(), ['ta:A:squares', 'tb:B:squares', 'tc:B:squares', 'td:B:squares'], 'every body leaves its chamber after the lever, on the squares floors');
     assert.ok(inBossArea({ room: { num: 2506 }, you: { row: 30 } }) && !inBossArea({ room: { num: 2506 }, you: { row: 50 } }));
+  });
+
+  await test('pit reenter: from the lair, all step out to 2507, wait the reset clock together, walk back in, take the next head', async () => {
+    const { P, team, runOne } = pitWorld({ start: 2506 });
+    const t0 = Date.now();
+    const out = await Promise.all(team.map(a => runOne(a, { mode: 'reenter', resetWaitMs: 150 })));
+    for (const [i, o] of out.entries()) assert.equal(o.failure, null, `${team[i]}: ${JSON.stringify(o.failure)}`);
+    assert.deepEqual((P.hops ?? []).sort(), team.map(a => `${a}:2506->2507`), 'each body stepped out once, to the north body');
+    assert.ok(Date.now() - t0 >= 150, 'and nobody walked back in before the reset clock');
+    assert.equal(P.leverPulled, 0, 'no puzzle on re-entry');
+    assert.deepEqual(P.deposits.sort(), ['mystic sword', 'orc pit boss head']);
   });
 
   await test('pit: one body off its square stops the whole team before the lever', async () => {

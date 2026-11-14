@@ -35,9 +35,16 @@ import { walk, walkTo, crawlTo, verify, harvest } from '../m59-fleetscript.mjs';
 import { depositWithRecovery } from '../m59-hall-access.mjs';
 import { postureStep, restorePostureStep } from '../m59-errand-posture.mjs';
 import { ROOMS, PIT, ITEMS, pitRoles, inChamber, onMarked, teamMark, teamRead, teamWait, teamForget } from '../m59-riija.mjs';
-import { enterGrogsAntechamber } from '../m59-island-route.mjs';
+import { enterGrogsAntechamber, ordinaryHop } from '../m59-island-route.mjs';
 import { readIslandFinePosition } from '../m59-island-finewalk.mjs';
-import { leaveChamber } from '../m59-orc-pit-exit.mjs';
+import { leaveChamber, approachChamber, chamberReachers } from '../m59-orc-pit-exit.mjs';
+
+// Every room on the way back to a chamber (approachChamber); a start anywhere else walks to 2501 first.
+const APPROACH_ROOMS = [2500, 2501, 2502, 2506, 2507, 2508, 2509];
+// orcpit1.kod:61 viBossResetTime = 20000 (overriding bossroom.kod's 30 min): once the boss is dead,
+// the LAST user leaving 2506 starts a 20 s timer and the FIRST user entering after it resets the boss
+// (bossroom.kod LastUserLeft / FirstUserEntered). Plus a margin for the clocks.
+export const BOSS_RESET_WAIT_MS = 30_000;
 
 const TAG = 'riija-pitboss';
 const A = s => ({ ...s, anywhere: true });
@@ -75,6 +82,9 @@ export const script = {
     alsoStow: { type: 'string', default: 'mystic sword', describe: 'other boss loot to pick up and stow (comma list of names)' },
     waitMin: { type: 'number', default: 15, describe: 'how long a body waits at a barrier for the rest of the team' },
     fightMin: { type: 'number', default: 20, describe: 'minutes of farm posture on the boss' },
+    mode: { type: 'string', default: 'puzzle', options: ['puzzle', 'reenter'], describe: 'puzzle: solve the chambers; reenter: from the lair or an antechamber north body, step out, wait for the boss reset, step back in' },
+    after: { type: 'string', default: 'stay', options: ['stay', 'restore'], describe: 'stay: a body in 2506 at the end keeps its posture there (mode=reenter takes the next head); restore: put the old posture back' },
+    resetWaitMs: { type: 'number', default: 30_000, describe: 'how long after the last body leaves 2506 to re-enter (boss reset is 20 s, orcpit1.kod:61)' },
     home: { type: 'room', default: 0, describe: 'where non-holders (and the holder, after stowing) walk afterwards (0 = stay)' },
     minHealth: { type: 'number', default: 0.9 },
     fleeBelow: { type: 'number', default: 0.3 }, restBelow: { type: 'number', default: 0.4 },
@@ -83,7 +93,11 @@ export const script = {
   async steps(p) {
     const team = list(p.agents);
     const me = p.agent ?? team[0];
-    const roles = pitRoles(team, { lever: p.lever || null, solution: p.solution ?? 'squares' });
+    const reenter = (p.mode ?? 'puzzle') === 'reenter';
+    // Re-entry solves nothing, so any team size will do; every body steps out to 2507's north body.
+    // room is where the posture holds the body while it waits OUT of the lair: 2507's north body.
+    const roles = reenter ? team.map((agent, i) => ({ agent, side: 'A', room: ROOMS.pitA, row: 0, col: 0, lever: i === 0 }))
+      : pitRoles(team, { lever: p.lever || null, solution: p.solution ?? 'squares' });
     const role = roles.find(r => r.agent === me);
     if (!role) throw Error(`${me} is not on the team ${team.join(',')}`);
     const puller = roles.find(r => r.lever).agent;
@@ -103,18 +117,49 @@ export const script = {
           (role.lever ? ', pulls the lever' : '') + (isHolder ? ', holds the head' : '') };
       }, 'take a place on the team')),
       A(postureStep(TAG, role.room, { fleeBelow: p.fleeBelow, restBelow: p.restBelow, fightBack: true }, 'the pit chamber')),
-      // Chamber A's room has one cave-side door, the Archaic Hollows' NORTH edge, on an upper shelf
-      // `travel` cannot plan to from the lower Hollows (it bounced 25 hops, 2026-11-14). The island's
-      // admitted Hollows transit takes it: tools/m59-island-route.mjs enterGrogsAntechamber.
-      ...(role.side === 'A' ? [
-        walk(st => [2502, ROOMS.pitA].includes(st.startRoom) ? st.startRoom : 2501,
-          { candidates: [2501, 2502, ROOMS.pitA], why: 'the Hollows transit starts in 2501 or 2502' }),
-        verify(async ctx => {
-          try { return await enterGrogsAntechamber(ctx, { budgetMs: 240_000, transit: ctx.hollowsTransit }); }   // undefined: the real admitted transit
-          catch (e) { return abort(ctx.agent, `Hollows north transit to ${ROOMS.pitA}: ${e.message}`); }
-        }, "over the Hollows' north edge"),
-      ] : []),
-      walk(role.room, { why: `the ${role.side === 'A' ? "Grog's" : "Brog's"} Antechamber` }),
+      ...(reenter ? [
+      // RE-ENTRY: the boss resets on the first entry 20 s after the last user left (orcpit1.kod:61),
+      // and 2507's north body is one edge away and back (2506 west below row 42 / 2507 east). So no
+      // puzzle: everyone steps out there, waits out the clock together, and walks back in.
+      A(verify(async ctx => {
+        const { agent, call } = ctx;
+        const v = await call('look', { agent }, 30_000).catch(() => null);
+        const room = roomOf(v), at = v?.you ?? {};
+        const hop = ctx.pitHop ?? (to => ordinaryHop(ctx, to, { budgetMs: 120_000, recoverAtEntry: true }));
+        if (room === ROOMS.pit) {
+          const leg = await hop(ROOMS.pitA).catch(e => ({ ok: false, reason: e.message }));
+          if (leg?.ok === false) return abort(agent, `out of the lair: ${leg.reason ?? 'hop failed'}`);
+        } else if (![ROOMS.pitA, ROOMS.pitB].includes(room) ||
+                   chamberReachers(room === ROOMS.pitA ? 'A' : 'B').has(`${at.row},${at.col}`))
+          return abort(agent, `mode=reenter starts in 2506 or an antechamber's north body, not ${room} r${at.row}c${at.col}`);
+        teamMark(key, agent, 'out');
+        return { ok: true, out: 'of the lair' };
+      }, 'out of the lair, so the boss can reset')),
+      A(verify(async ({ agent, state }) => {
+        const r = await teamWait(key, team, 'out', { since: state.pitSince ?? 0, budgetMs: waitMs });
+        if (!r.ok) return abort(agent, r.why);
+        const last = Math.max(...team.map(a => teamRead(key, a, 'out')?.at ?? 0));
+        const wait = last + Number(p.resetWaitMs ?? BOSS_RESET_WAIT_MS) - Date.now();
+        if (wait > 0) await new Promise(res => setTimeout(res, wait));
+        return { ok: true, waited_ms: Math.max(0, wait) };
+      }, 'the whole team out, then the boss reset clock')),
+      walk(ROOMS.pit, { why: 'back into the lair; the first entry resets the boss' }),
+      ] : [
+      // BACK TO THE CHAMBER FROM WHEREVER THE LAST RUN LEFT THE BODY. Both antechambers drain into a
+      // north body that reaches only the lair, and the lair's own exits drain to the caves, so the way
+      // back is 2506 -> 2509 -> 2500 -> 2501, then 2501's north edge (B) or the Hollows transit (A).
+      // `walk(2507)` from the lair landed Zoot in 2507's north body at r35c27 (2026-11-14), where no
+      // walk reaches r83c25. approachChamber hops one room at a time until the body can walk there.
+      walk(st => APPROACH_ROOMS.includes(st.startRoom) ? st.startRoom : 2501,
+        { candidates: [2501, ...APPROACH_ROOMS], why: 'the way back to a chamber starts in the Orc Caves' }),
+      verify(async ctx => {
+        try {
+          return await (ctx.pitApproach ?? approachChamber)(ctx, role.side, {
+            look: () => ctx.call('look', { agent: ctx.agent }, 30_000),
+            hop: to => ordinaryHop(ctx, to, { budgetMs: 240_000, recoverAtEntry: true }),
+            transit: () => enterGrogsAntechamber(ctx, { budgetMs: 240_000, transit: ctx.hollowsTransit }) });   // undefined: the real admitted transit
+        } catch (e) { return abort(ctx.agent, `back to chamber ${role.side}: ${e.message}`); }
+      }, 'to a square that can walk to the chamber'),
       { ...walkTo(role.col, role.row, { within: 0, arriveWithin: 0, deadlineMs: 180_000, stallMs: 25_000 }), room: role.room, optional: true },
       crawlTo(role.col, role.row, { within: 0, optional: true, maxSteps: 40, deadlineMs: 240_000, room: role.room }),
       A(verify(async ({ agent, call }) => {
@@ -164,6 +209,7 @@ export const script = {
         } catch (e) { return abort(ctx.agent, `off chamber ${role.side}: ${e.message}`); }
       }, 'off the chamber onto its spoke while the floor is moved')),
       walk(ROOMS.pit, { why: 'the Lair of the Orc Pit Boss, from the spoke' }),
+      ]),
       A(verify(async ({ agent, call, state }) => {
         const v = await call('look', { agent }, 30_000).catch(() => null);
         if (!inBossArea(v)) return abort(agent, `not in the boss area of 2506 (at ${roomOf(v)} r${v?.you?.row}c${v?.you?.col})`);
@@ -171,6 +217,10 @@ export const script = {
         const r = await teamWait(key, team, 'inside', { since: state.pitSince ?? 0, budgetMs: 3 * 60_000 });
         return r.ok ? { ok: true, team: 'all inside' } : abort(agent, r.why);
       }, 'in the boss area, together')),
+      // POINT THE KEEPER AT THE LAIR. Its posture still named the chamber's room, so whatever ran after
+      // the fight -- the harvest handing the body back, a survive posture -- walked it 'home' to 2507,
+      // which from here is the north body (Zoot at r35c27, 2026-11-14 09:58Z).
+      A(postureStep(TAG, ROOMS.pit, { fleeBelow: p.fleeBelow, restBelow: p.restBelow, fightBack: true }, 'the boss lair')),
       // THE FIGHT: one posture covers the boss and the body it leaves ("...orc pit boss" both).
       { ...harvest({ quarry: ['orc pit boss'], room: ROOMS.pit, forMs: Number(p.fightMin) * 60_000,
         until: async ({ agent, call, state }) => {
@@ -208,7 +258,17 @@ export const script = {
     }
     // The marks are NOT forgotten here: an abort has to stay visible to bodies still waiting on it.
     // The next run's own start clears this agent, and `since` ignores everything older than that.
-    steps.push(restorePostureStep(TAG));
+    // STAY OR RESTORE. A body still in the lair keeps the posture that holds it there (after=stay),
+    // because the posture it came with may name a room it can only reach by a long walk, or never
+    // (a chamber's room from here is its north body). mode=reenter then takes the next head.
+    const restore = restorePostureStep(TAG);
+    steps.push({ ...verify(async ctx => {
+      if ((p.after ?? 'stay') === 'stay') {
+        const v = await ctx.call('look', { agent: ctx.agent }, 30_000).catch(() => null);
+        if (roomOf(v) === ROOMS.pit) return { ok: true, stayed: 'in the lair, posture held on 2506; mode=reenter takes the next head' };
+      }
+      return restore.fn(ctx);
+    }, "could not put the keeper's posture back"), always: true });
     if (Number(p.home) > 0) steps.push({ ...walk(Number(p.home)), always: true });
     return steps;
   },

@@ -95,6 +95,39 @@ The "through" step is two parts:
    the chamber onto a fixed spoke: A stops at r86c39, B at r41c28. Only this part races the 60 s.
 2. An ordinary `walk(2506)` from the spoke.
 
+**Both antechambers drain into a dead end next to the lair.**
+- 2507's route out of chamber A drops down one-way ledges: the 600 spoke, then 500, then 450 at
+  r57c37, 350 at r41c37 and 200 at r26c39. It ends in the room's north part (762 squares), whose
+  only exit is the east edge to 2506. 2506's west edge also lands there, at r7c61.
+- 2508 is the same shape: 2506's east edge lands at r8c4.
+
+So `walk(2507)` from the lair puts a body somewhere it can never walk to r83c25. That is how Zoot
+was left at r35c27 (09:58Z, 2026-11-14).
+
+**The way back to a chamber is one room at a time** (`approachChamber`, `tools/m59-orc-pit-exit.mjs`):
+
+1. 2506, then 2509, then 2500, then 2501.
+2. Then 2501's north edge into 2508's corridor (B), or the Hollows transit into 2507's corridor (A).
+3. Each corridor reaches its chamber through its ceiling door.
+
+The script starts every run from wherever the body is, using this route.
+
+**After the fight:**
+- Once inside, the keeper's posture is pointed at 2506.
+- With `after=stay` (the default), a body still in the lair keeps that posture, rather than going
+  back to one that names a room it cannot reach.
+
+**More heads (`mode=reenter`).** `orcpit1.kod:61` sets `viBossResetTime = 20000`, which overrides
+the 30 minutes in `bossroom.kod`. Once the boss is dead, the last user leaving 2506 starts a
+20-second timer, and the first user entering after it resets the boss (`LastUserLeft` /
+`FirstUserEntered`). So from the lair, `mode=reenter`:
+
+1. steps every body out to 2507's north part, one edge away;
+2. waits until the whole team is out, plus `resetWaitMs` (30 s);
+3. walks back in and fights again. No puzzle.
+
+Any team size works.
+
 **Quester.** It first draws a kit from 713 containing only what is certain to be needed: the head,
 the ore on the good side, and pies. Then it asks each NPC. Wulfgang's request line goes into the
 questbook (`substrate/questbook/<fleet>/`, gitignored) before anything else happens. The quester

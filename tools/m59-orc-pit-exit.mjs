@@ -85,3 +85,69 @@ export async function leaveChamber(ctx, side, solution = 'squares', { read, budg
   }
   return { ok: true, side, floor, stop: { row: l.you.row, col: l.you.col }, chords: plan.waypoints.length };
 }
+
+// ---------------------------------------------------------------- back to a chamber, from anywhere
+//
+// THE ANTECHAMBERS DRAIN INTO A SINK. 2507's route from chamber A to its east edge descends ledges
+// that cannot be climbed back (600 spoke -> 500 -> 450 at r57c37 -> 350 at r41c37 -> 200 at r26c39),
+// and the north body it ends in (762 squares, where 2506's west edge lands at r7c61) reaches
+// nothing but that edge. 2508 is the same shape (2506's east edge lands at r8c4). So a body in
+// 2506 or a north body can reach its chamber only the long way: 2506 -> 2509 -> 2500 -> 2501, then
+// 2501's north edge to 2508's corridor, or the Hollows transit to 2507's (2026-11-14 10:07Z: Zoot,
+// left at 2507 r35c27 by a cleanup, crawled row 35 toward r83c25 until his budget ran out).
+// Each corridor meets its chamber through the ceiling door the in-room walker already operates.
+export const CHAMBER_SQUARE = Object.freeze({ A: Object.freeze([83, 25]), B: Object.freeze([48, 27]) });
+const REACH = new Map();
+/** Squares of the chamber's room that can walk to the chamber, at rest with the corridor door open. */
+export function chamberReachers(side, { map = loadMap() } = {}) {
+  if (REACH.has(side)) return REACH.get(side);
+  const room = CHAMBER_ROOM[side];
+  const g = RoomGeometry.fromJSON(map.rooms[room].roo); g.roomNum = room;
+  applyCeilingDoors(map, room, new Map([[2, { height: 600, type: 5 }]]), null, { geometryOf: () => g });
+  const [r0, c0] = CHAMBER_SQUARE[side], seen = new Set([r0 + ',' + c0]), q = [[r0, c0]];
+  const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];
+  while (q.length) {
+    const [r, c] = q.shift();
+    for (const [dr, dc] of dirs) {
+      const nr = r + dr, nc = c + dc, k = nr + ',' + nc;
+      if (nr < 1 || nc < 1 || nr > g.rows || nc > g.cols || seen.has(k)) continue;
+      let s = false; try { s = g.moverStepLands(nr, nc, r, c); } catch {}
+      if (s) { seen.add(k); q.push([nr, nc]); }
+    }
+  }
+  REACH.set(side, seen);
+  return seen;
+}
+
+/** The next room on the way back to `side`'s chamber, or 'there' / 'transit' / null (not on the map). */
+export function nextTowardChamber(side, room, row, col) {
+  const own = CHAMBER_ROOM[side], other = side === 'A' ? 'B' : 'A';
+  if (room === own) return chamberReachers(side).has(`${row},${col}`) ? 'there' : 2506;
+  if (room === CHAMBER_ROOM[other])
+    // The other antechamber: its corridor drains to the caves, its north body to the lair.
+    return chamberReachers(other).has(`${row},${col}`) ? (other === 'A' ? 2502 : 2501) : 2506;
+  return { 2506: 2509, 2509: 2500, 2500: 2501, 2501: side === 'A' ? 2502 : 2508,
+           2502: side === 'A' ? 'transit' : 2501 }[room] ?? null;
+}
+
+/**
+ * Walk one hop at a time until the body stands where its chamber can be walked to. `hop(to)` is a
+ * one-room crossing (island-route ordinaryHop), `transit()` the admitted Hollows north transit.
+ */
+export async function approachChamber(ctx, side, { look, hop, transit, maxHops = 10 } = {}) {
+  const path = [];
+  for (let i = 0; i <= maxHops; i++) {
+    const l = await look();
+    const room = Number(l?.room?.num), at = l?.you ?? {};
+    const next = nextTowardChamber(side, room, Number(at.row), Number(at.col));
+    if (next === 'there') return { ok: true, room, at: `r${at.row}c${at.col}`, path };
+    if (next == null) throw Error(`orc_pit_approach_from_room_${room}`);
+    path.push(next);
+    if (next === 'transit') await transit();
+    else {
+      const leg = await hop(next);
+      if (leg && leg.ok === false) throw Error(`orc_pit_approach_hop_${room}_to_${next}_${leg.reason ?? 'failed'}`);
+    }
+  }
+  throw Error('orc_pit_approach_hop_budget');
+}

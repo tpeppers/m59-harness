@@ -24,7 +24,7 @@ import { loadMap } from './m59-map.mjs';
 import { applyCeilingDoors } from './m59-ceiling-doors.mjs';
 import { sectorsInSource, callHeightsInSource, messageParams, constantsInSource } from './m59-varsectors.mjs';
 import { PIT, pitRoles } from './m59-riija.mjs';
-import { planChamberExit, leaveChamber, solvedGeometry, SPOKE_STOP, SOLVED_FLOORS } from './m59-orc-pit-exit.mjs';
+import { planChamberExit, leaveChamber, solvedGeometry, SPOKE_STOP, SOLVED_FLOORS, chamberReachers, nextTowardChamber, approachChamber } from './m59-orc-pit-exit.mjs';
 import { protocolToClient } from './m59-finepos.mjs';
 
 let passed = 0; const ok = (c, m) => { assert.ok(c, m); passed++; }; const eq = (a, b, m) => { assert.deepEqual(a, b, m); passed++; };
@@ -143,6 +143,45 @@ ok(!planChamberExit('A', SOLVED_FLOORS.plain.A, kod(86, 25)).ok, "plain: chamber
     /orc_pit_floor_not_250_saw_500/); passed++;
   await assert.rejects(leaveChamber(ctx, 'A', 'squares', { read: async () => ({ room: { num: 2508 }, you: body }), pollMs: 1 }),
     /orc_pit_left_room_2507_for_2508/); passed++;
+}
+
+// 7. THE SINK, and the way back from it (2026-11-14 10:07Z: Zoot at 2507 r35c27).
+{
+  const north = flood(observedAt(2507, null).g, 35, 27);
+  for (const [f1, door] of [[null, null], [null, 600], [600, null], [900, null]]) {
+    const g = RoomGeometry.fromJSON(map.rooms[2507].roo); g.roomNum = 2507;
+    const o = new Map(); if (f1 != null) o.set(1, { height: f1, type: 4 }); if (door != null) o.set(2, { height: door, type: 5 });
+    applyCeilingDoors(map, 2507, o, null, { geometryOf: () => g });
+    const F = flood(g, 35, 27);
+    ok(F.has(exitA) && !F.has('83,25') && !F.has('164,25'), `2507 r35c27 (floor ${f1 ?? 500}, door ${door ?? 500}): only the east edge, never the chamber or the corridor`);
+  }
+  ok(north.size === flood(observedAt(2507, null).g, 6, 61).size, "r35c27 is the north body 2506's west edge lands in");
+  ok(!chamberReachers('A').has('35,27') && chamberReachers('A').has('164,25') && chamberReachers('A').has('86,39'),
+    'chamber A is walkable from its corridor arrival and its spoke, not from the north body');
+  ok(chamberReachers('B').has('125,29') && !chamberReachers('B').has('8,4'), "chamber B likewise: 2501's arrival yes, 2506's arrival no");
+  // The chain's rooms, each crossing on the mover's own mask from where the previous one lands.
+  const reaches = (n, from, to) => flood(observedAt(n, null).g, ...from).has(to);
+  ok(reaches(2506, [35, 5], '57,1'), '2506: from 2507-east arrival r35c5 to the west edge below row 42 (to 2509)');
+  ok(reaches(2506, [8, 66], '57,1') || reaches(2506, [35, 67], '57,1'), '2506: from 2508-west arrival to the same edge');
+  ok(reaches(2509, [18, 43], '105,43'), '2509: from 2506 arrival r18c43 to the east edge to 2500');
+  ok(reaches(2500, [23, 2], '1,27'), '2500: from 2509 arrival to the north edge to 2501');
+  ok(reaches(2501, [59, 6], '31,1') && reaches(2501, [59, 6], '1,13'), '2501: to the west edge (2502) and the north edge (2508)');
+  const chain = (side, room, at) => { const out = []; let r = room, pos = at;
+    for (let i = 0; i < 10; i++) { const n = nextTowardChamber(side, r, ...pos); out.push(n); if (n === 'there' || n === 'transit' || n == null) break;
+      r = n; pos = { 2506: [35, 5], 2509: [18, 43], 2500: [23, 2], 2501: [59, 6], 2502: [48, 77], 2508: [125, 29] }[n]; }
+    return out; };
+  eq(chain('A', 2507, [35, 27]), [2506, 2509, 2500, 2501, 2502, 'transit'], 'A from the north body: the long way round, then the Hollows');
+  eq(chain('B', 2507, [35, 27]), [2506, 2509, 2500, 2501, 2508, 'there'], "B from 2507's north body: 2501's north edge into 2508's corridor");
+  eq(chain('B', 2508, [8, 4]), [2506, 2509, 2500, 2501, 2508, 'there'], "B from 2508's north body");
+  eq(nextTowardChamber('A', 2507, 164, 25), 'there', 'A in its corridor is there');
+  eq(nextTowardChamber('A', 3, 1, 1), null, 'outside the caves the caller walks to 2501 first');
+  const hops = [], room = { v: 2507, at: { row: 35, col: 27 } };
+  const r = await approachChamber({}, 'A', { look: async () => ({ room: { num: room.v }, you: room.at }),
+    hop: async to => { hops.push(to); room.v = to; room.at = { 2506: { row: 35, col: 5 }, 2509: { row: 18, col: 43 }, 2500: { row: 23, col: 2 }, 2501: { row: 59, col: 6 }, 2502: { row: 48, col: 77 } }[to]; return { ok: true }; },
+    transit: async () => { hops.push('transit'); room.v = 2507; room.at = { row: 164, col: 25 }; } });
+  ok(r.ok, 'approachChamber arrives'); eq(hops, [2506, 2509, 2500, 2501, 2502, 'transit'], 'by those hops');
+  await assert.rejects(approachChamber({}, 'A', { look: async () => ({ room: { num: 2507 }, you: { row: 35, col: 27 } }), hop: async () => ({ ok: false, reason: 'budget' }) }),
+    /orc_pit_approach_hop_2507_to_2506_budget/); passed++;
 }
 
 console.log(`m59-orc-pit-floors-test: ${passed} passed`);
