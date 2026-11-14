@@ -422,7 +422,7 @@ try {
             const objects = [];
             if (b.room === 2508) objects.push({ id: 900, name: 'lever', row: 48, col: 29 });
             for (const f of P.floor[b.room] ?? []) objects.push({ ...f, row: b.row, col: b.col });
-            return { room: { num: b.room }, you: { row: b.row, col: b.col }, objects };
+            return { room: { num: b.room }, you: { row: b.row, col: b.col }, hp: { value: 100, max: 100 }, objects };
           }
           case 'inventory': return { items: P.packs[a].map(i => ({ ...i })) };
           case 'wait_for_event': {
@@ -442,7 +442,13 @@ try {
           default: throw Error(`unexpected pit call ${name}`);
         }
       };
-      return { agent: a, fleet: 'offline', state: {}, call, keeper: async () => ({}) };
+      // Chamber A's agent crosses the Hollows' north edge by the admitted island transit, which is
+      // pinned in m59-hollows-north-test; here it only has to start in 2501/2502 and end in 2507.
+      const hollowsTransit = async (_ctx, o) => {
+        if (![2501, 2502].includes(b.room) || o.room !== 2502 || o.to !== 2507) throw Error(`bad Hollows transit from ${b.room}`);
+        P.hollows = [...(P.hollows ?? []), a]; b.room = o.to; return { enter: { ok: true }, leave: { ok: true } };
+      };
+      return { agent: a, fleet: 'offline', state: {}, call, keeper: async () => ({}), hollowsTransit };
     };
     const runOne = async (a, params) => {
       const ctx = ctxOf(a), b = P.bodies[a];
@@ -450,7 +456,7 @@ try {
         alsoStow: 'mystic sword', waitMin: 0.2, fightMin: 1, home: 0, fleeBelow: 0.3, restBelow: 0.4, ...params });
       return runPlan(plan, () => ctx, async s => {
         switch (s.do) {
-          case 'walk': b.room = Number(s.to); if (b.room === 2506) { b.row = 30; b.col = 40; } return { ok: true };
+          case 'walk': b.room = Number(typeof s.to === 'function' ? s.to(ctx.state) : s.to); if (b.room === 2506) { b.row = 30; b.col = 40; } return { ok: true };
           case 'walk_to': case 'crawl_to':
             if (misplace === a) { b.row = 5; b.col = 5; return { ok: true }; }
             b.row = s.row; b.col = s.col; return { ok: true };
@@ -477,6 +483,7 @@ try {
     assert.equal(P.leverPulled, 1, 'exactly one lever pull');
     assert.deepEqual(P.deposits.sort(), ['mystic sword', 'orc pit boss head'], JSON.stringify({ d: P.deposits, packs: P.packs }));
     assert.ok(!Object.values(P.packs).some(p => p.some(i => i.name === 'orc pit boss head')));
+    assert.deepEqual(P.hollows, ['ta'], 'only chamber A crosses the Hollows north edge, once');
     assert.ok(inBossArea({ room: { num: 2506 }, you: { row: 30 } }) && !inBossArea({ room: { num: 2506 }, you: { row: 50 } }));
   });
 

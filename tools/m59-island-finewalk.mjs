@@ -232,6 +232,25 @@ export const HOLLOWS_OUT_POINTS=[
   {x:3991,y:1160}, // after the eastward drop, r18c62
   {x:4968,y:649},  // northern east exit approach, r10c77
 ];
+// THE NORTH EDGE TO GROG'S ANTECHAMBER (2507) IS ON THE SAME UPPER SHELF. orccave3.kod:68 leaves
+// 2502 NORTH to RID_ORC_PIT_A, and orcpita.kod:70 lands its southbound travellers at r3c41: the
+// top of a one-to-three-square corridor at floor 9600 that runs from r16 to the room's north
+// edge. That corridor is reached only from the upper passage HOLLOWS_OUT_POINTS[3] (r16c37), so
+// the walk is the same cavern, jump and western climb as the 2503 exit, then north instead of
+// east. The lower Hollows (4800-8000) has no climb to 9600: every step from it onto the shelf is
+// a drop the other way, and its 145 bridge (r42/r43 c44-51) lies between square centres, so the
+// coarse router cannot plan it and `travel` to 2507 from the lower body only bounces.
+export const HOLLOWS_NORTH_POINTS=[
+  {x:2656,y:1056}, // mouth of the north corridor, r16c41, floor 9600
+  {x:2656,y:224},  // north edge approach, r3c41 -- where orcpita.kod:70 lands a traveller from 2507
+];
+// Which points walkHollowsOut follows after the declared crossing, and which edge the last
+// one may border. Only the two exits on the upper shelf are served.
+export function hollowsOutLeg(to=2503){
+  if(to===2503)return {points:HOLLOWS_OUT_POINTS.slice(1),allowEdgeTo:2503};
+  if(to===2507)return {points:[...HOLLOWS_OUT_POINTS.slice(1,4),...HOLLOWS_NORTH_POINTS],allowEdgeTo:2507};
+  throw Error('hollows_exit_not_on_upper_shelf_'+to);
+}
 export function shelteredIslandAim(waypoints,body,{fromIndex=0,aim,squares,edge,cost=null}={}){
   if(!aim||!squares?.size)return aim;
   const prices=new Map();let accumulated=0,previous=body;
@@ -415,7 +434,7 @@ async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,on
   throw Error('fine_route_budget');
 }
 export async function walkHollowsOut(ctx,options={}){
-  const {agent,call}=ctx;
+  const {agent,call}=ctx,leg=hollowsOutLeg(options.to??2503);
   const deadline=Date.now()+(options.budgetMs??180000);
   const remaining=()=>({...options,room:2502,budgetMs:Math.max(1,deadline-Date.now())});
   // Wait at a real wall behind the approach. Followers must not occupy the
@@ -476,9 +495,9 @@ export async function walkHollowsOut(ctx,options={}){
     const l=await read();return {l,body:protocolToClient(l.you)};
    },protocolToClient(landing),{attempts:8,settleMs:100})).l,
   });
-  const points=HOLLOWS_OUT_POINTS.slice(1);
+  const points=leg.points;
   for(const [i,point] of points.entries()){
-    await checkedIslandWalk(ctx,point,{...remaining(),guideNext:points[i+1]??null,...(point===HOLLOWS_OUT_POINTS.at(-1)?{allowEdgeTo:2503}:{})});
+    await checkedIslandWalk(ctx,point,{...remaining(),guideNext:points[i+1]??null,...(point===points.at(-1)?{allowEdgeTo:leg.allowEdgeTo}:{})});
     console.log('HOLLOWS POINT '+JSON.stringify({agent,target:point}));
   }
 }

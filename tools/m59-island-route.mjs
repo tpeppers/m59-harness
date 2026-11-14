@@ -207,7 +207,8 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
     }
   }
   if(first.room?.num===27&&to===2500)await approachMainlandCaveExit(ctx,{budgetMs,onSample:sample});
-  if(first.room?.num===2502&&to===2503)await walkHollowsOut(ctx,{budgetMs,onSample:sample});
+  // Both exits on the Hollows' upper shelf: 2503 for the island, 2507 (Grog's Antechamber) for the orc pit.
+  if(first.room?.num===2502&&(to===2503||to===2507))await walkHollowsOut(ctx,{budgetMs,onSample:sample,to});
   if(first.room?.num===2505&&to===2000)await approachIslandDoor(ctx,{budgetMs,onSample:sample});
   if(first.room?.num===2505&&to===2504)await approachKonimaMainland(ctx,{budgetMs,onSample:sample});
   // Both mainland exits are detours from this measured cave expedition.
@@ -376,6 +377,22 @@ async function admittedIslandTransitWithinBudget(ctx,{from,to,room=2505,budgetMs
 // +40 a drink), and steps back to 2504. Free vigor, and the cure for the departure deadlock: a rider at 82 vigor with no
 // food can never rest up to the 120 the departure gate wants (Waldorf, 2026-10-26 08:10Z). A failed side trip is
 // recorded and the walk goes on from 2504; failing to get BACK to 2504 is the one thing that stops it.
+// GROG'S ANTECHAMBER (2507) FROM THE ORC CAVES. Its only door from the caves is the Archaic
+// Hollows' NORTH edge (orccave3.kod:68), on the same upper shelf as the 2503 exit, so `travel`
+// alone cannot reach it from the lower Hollows (the router bounces and gives up after 25 hops).
+// This is the island's own admitted 2502 transit with the north exit: one traveller at a time
+// through the takeoff corridor, the declared r40c33 > r40c29 crossing, the western climb, then
+// north up the 9600 corridor to r3c41 and a one-hop travel over the edge. The caller stands in
+// 2501 or 2502; arriving there is an ordinary walk.
+export const GROG_ANTECHAMBER=2507;
+export async function enterGrogsAntechamber(ctx,{budgetMs=180000,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,transit=admittedIslandTransit}={}){
+  const here=(await observeIslandTraveller(ctx,()=>ctx.call('look',{agent:ctx.agent}))).room?.num;
+  if(here===GROG_ANTECHAMBER)return {ok:true,already:true};
+  if(here!==2501&&here!==2502)throw Error('grog_antechamber_requires_room_2501_or_2502_not_'+here);
+  ctx.state??={};ctx.state.islandCancelFence??=Date.now();
+  const legs=await transit(ctx,{from:2501,to:GROG_ANTECHAMBER,room:2502,budgetMs,queueBudgetMs});
+  return {ok:true,...legs};
+}
 export const POOL_ROOM=2510,POOL_SIDE_ROOM=2504;
 export async function topUpAtPool(ctx,record,save,{target=200,budgetMs=180000}={}){
   const {agent,call}=ctx,vigorOf=l=>Number(l?.vigor?.value??l?.vigor);

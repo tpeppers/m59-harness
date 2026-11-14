@@ -120,7 +120,10 @@ zero new regressions and the existing baseline failures unchanged.
 2501, the Archaic Hollows (2502), 2503, 2504, Konima's Ascension (2505), and
 Ko'catan (2000). The return uses those maps in reverse order, with different
 paths inside them. The Hollows' northern east exit is reached through the
-small western cavern and its climb. The return takes the lower east exit;
+small western cavern and its climb. The north edge to Grog's Antechamber (2507,
+`orccave3.kod:68`) is on the same upper shelf: `walkHollowsOut(ctx,{to:2507})` follows
+the same points to the upper passage (r16c37), then `HOLLOWS_NORTH_POINTS` up the level
+9600 corridor to r3c41 (guides `north_out_1`/`north_out_2`). The return takes the lower east exit;
 it does not attempt to reverse the outward fall.
 Takeoff refinement and recovery now use the shared declared-crossing controller.
 A live-body refusal waits at a nearby unoccupied reversible refuge, and an

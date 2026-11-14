@@ -35,6 +35,7 @@ import { walk, walkTo, crawlTo, verify, harvest } from '../m59-fleetscript.mjs';
 import { depositWithRecovery } from '../m59-hall-access.mjs';
 import { postureStep, restorePostureStep } from '../m59-errand-posture.mjs';
 import { ROOMS, PIT, ITEMS, pitRoles, inChamber, onMarked, teamMark, teamRead, teamWait, teamForget } from '../m59-riija.mjs';
+import { enterGrogsAntechamber } from '../m59-island-route.mjs';
 
 const TAG = 'riija-pitboss';
 const A = s => ({ ...s, anywhere: true });
@@ -49,7 +50,8 @@ export const script = {
   name: 'riija-pitboss',
   describe: 'A team of 3-5 solves the orc-pit chamber puzzle, kills the orc pit boss and its body, and stows the head in hall 713.',
   provenance: { pinned: '019bf448', verified: '2026-11-13', refuseOnDrift: false,
-    touches: ['tools/m59-fleetscript.mjs', 'tools/m59-hall-access.mjs', 'tools/m59-riija.mjs', 'tools/m59-errand-posture.mjs'] },
+    touches: ['tools/m59-fleetscript.mjs', 'tools/m59-hall-access.mjs', 'tools/m59-riija.mjs', 'tools/m59-errand-posture.mjs',
+      'tools/m59-island-route.mjs', 'tools/m59-island-finewalk.mjs'] },
   recipe: {
     effect: 'An "orc pit boss head" in the holder\'s pack, then in the chests of hall 713 (and a mystic sword if one dropped).',
     run: 'riija-pitboss agents=<a>,<b1>,<b2>,<b3> [lever=<b1>] [holder=<a>] [stow=hall]',
@@ -98,6 +100,17 @@ export const script = {
           (role.lever ? ', pulls the lever' : '') + (isHolder ? ', holds the head' : '') };
       }, 'take a place on the team')),
       A(postureStep(TAG, role.room, { fleeBelow: p.fleeBelow, restBelow: p.restBelow, fightBack: true }, 'the pit chamber')),
+      // Chamber A's room has one cave-side door, the Archaic Hollows' NORTH edge, on an upper shelf
+      // `travel` cannot plan to from the lower Hollows (it bounced 25 hops, 2026-11-14). The island's
+      // admitted Hollows transit takes it: tools/m59-island-route.mjs enterGrogsAntechamber.
+      ...(role.side === 'A' ? [
+        walk(st => [2502, ROOMS.pitA].includes(st.startRoom) ? st.startRoom : 2501,
+          { candidates: [2501, 2502, ROOMS.pitA], why: 'the Hollows transit starts in 2501 or 2502' }),
+        verify(async ctx => {
+          try { return await enterGrogsAntechamber(ctx, { budgetMs: 240_000, transit: ctx.hollowsTransit }); }   // undefined: the real admitted transit
+          catch (e) { return abort(ctx.agent, `Hollows north transit to ${ROOMS.pitA}: ${e.message}`); }
+        }, "over the Hollows' north edge"),
+      ] : []),
       walk(role.room, { why: `the ${role.side === 'A' ? "Grog's" : "Brog's"} Antechamber` }),
       { ...walkTo(role.col, role.row, { within: 0, arriveWithin: 0, deadlineMs: 180_000, stallMs: 25_000 }), room: role.room, optional: true },
       crawlTo(role.col, role.row, { within: 0, optional: true, maxSteps: 40, deadlineMs: 240_000, room: role.room }),

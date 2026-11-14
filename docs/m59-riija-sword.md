@@ -46,6 +46,17 @@ on the good side, `queenPies` spare pies, and the head. Each lap fetches at most
 Use `skip=elderberry` (any manifest key) to fetch a row only when it is asked for. The courier must
 be able to enter 713, which means being a guild member or ally of rank sir or higher.
 
+**Getting to chamber A.** Grog's Antechamber (2507) has one door from the caves: the Archaic
+Hollows' (2502) **north** edge (`orccave3.kod:68`, landing r164c25; the way back, `orcpita.kod:70`,
+lands r3c41). Brog's (2508) is entered the same way over 2501's north edge (`orccave2.kod:67`).
+The Hollows' north edge is the top of a corridor on its upper shelf (floor 9600), which the lower
+Hollows cannot climb to, so `travel 2507` from where 2501 lets you in bounces and gives up after
+25 hops. Chamber A's agent therefore takes the island's admitted Hollows transit and turns north at
+the upper passage (`enterGrogsAntechamber`, `tools/m59-island-route.mjs`; `grog-antechamber
+agents=<a>` on its own). It needs running vigor for the declared r40c33 > r40c29 crossing. Inside
+2507 the corridor meets the chamber only through a ceiling-lift door at r92 that a `go` from
+r93c24-26 opens for 60 s (`orcpita.kod:76-85`); that door is not yet confirmed live.
+
 **Pit boss.** The lever at 2508 r48c29 solves the puzzle when the users in chamber A (2507) and
 chamber B (2508) satisfy the kod's arithmetic: `A*3=B`, `A*2=B` or `A*2=B*3`, which is 1:3, 1:2 or
 **3:2**. The kod comment's "2/3" is wrong, and 2:3 does not solve. Every user counts, so a stranger
@@ -82,6 +93,7 @@ failure is loud: the step stops and says why.
 |---|---|
 | request-line wording after the client's markup | `readShipment` refuses, and the line stays in the questbook |
 | the chamber squares in `PIT` are standable | the team aborts before the lever |
+| the 2507 corridor door at r92 opens to a `go` from r93c24-26, and the chamber walk passes it | the walk stops short and the team aborts at the chamber check |
 | `walk(2506)` gets through while the floors are moved (the moving `SOLUTIONSECTOR` is not baked into `m59-variable-sectors.json`) | the walk is refused, and the team aborts at the boss-area check |
 | the keeper engages a level-115 boss, and an avar shaman on the evil route | `harvest` times out |
 | `loot` takes the head and the feather off the floor | the holder or quester check fails |

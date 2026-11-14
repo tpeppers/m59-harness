@@ -28,8 +28,8 @@ export const ROOMS = Object.freeze({
   inn: 2001,           // Moxal ix'Hanak, The Aerie Guest House (meat pies)
   feastHall: 953,      // The Duke's Feast Hall (duke4.kod): infinite grape and ale dispensers
   pit: 2506,           // Lair of the Orc Pit Boss (bossroom/orcpit1.kod)
-  pitA: 2507,          // Grog's Antechamber (orcpita.kod), entered from 2502 (south edge)
-  pitB: 2508,          // Brog's Antechamber (orcpitb.kod), entered from 2501 (south edge)
+  pitA: 2507,          // Grog's Antechamber (orcpita.kod), entered over 2502's NORTH edge (orccave3.kod:68), from its upper shelf
+  pitB: 2508,          // Brog's Antechamber (orcpitb.kod), entered over 2501's NORTH edge (orccave2.kod:67)
 });
 
 export const NPCS = Object.freeze({ trader: "Wulfgang zax'Ak", bowmaker: "Hanla zax'Ta",

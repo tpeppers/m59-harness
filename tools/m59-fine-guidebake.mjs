@@ -8,7 +8,7 @@ import {cutRail,chordWalkable} from './m59-railcut.mjs';
 import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
 import {STEP_MASK_VERSION} from './m59-roo.mjs';
 import {planRefugeStage} from './m59-fine-refuge-reach.mjs';
-import {HOLLOWS_OUT_POINTS} from './m59-island-finewalk.mjs';
+import {HOLLOWS_OUT_POINTS,HOLLOWS_NORTH_POINTS} from './m59-island-finewalk.mjs';
 import {fallJumpsIn} from './m59-falljump.mjs';
 const p=(row,col)=>({x:col*64+32,y:row*64+32});
 const specs=[{room:2505,walks:[
@@ -34,6 +34,8 @@ specs.push({room:2502,walks:[
  ['login_to_wait',p(49,52),hollowsStage.point],
  ['wait_to_takeoff_approach',hollowsStage.point,{x:2201,y:2650}],
  ...western.slice(1).map((to,i)=>['western_out_'+(i+1),western[i],to]),
+ // Branches off western_out_4's end (the upper passage, r16c37) for the north edge to 2507.
+ ...[HOLLOWS_OUT_POINTS[3],...HOLLOWS_NORTH_POINTS].slice(1).map((to,i,a)=>['north_out_'+(i+1),i?a[i-1]:HOLLOWS_OUT_POINTS[3],to]),
 ]});
 const map=loadMap(),rooms={};
 for(const spec of specs){const base=roomGeometry(spec.room),guides=[];
