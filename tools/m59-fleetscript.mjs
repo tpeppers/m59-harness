@@ -3084,7 +3084,7 @@ export async function holdKeeper(ctx, agent, fleet) {
     throw Error(`keeper busy announcement refused: ${busy.error ?? busy.refused}`);
   }
 
-  let done = false, renewal = null, retiredPackBlocked = false;
+  let done = false, renewal = null, retiredPackBlocked = false, lent = false;
   // GUARANTEE: A DEAD BODY DOES NOT KEEP ITS LEASE.
   //
   // This beat used to have no opinion about whether the character was still alive — it just
@@ -3144,7 +3144,7 @@ export async function holdKeeper(ctx, agent, fleet) {
     } catch { return false; }
   };
   const beat = setInterval(() => {
-    if (done) return;
+    if (done || lent) return;   // LENT to the keeper (harvest): no renewal and no take-back
     renewal ??= driverMoved().then(async moved => {
       if (!done && moved && await refresh()) {
         who.spectate = (await keeperPorts(fleet, { wantAgent: agent }).catch(() => null))?.get(agent)?.spectate === true;
@@ -3200,6 +3200,31 @@ export async function holdKeeper(ctx, agent, fleet) {
       return r;
     },
     release: () => releaseNow(),
+    /**
+     * LEND THE BODY TO THE KEEPER, AND TAKE IT BACK. `harvest` hands the hunt to the keeper's farm posture, and a
+     * keeper whose work faculty is leased yields directional action -- it reports "hunting" and never swings. The
+     * step used to free only the fleet `busy` mark, while this beat kept renewing the faculty claim (and took it
+     * back as "lapsed" if anything dropped it): 2026-11-14, three fighters stood 12 minutes beside the orc pit boss,
+     * and every --farm-allow trip of the night farmed 0. Lending stops the beat and releases the faculties.
+     */
+    lend: async why => {
+      if (done || lent) return;
+      lent = true;
+      await renewal;
+      await ask('commander_release', { faculties: KEEPER_FACULTIES, by }).catch(() => {});
+      ctx.log(agent, why ?? 'lent work, movement and economy to the keeper');
+    },
+    reclaim: async () => {
+      if (done || !lent) return !done;
+      lent = false;
+      const again = await ask('commander_claim', { faculties: KEEPER_FACULTIES, by, lease_ms: KEEPER_LEASE_MS,
+        why: `fleet errand: ${ctx.name} (taking the body back after lending it)` }).catch(() => null);
+      const got = (Array.isArray(again?.granted) ? again.granted : Object.keys(again?.faculties ?? {}))
+        .filter(f => KEEPER_FACULTIES.includes(f));
+      ctx.log(agent, got.length ? `took ${got.join(', ')} back` : 'the keeper would not give the body back');
+      return got.length > 0;
+    },
+    isLent: () => lent,
     retirePackBlockedJourney: async (to, origin, since) => {
       const r = await ask('retire_pack_blocked_journey', { to, origin, since }).catch(() => null);
       if (r?.retired === true) retiredPackBlocked = true;
@@ -4233,7 +4258,10 @@ async function runStep(ctx, agent, rawStep, state) {
                  why: `the posture was accepted but this keeper is in "${mode}" mode, not farm — ` +
                       'nothing reads the hunt list outside farm mode' };
 
-      // Hand the body back: the keeper cannot hunt while the lease holds its work and legs.
+      // Hand the body back: the keeper cannot hunt while the lease holds its work and legs. LEND it through the
+      // hold (beat paused, faculties released) -- freeing only the busy mark left the faculty claim renewing.
+      const lender = ctx.holds?.get?.(agent);
+      await lender?.lend?.(`lent to the keeper to hunt ${[].concat(quarry).join(', ')}`);
       await call('autopilot', { agent, action: 'free', by: `fleetscript:${ctx.name}` }, 30_000).catch(() => {});
 
       const deadline = Date.now() + budgetMs;
@@ -4249,7 +4277,8 @@ async function runStep(ctx, agent, rawStep, state) {
 
       // Take it back so the delivery half can be driven. The runner's own handle is stale
       // after this, which is harmless: freeAll frees each agent's autopilot regardless.
-      const re = await holdKeeper(ctx, agent, ctx.fleet ?? fleet).catch(() => null);
+      const re = lender?.reclaim ? await lender.reclaim().catch(() => null)
+        : await holdKeeper(ctx, agent, ctx.fleet ?? fleet).catch(() => null);
 
       const gained = now - before;
       const met = until ? done : target <= 0 ? gained > 0 : gained >= target;
@@ -5708,6 +5737,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // the beat that would have carried the renewal never starts. The character still needs
       // the fleet to leave it alone. This interval is the runner's, so it runs on every path.
       busyBeat = setInterval(() => {
+        if (ctx.holds.get(agent)?.isLent?.()) return;   // lent to the keeper: the fleet mark stays off
         busyRenewal = call('autopilot', { agent, action: 'busy', by: `fleetscript:${name}`, kind: 'fleetscript', label: name,
                             lease_ms: BUSY_LEASE_MS }, 20_000).catch(() => {});
       }, KEEPER_BEAT_MS);
