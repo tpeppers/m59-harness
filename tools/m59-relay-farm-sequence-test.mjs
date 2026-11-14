@@ -139,5 +139,11 @@ test('optional Ocean top-offs keep edible mushrooms for Relay', async () => {
   assert.deepEqual(donor.records, []);
   donor.s.world.room = { num: 544 };
   await donor.p.provision({}, donor.c.vitals());
-  assert.deepEqual(donor.records, [10], 'the same food remains edible outside the assigned Relay room');
+  // 2026-11-14 (reagentFoodNames): a character that KNOWS a spell eating this food keeps it through every optional
+  // top-off, in or out of the Relay room -- 2,087 edible mushrooms were eaten fleet-wide in a day.
+  assert.deepEqual(donor.records, [], 'outside the Relay room a Relay caster still keeps its reagent from a top-off');
+  donor.c.spells = [];
+  donor.p._reagentFood = null;
+  await donor.p.provision({}, donor.c.vitals());
+  assert.deepEqual(donor.records, [10], 'a character with no spell that uses it eats it like any food');
 });

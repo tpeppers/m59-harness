@@ -156,9 +156,14 @@ export class ProvisionPart {
         // COOK FROM THE ROAD FIRST (m59-cook-food.mjs, a strategy's `cookFood`): looted elderberry and herbs become a
         // meal before the bought bread is touched. Off unless asked for; one cast a pass, and the pass ends on it.
         if (await this.cookFirst(v, ceiling || floor, larder).catch(() => false)) return 'ate';
-        const e = await skills.eat(s, { stomach: this.stomach, upToVigor: ceiling || undefined,
-                                       exclude: this.notOursToEat() })
-                              .catch(() => ({ ate: [] }));
+        // Other food first; a reagent food only when nothing else would feed the climb (reagentFoodNames).
+        let e = await skills.eat(s, { stomach: this.stomach, upToVigor: ceiling || undefined,
+                                     exclude: [...this.notOursToEat(), ...this.reagentFoodNames()] })
+                            .catch(() => ({ ate: [] }));
+        if (!e.ate?.length && vigor < floor)
+          e = await skills.eat(s, { stomach: this.stomach, upToVigor: floor,
+                                    exclude: this.notOursToEat() })
+                         .catch(() => ({ ate: [] }));
         if (e.ate?.length) {
           this.tally.meals = (this.tally.meals || 0) + 1;
           this.recordAte(e, 'stocking up');
@@ -240,7 +245,7 @@ export class ProvisionPart {
     // one item per pass — a pass is eight seconds and the room reappears on a clock
     // measured in minutes. `eat` declines anything that would overshoot 200.
     if (ceiling && this.stomach.roomFor(smallest.filling)) {
-      const exclude = this.notOursToEat();
+      const exclude = [...this.notOursToEat(), ...this.reagentFoodNames()];   // optional: never the practice's reagents
       // Keep the exact Relay reagent through optional top-offs. A farmer short of its
       // fight floor may still eat it in the climb above, and emergency meals are untouched.
       if (this.mode === 'farm' && p.relayBeforeRest === true && vigor >= Math.max(150, floor) &&

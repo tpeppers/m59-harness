@@ -344,7 +344,7 @@ export class PassOutsidePart {
         let now = vigor;
         while (Date.now() < until && now < overdriveReachable(od.target, this.larder(c)) - 5 && !this.stopping && !disturbed()) {
           const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: od.target,
-                                               exclude: this.notOursToEat() }).catch(() => null);
+                                               exclude: [...this.notOursToEat(), ...this.reagentFoodNames()] }).catch(() => null);
           if (r?.ate?.length) { e.ate.push(...r.ate); now = r.vigor?.after ?? now; this.tally.meals = (this.tally.meals || 0) + 1; continue; }
           if (!this.larder(c).length) break;
           const wait = Math.min(60, Math.max(5, this.stomach?.secondsUntilRoomFor?.(smallest) ?? 30));
@@ -359,7 +359,7 @@ export class PassOutsidePart {
       }
       for (let round = 0; round < 6; round++) {
         const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: ceiling,
-                                             exclude: this.notOursToEat() });
+                                             exclude: [...this.notOursToEat(), ...this.reagentFoodNames()] });
         if (!r?.ate?.length) break;
         e.ate.push(...r.ate);
         e.vigor.after = r.vigor?.after ?? e.vigor.after;

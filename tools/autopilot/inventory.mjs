@@ -266,6 +266,20 @@ export class InventoryPart {
     ].map(String).filter(Boolean))];
   }
 
+  // FOOD THAT IS A REAGENT: what a spell this character knows consumes, so eating it is eating the practice.
+  // 2026-11-14: 2,087 edible mushrooms eaten fleet-wide in a day (haste takes 5, relay 1) -- several hundred the
+  // operator had deposited in hall 714 were drawn for practice and eaten as top-offs. Optional meals skip these;
+  // the climb to the fight floor eats other food first and falls back to them only when nothing else is aboard.
+  reagentFoodNames(c = this.s?.client) {
+    const spells = (c?.spells || []).map(sp => String(sp?.name ?? sp ?? '')).filter(Boolean);
+    const key = spells.join('|');
+    if (this._reagentFood?.key === key) return this._reagentFood.names;
+    const names = new Set();
+    for (const name of spells) for (const [item] of spellCost(name)?.reagents ?? []) if (item) names.add(String(item));
+    this._reagentFood = { key, names: [...names] };
+    return this._reagentFood.names;
+  }
+
   larder(c = this.s.client) {
     return skills.larderOf(c, { exclude: this.notOursToEat() });
   }
