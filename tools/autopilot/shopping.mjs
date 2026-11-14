@@ -295,10 +295,10 @@ export class ShoppingPart {
    * DROP SALE-PLAN ITEMS, LEAST VALUABLE FIRST, UNTIL `bulk`/`weight` (each at most 400) IS FREE.
    * Never anything outside ownSalePlan(); see tools/m59-make-space.mjs for the floor under it.
    */
-  async makeSpaceNow({ bulk = null, weight = null, why = 'make_space' } = {}) {
+  async makeSpaceNow({ bulk = null, weight = null, why = 'make_space', filterPlan = plan => plan, beforeDrop } = {}) {
     if (!this.s?.client) return { ok: false, refused: 'no client', dropped: [], freed: { bulk: 0, weight: 0 } };
-    const r = await makeSpace(this.s, { bulk, weight, why,
-      planOf: () => this.ownSalePlan(),
+    const r = await makeSpace(this.s, { bulk, weight, why, beforeDrop,
+      planOf: () => filterPlan(this.ownSalePlan()),
       capacityOf: () => skills.carryCapacity(this.s.client),
       heldBack: () => this.heldBackIds?.() ?? new Set() });
     // A drop, or a shortfall the plan could not cover, is worth a row; "already enough room" is not.

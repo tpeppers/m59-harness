@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { normalizeBook } from './m59-dibs.mjs';
 import { FARM_SALE_CACHE_ANCHOR, FARM_SALE_CACHE_DROP, FARM_SALE_CACHE_EVENT, FARM_SALE_CACHE_WARD_SCHEMA,
-  tryFarmSaleCache } from './m59-farm-sale-cache.mjs';
+  tryFarmSaleCache, tryFarmTradeGoodsSpace } from './m59-farm-sale-cache.mjs';
+import { makeSpace } from './m59-make-space.mjs';
 import { OF } from './m59-parse.mjs';
-import { interest } from './m59-skills.mjs';
+import { carryCapacity, interest } from './m59-skills.mjs';
 
 const start = 1_800_000_000_000;
 const claim = name => ({ room: 552, item: name, source: 'ocean-sale-cache', for: ['Zheng He'],
@@ -60,6 +61,55 @@ test('records only the exact new sale parcel, anchored at the proven ward tile i
     previous_amount: 0, deposited_amount: 50, observed_at: start, expires_at: start + 300000,
   }]]);
   assert.equal(await f.run(), false, 'a pass cannot immediately deposit again');
+});
+
+function makeSpaceFixture(name, count) {
+  const f = fixture(name, count);
+  let result;
+  f.pilot.makeSpaceNow = async ({ filterPlan, ...options }) => (result = await makeSpace(f.s, {
+    ...options, capacityOf: () => carryCapacity(f.c), planOf: () => filterPlan(f.pilot.ownSalePlan()),
+  }));
+  return { ...f, runSpace: () => tryFarmTradeGoodsSpace(f.pilot, () => start), result: () => result };
+}
+
+test('an Ocean farmer with a rearm-sized shortage uses the FleetScript sale engine to reach 400 free', async () => {
+  const f = makeSpaceFixture('blue mushroom', 490);
+  assert.equal(carryCapacity(f.c).room_for.bulk, 50);
+  assert.equal(await f.runSpace(), true);
+  assert.equal(f.result().needed.bulk, 400);
+  assert.equal(f.result().needed.weight, 400);
+  assert.equal(f.result().after.free.bulk, 400);
+  assert.deepEqual(f.actions, [['drop', [{ id: 41, amount: 70 }]]]);
+  assert.equal(await f.runSpace(), false);
+});
+
+test('Ocean make-space keeps the red reserve and never uses unrelated sale-plan goods', async () => {
+  const f = makeSpaceFixture('red mushroom', 98);
+  f.c.rsc.set(15, 'herb');
+  f.c.inventory.push({ id: 42, nameRsc: 15, amount: 500, tag: 1, rarity: 0 });
+  const original = f.pilot.ownSalePlan;
+  f.pilot.ownSalePlan = () => ({ items: [...original().items,
+    { id: 42, name: 'herb', amount: 500, sale_amount: 500, recommended: true, queued: true }] });
+  assert.equal(await f.runSpace(), true);
+  assert.deepEqual(f.actions, [['drop', [{ id: 41, amount: 2 }]]]);
+  assert.equal(f.stock.amount, 96);
+  assert.equal(f.result().ok, false);
+});
+
+test('Ocean make-space sends no drop when health or the body pose changes at the packet', async () => {
+  for (const change of [f => { f.hp.value--; }, f => { f.c.self.row++; }]) {
+    const f = makeSpaceFixture('blue mushroom', 490);
+    f.s.pacer.submit = async (kind, send) => {
+      if (kind === 'drop') change(f);
+      return send();
+    };
+    assert.equal(await f.runSpace(), false);
+    assert.deepEqual(f.actions, []);
+  }
+  const f = makeSpaceFixture('blue mushroom', 490);
+  f.pilot.policy.neverAttack = true;
+  assert.equal(await f.runSpace(), false);
+  assert.deepEqual(f.actions, []);
 });
 
 function mergeFixture() {
