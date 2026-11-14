@@ -2488,6 +2488,34 @@ in the wrong room. It also checks the words against `questengine.kod` (start `pu
 quest's trigger and never "good", and that the assignment, sung and passed lines parse. Offline; never run live
 at the time of writing.
 
+## The Sword of Riija — prep, pit boss, quester
+
+**`m59-riija-test.mjs` (21).** Offline. It covers `tools/m59-riija.mjs` and runs the real step
+lists of `riija-prep`, `riija-pitboss` and `riija-quester` through a small runner. That runner keeps
+the fleetscript skip rule: a walk to null skips every step after it until an `anywhere` step or the
+next walk. The world they run against is fake.
+
+It pins the following:
+
+- Every row of both of Wulfgang's karma tables reads back the way the server phrases it (cardinal
+  words, digits, the indefinite article). Rows from the other table, a guide's chess board and a
+  wrong count are all refused.
+- The manifest for each side is the whole table plus that route's items.
+- A prep deposit names stacks by id and by exact name, so a purple mushroom is not taken as a
+  mushroom.
+- The pit ratio follows what the kod computes (1:3, 1:2, 3:2), not what its comment says.
+- Every chamber square sits inside the kod's bounds, and the lever puller can reach the lever.
+- A barrier mark left by a dead run can neither open a gate nor shut one.
+- End to end, the quester draws its certain kit, then **exactly** the shipment Wulfgang named, and
+  delivers each item to the right NPC in the right room. It keeps a pie back for the queen and
+  resumes an open node without asking twice. It refuses a neutral character before saying anything.
+  It records and refuses a shipment it cannot place on a table. On the evil route the feather comes
+  from its own kill, picked up off the floor.
+- The four-body pit team stands, pulls the lever once, fights, and stows the head and the mystic
+  sword in 713. All four stop before the lever if one of them is off its square.
+
+None of this has been run live yet. `docs/m59-riija-sword.md` lists what remains unconfirmed.
+
 ## The disciple gate — the level-3 spell quest
 
 **`m59-disciple-test.mjs` (223) — three groups, none of which is about whether the errand runs.**

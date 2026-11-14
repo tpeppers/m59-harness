@@ -1050,6 +1050,9 @@ substrate/rescue-travel/
 # Jala pupil progress and the posture saved before the audition.
 /substrate/jala-pupil-open-*.json
 /substrate/jala-pupil-posture-*.json
+# Riija sword phases: the keeper posture saved before each errand (open quest nodes live in questbook/).
+/substrate/riija-quester-posture-*.json
+/substrate/riija-pitboss-posture-*.json
 /substrate/production-*/
 /substrate/production-*-runtime.json
 /substrate/red-alert/

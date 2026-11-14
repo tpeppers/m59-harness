@@ -51,6 +51,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | add a character that is NOT the fleet — a merchant, a host, anything scripted | [`docs/m59-menagerie.md`](docs/m59-menagerie.md) |
 | buy a spell of LEVEL 3 or higher, or find out why a priestess will not sell one | `m59-research/reports/disciple-quests.md`, and `tools/fleetscripts/disciple-quest.mjs` |
 | learn ANY Jala song (Parrin's pupil quest gates the whole school; then truth, mirth, melancholy, invigorate) | `m59-research/reports/jala-pupil-quests.md`, and `tools/fleetscripts/jala-pupil.mjs` |
+| earn a SWORD OF RIIJA (the Riija monk teaches only its wielder): stock hall 713, the four-body orc-pit head raid, then the quester's four shards | [`docs/m59-riija-sword.md`](docs/m59-riija-sword.md), and `tools/fleetscripts/riija-prep.mjs` / `riija-pitboss.mjs` / `riija-quester.mjs` |
 | train FIRE / ARCHERY on a practice bow, or mend an item at a desk (the `mend` desk service) | `m59-research/reports/archery-training.md`, `reports/mend-and-item-repair.md`, and `tools/fleetscripts/practice-bow.mjs` |
 | read a ledger, attribute a number to a build, or land a commit that changes how the fleet moves | [`docs/m59-evidence.md`](docs/m59-evidence.md) |
 | commit, merge, push, cut a deploy, or work alongside another session | [`docs/m59-git-process.md`](docs/m59-git-process.md) |
