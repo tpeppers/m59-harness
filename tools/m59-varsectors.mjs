@@ -115,7 +115,50 @@ export function constantsInSource(src) {
   return consts;
 }
 
-export function sectorsInSource(src, { consts = constantsInSource(src) } = {}) {
+// A HEIGHT THAT IS A PARAMETER IS SET BY WHOEVER CALLS THE MESSAGE. The orc pit's chambers
+// (orcpita.kod:94-100, orcpitb.kod:273-278) move SOLUTIONSECTOR in `DoSolution(height=500,...)`
+// with `#height = height`, and the numbers are in orcpitb.kod's EvaluatePuzzle/ResetPuzzle
+// (`send(oRoomA,@DoSolution,#height=SOLUTIONHEIGHTA1)`, `send(Self,@DoSolution,...)`). Reading
+// only literals and constants dropped both chambers, so no mask existed for a moved floor and
+// `walk(2506)` from a solved chamber walked out the long way (riija-pitboss, 2026-11-14).
+//
+// `messageParams(src, at)` is the enclosing message's `name(param=default,...)`; `callHeights`
+// maps `<room id>|<message>` (lower case) to the heights its callers pass, resolved through
+// the CALLER's constants, with the receiver resolved to a room: `self`, an RID in the
+// receiver expression, or a local assigned from `@FindRoomByNum,#num=RID_...` in that file.
+export function messageParams(src, at) {
+  let found = null;
+  for (const m of src.slice(0, at).matchAll(/^[ \t]*([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()\n]*)\)\s*$/gm))
+    found = m;
+  if (!found) return null;
+  const params = new Map();
+  for (const p of found[2].split(',')) {
+    const q = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(-?\d+|\$|[A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(p);
+    if (q) params.set(q[1].toLowerCase(), q[2]);
+  }
+  return { name: found[1].toLowerCase(), params };
+}
+
+export function callHeightsInSource(src, ownRid, { consts = constantsInSource(src) } = {}) {
+  const out = [];
+  const locals = new Map();
+  for (const m of src.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*Send\s*\(\s*SYS\s*,\s*@FindRoomByNum\s*,\s*#num\s*=\s*(RID_[A-Za-z0-9_]+)\s*\)/gi))
+    locals.set(m[1].toLowerCase(), m[2].toUpperCase());
+  const call = /send\s*\(\s*((?:[^(),]|\([^()]*\))+?)\s*,\s*@([A-Za-z_][A-Za-z0-9_]*)\s*,([^;]{0,200}?)\)\s*;/gi;
+  for (const m of src.matchAll(call)) {
+    const h = /#height\s*=\s*([A-Za-z0-9_]+)/i.exec(m[3]);
+    if (!h) continue;
+    const height = /^-?\d+$/.test(h[1]) ? Number(h[1]) : consts.get(h[1]);
+    if (!Number.isFinite(height)) continue;
+    const recv = m[1].trim();
+    const rid = /^self$/i.test(recv) ? ownRid
+      : (/(RID_[A-Za-z0-9_]+)/i.exec(recv)?.[1]?.toUpperCase() ?? locals.get(recv.toLowerCase()) ?? null);
+    if (rid) out.push({ key: `${rid}|${m[2].toLowerCase()}`, height });
+  }
+  return out;
+}
+
+export function sectorsInSource(src, { consts = constantsInSource(src), callHeights = null, rid = null } = {}) {
   const bySector = new Map();
   // `#height` does not always follow `#sector` immediately — the animation argument sits
   // between them — so this spans a bounded gap rather than requiring adjacency.
@@ -144,10 +187,21 @@ export function sectorsInSource(src, { consts = constantsInSource(src) } = {}) {
     const sector = /^\d+$/.test(raw) ? Number(raw) : consts.get(raw);
     if (sector == null) continue;          // a sector we cannot resolve is not a claim
     const rawHeight = m[2];
-    const height = /^-?\d+$/.test(rawHeight) ? Number(rawHeight) : consts.get(rawHeight);
+    let heights = [/^-?\d+$/.test(rawHeight) ? Number(rawHeight) : consts.get(rawHeight)];
+    if (!Number.isFinite(heights[0])) {
+      // A parameter: its default plus every height a caller passes to this room's message.
+      const msg = messageParams(src, m.index);
+      const def = msg?.params.get(rawHeight.toLowerCase());
+      if (def !== undefined && callHeights && rid) {
+        const passed = callHeights.get(`${String(rid).toUpperCase()}|${msg.name}`) ?? [];
+        const d = /^-?\d+$/.test(def) ? Number(def) : consts.get(def);
+        heights = [...(Number.isFinite(d) ? [d] : []), ...passed];
+      }
+    }
     // A HEIGHT WE CANNOT RESOLVE IS NOT A HEIGHT. Recording `NaN` would put a door into the
     // table with a swing nothing can reason about, which is worse than leaving it out loudly.
-    if (!Number.isFinite(height)) continue;
+    heights = heights.filter(Number.isFinite);
+    if (!heights.length) continue;
     const line = src.slice(0, m.index).split('\n').length;
     // WHICH SURFACE IS MOVING decides what "blocked" even means. A floor gates by the step
     // a character can climb; a ceiling gates by whether it can fit underneath. Reading a
@@ -157,7 +211,7 @@ export function sectorsInSource(src, { consts = constantsInSource(src) } = {}) {
     if (!bySector.has(sector))
       bySector.set(sector, { sector, name: /^\d+$/.test(raw) ? null : raw,
                              heights: new Set(), kinds: new Set(), lines: [] });
-    bySector.get(sector).heights.add(height);
+    for (const height of heights) bySector.get(sector).heights.add(height);
     bySector.get(sector).kinds.add(kind);
     bySector.get(sector).lines.push(line);
   }
@@ -425,6 +479,14 @@ export const statesFor = sector => [...new Set(sector.heights)].sort((a, b) => a
 export function scan(kodRoot = KOD_ROOT) {
   const rid = readRoomIds(kodRoot);
   const rooms = [];
+  // Heights passed to a message by its callers, any file -> any room (see callHeightsInSource).
+  const callHeights = new Map();
+  for (const file of kodFiles(kodRoot)) {
+    const src = readFileSync(file, 'utf8');
+    if (!/#height/i.test(src)) continue;
+    for (const c of callHeightsInSource(src, claimedRoomId(src)?.toUpperCase() ?? null))
+      callHeights.set(c.key, [...new Set([...(callHeights.get(c.key) ?? []), c.height])]);
+  }
   for (const file of kodFiles(kodRoot)) {
     const src = readFileSync(file, 'utf8');
     // CASE-INSENSITIVE HERE TOO. This cheap pre-filter sat in front of a regex that had
@@ -436,7 +498,7 @@ export function scan(kodRoot = KOD_ROOT) {
     const sequences = counterSectorsInSource(src);
     // A counter's sectors join the list as ordinary sectors, tagged with the counter that
     // moves them, so the ceiling bake can treat the run as ONE door. See counterSectorsInSource.
-    const named = sectorsInSource(src);
+    const named = sectorsInSource(src, { callHeights, rid: claimedRoomId(src) });
     const sectors = [...named, ...sequences.flatMap(q => q.closed == null ? [] :
       q.sectors.filter(sector => !named.some(n => n.sector === sector)).map(sector => ({ sector, name: q.property, kind: q.kind,
         heights: [q.closed, q.open].sort((a, b) => a - b), cite_lines: q.cite_lines,

@@ -295,7 +295,7 @@ try {
   });
 
   await test('pit roles: four is 1 in A and 3 in B, every square in its chamber, the puller in reach of the lever', () => {
-    const roles = R.pitRoles(['a', 'b', 'c', 'd']);
+    const roles = R.pitRoles(['a', 'b', 'c', 'd'], { solution: 'plain' });
     assert.deepEqual(roles.map(r => r.side), ['A', 'B', 'B', 'B']);
     assert.ok(R.pitSolves(roles.filter(r => r.side === 'A').length, roles.filter(r => r.side === 'B').length));
     for (const r of roles) { assert.ok(R.inChamber(r, r.side), `${r.agent} r${r.row}c${r.col}`); assert.ok(!R.onMarked(r, r.side)); }
@@ -312,7 +312,11 @@ try {
     const sq = R.pitRoles(['a', 'b', 'c', 'd'], { solution: 'squares' });
     assert.ok(R.onMarked(sq[0], 'A'));
     assert.deepEqual(sq.filter(r => r.side === 'B' && R.onMarked(r, 'B')).length, 2);
-    assert.throws(() => R.pitRoles(['a', 'b', 'c'], { solution: 'squares' }), /squares solution/);
+    // 'squares' is the default (plain strands chamber A at 900), and three bodies can hold it: the
+    // puller stands on r45c29, exactly 3 from the lever (lever.kod:61-62).
+    assert.deepEqual(R.pitRoles(['a', 'b', 'c', 'd']), sq);
+    const three = R.pitRoles(['a', 'b', 'c']);
+    assert.deepEqual(three.map(r => [r.side, r.row, r.col, r.lever]), [['A', 83, 25, false], ['B', 45, 29, true], ['B', 51, 29, false]]);
   });
 
   await test('the team barrier: opens on all, shuts on an abort, and ignores marks from a dead run', async () => {
@@ -413,6 +417,7 @@ try {
   function pitWorld({ misplace = null } = {}) {
     const P = { bodies: {}, floor: {}, hall: [], deposits: [], leverPulled: 0, killed: false, packs: {} };
     const team = ['ta', 'tb', 'tc', 'td'];
+    const PIT_ROOM = { A: 2507, B: 2508 };
     for (const a of team) { P.bodies[a] = { room: 2501, row: 10, col: 10, pending: [], seq: 0 }; P.packs[a] = []; }
     const ctxOf = a => {
       const b = P.bodies[a];
@@ -448,11 +453,16 @@ try {
         if (![2501, 2502].includes(b.room) || o.room !== 2502 || o.to !== 2507) throw Error(`bad Hollows transit from ${b.room}`);
         P.hollows = [...(P.hollows ?? []), a]; b.room = o.to; return { enter: { ok: true }, leave: { ok: true } };
       };
-      return { agent: a, fleet: 'offline', state: {}, call, keeper: async () => ({}), hollowsTransit };
+      // Off the chamber while the floor is moved (m59-orc-pit-exit.mjs, pinned in m59-orc-pit-floors-test).
+      const pitExit = async (_ctx, side, solution) => {
+        if (!P.leverPulled || b.room !== PIT_ROOM[side]) throw Error(`exit before the lever or from ${b.room}`);
+        P.exits = [...(P.exits ?? []), `${a}:${side}:${solution}`]; return { ok: true, side };
+      };
+      return { agent: a, fleet: 'offline', state: {}, call, keeper: async () => ({}), hollowsTransit, pitExit };
     };
     const runOne = async (a, params) => {
       const ctx = ctxOf(a), b = P.bodies[a];
-      const plan = await pitboss.steps({ agents: team.join(','), agent: a, lever: '', holder: '', solution: 'plain', stow: 'hall', hall: 713,
+      const plan = await pitboss.steps({ agents: team.join(','), agent: a, lever: '', holder: '', solution: 'squares', stow: 'hall', hall: 713,
         alsoStow: 'mystic sword', waitMin: 0.2, fightMin: 1, home: 0, fleeBelow: 0.3, restBelow: 0.4, ...params });
       return runPlan(plan, () => ctx, async s => {
         switch (s.do) {
@@ -484,6 +494,7 @@ try {
     assert.deepEqual(P.deposits.sort(), ['mystic sword', 'orc pit boss head'], JSON.stringify({ d: P.deposits, packs: P.packs }));
     assert.ok(!Object.values(P.packs).some(p => p.some(i => i.name === 'orc pit boss head')));
     assert.deepEqual(P.hollows, ['ta'], 'only chamber A crosses the Hollows north edge, once');
+    assert.deepEqual((P.exits ?? []).sort(), ['ta:A:squares', 'tb:B:squares', 'tc:B:squares', 'td:B:squares'], 'every body leaves its chamber after the lever, on the squares floors');
     assert.ok(inBossArea({ room: { num: 2506 }, you: { row: 30 } }) && !inBossArea({ room: { num: 2506 }, you: { row: 50 } }));
   });
 

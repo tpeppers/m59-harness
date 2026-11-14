@@ -257,7 +257,12 @@ export function pickSource(key, { where = 'island', kinds = ['shop', 'dispense']
 //   'plain'    anything else                                         -> A 900 / B   0
 // The third branch ("all B squares", A 750 / B 100) can NEVER fire on this source: OrcPitB.AllBUsed
 // sets bBTwo three times and never sets bBThree or bBFour (orcpitb.kod:306-339). And 'plain' gives
-// the same heights as the all-squares branch, which is why it is the default here. WHERE those
+// the same heights as the all-squares branch. 'squares' IS THE DEFAULT (2026-11-14), because the
+// moved floors decide who can leave (tools/m59-orc-pit-floors-test.mjs, on the mover's own masks):
+// chamber B reaches 2508's west edge to 2506 at 0, 100 or 250, but chamber A reaches 2507's east
+// edge only at 600 (its east spoke, ceiling 680) or 750 (north spoke). At 900 -- 'plain' -- A's only
+// open spoke is the west one, sealed by a zero-headroom sector at r85-86 c12, so A is stranded.
+// The heights are now baked as door states (m59-ceiling-doors.json, FLOOR_LIFTS). Formerly: WHERE those
 // heights let a body walk to the boss is NOT in our map -- no SOLUTIONSECTOR is baked in
 // substrate/m59-variable-sectors.json -- so that is the first thing the live trial must confirm.
 export const PIT = Object.freeze({
@@ -284,7 +289,7 @@ export const pitSolves = (a, b) => a > 0 && b > 0 && (a * 3 === b || a * 2 === b
  * operator's team: 1 in A, 3 in B (A*3=B). Three is 1:2; five is 3:2 (see CORRECTED above).
  * Anything else is refused before anybody walks.
  */
-export function pitRoles(agents, { lever = null, solution = 'plain' } = {}) {
+export function pitRoles(agents, { lever = null, solution = 'squares' } = {}) {
   const team = [...agents];
   const plans = { 3: [1, 2], 4: [1, 3], 5: [3, 2] };
   const split = plans[team.length];
@@ -294,15 +299,18 @@ export function pitRoles(agents, { lever = null, solution = 'plain' } = {}) {
   const inA = team.slice(0, na), inB = team.slice(na);
   const puller = lever ?? inB[0];
   if (!inB.includes(puller)) throw Error(`the lever is in chamber B (2508 r48c29); ${puller} is not assigned there`);
-  if (solution === 'squares' && inB.length < 3)
-    throw Error('the squares solution needs one body on A r83c25 and two on B r45c29/r51c29 besides the puller');
+  // Two B bodies suffice: r45c29 is exactly 3 from the lever at r48c29, and lever.kod:61-62 allows
+  // |dr|,|dc| <= 3, so the puller can hold a marked square.
+  if (solution === 'squares' && inB.length < 2)
+    throw Error('the squares solution needs one body on A r83c25 and two on B r45c29/r51c29');
   const roles = [];
   for (const [side, members] of [['A', inA], ['B', inB]]) {
     // The puller first, on a square in reach of the lever (PLAIN.B[0] is r48c27, two columns off it);
     // under 'squares' the marked squares go to the next bodies, the plain ones to anyone left over.
     const order = side === 'B' ? [puller, ...members.filter(m => m !== puller)] : members;
     const pool = solution === 'squares'
-      ? (side === 'B' ? [PLAIN.B[0], ...PIT.B.marked, ...PLAIN.B.slice(1)] : [...PIT.A.marked, ...PLAIN.A])
+      ? (side === 'B' ? (members.length === 2 ? [...PIT.B.marked] : [PLAIN.B[0], ...PIT.B.marked, ...PLAIN.B.slice(1)])
+        : [...PIT.A.marked, ...PLAIN.A])
       : PLAIN[side];
     order.forEach((m, i) => {
       const [row, col] = pool[i];

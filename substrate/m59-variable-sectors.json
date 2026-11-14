@@ -2663,9 +2663,27 @@
      "gates": false,
      "gate_risk": false,
      "headroom_risk": true
+    },
+    {
+     "sector": 1,
+     "name": "SOLUTIONSECTOR",
+     "kind": "floor",
+     "heights": [
+      500,
+      600,
+      750,
+      900
+     ],
+     "cite_lines": [
+      114
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
     }
    ],
-   "groups": []
+   "groups": [],
+   "risk_groups": []
   },
   {
    "room": 2508,
@@ -2687,9 +2705,27 @@
      "gates": false,
      "gate_risk": false,
      "headroom_risk": true
+    },
+    {
+     "sector": 1,
+     "name": "SOLUTIONSECTOR",
+     "kind": "floor",
+     "heights": [
+      0,
+      100,
+      250,
+      500
+     ],
+     "cite_lines": [
+      275
+     ],
+     "gates": true,
+     "gate_risk": true,
+     "headroom_risk": false
     }
    ],
-   "groups": []
+   "groups": [],
+   "risk_groups": []
   },
   {
    "room": 2600,

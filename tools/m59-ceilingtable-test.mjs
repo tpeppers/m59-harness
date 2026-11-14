@@ -41,7 +41,7 @@ ok('and 714 keeps the hand-written door order',
 console.log('\nevery room');
 // A DOOR'S POSITIONS ARE ITS TWO KOD HEIGHTS AND WHERE THE .roo SHIPS IT — sometimes three
 // distinct values. 750's sector 2 animates between 380 and 510 and ships at 520.
-const positions = d => [...new Set([d.closed, d.open, d.shipped].filter(h => Number.isFinite(h)))];
+const positions = d => [...new Set([d.closed, d.open, d.shipped, ...(d.positions ?? [])].filter(h => Number.isFinite(h)))];
 
 let badOrder = [], badArity = [], badHeights = [], badCount = [], badSectors = [], badMask = [];
 for (const [num, def] of rooms) {
@@ -89,7 +89,8 @@ ok('and a sector patch with a real index and ceiling', !badSectors.length, badSe
 // FLOOR LIFTS ARE OPT-IN BY ROOM (m59-ceiling-doorbake.mjs FLOOR_LIFTS): a new door in a room
 // re-keys every state of it, and every rail baked against those keys.
 const floorLifts = rooms.flatMap(([num, def]) => def.doors.filter(d => d.kind === 'floor').map(d => `${num}:${d.id}`));
-ok("the only floor lift in the table is 703's bridge (sector 2)", floorLifts.join(',') === '703:2', floorLifts.join(','));
+// 2507/2508: the orc pit chambers' SOLUTIONSECTOR, four positions each (m59-orc-pit-floors-test).
+ok("the floor lifts are 703's bridge and the two orc pit chambers", floorLifts.join(',') === '703:2,2507:1,2508:1', floorLifts.join(','));
 ok('703 keys are ENTRANCE then BRIDGE, resting at 500,654', table.rooms[703]?.doors.map(d => d.id).join(',') === '1,2'
    && !!table.rooms[703]?.states['500,654']);
 

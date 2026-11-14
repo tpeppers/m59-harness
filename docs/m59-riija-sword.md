@@ -65,6 +65,36 @@ square, all four stop before the lever. One farm posture on "orc pit boss" cover
 `OrcPitBossBody` it leaves behind. The head drops when the body dies. The holder loots it, plus a
 mystic sword if one dropped (that is the evil table's cheapest row), and deposits both in 713.
 
+**Which solution, and how each chamber gets out.** The lever moves each chamber's floor
+(`SOLUTIONSECTOR`, sector 1; it rests at 500) for 60 s. Who stands on the marked squares decides
+the heights (`orcpitb.kod:15-29`, `EvaluatePuzzle`):
+
+- `squares`: someone on 2507 r83c25 and on 2508 r45c29 and r51c29. A goes to 600, B to 250.
+- `plain`: anything else. A goes to 900, B to 0.
+
+Measured on the mover's own step masks (`m59-orc-pit-floors-test`):
+
+- B leaves at 0, 100 or 250, up its north spoke to the west edge to 2506 (r7c1).
+- A leaves only at 600 (the east spoke, floor 600, ceiling 680) or at 750 (the north spoke).
+- At 900, A's only open spoke is the west one. A zero-headroom sector seals it at r85-86 c12,
+  and the south loop is a dead end, so `plain` strands chamber A.
+
+**`squares` is therefore the default.** It works with three bodies: the puller stands on r45c29,
+which is exactly 3 from the lever (`lever.kod:61-62`).
+
+How the moving floor reaches the router:
+
+- `m59-varsectors` reads the heights from `DoSolution`'s callers.
+- The heights are baked as door states beside each room's corridor door (`m59-ceiling-doors.json`,
+  `FLOOR_LIFTS`).
+- The keeper applies them when the server's floor packet arrives.
+
+The "through" step is two parts:
+
+1. `leaveChamber` (`tools/m59-orc-pit-exit.mjs`) waits for that packet, then walks fine chords off
+   the chamber onto a fixed spoke: A stops at r86c39, B at r41c28. Only this part races the 60 s.
+2. An ordinary `walk(2506)` from the spoke.
+
 **Quester.** It first draws a kit from 713 containing only what is certain to be needed: the head,
 the ore on the good side, and pies. Then it asks each NPC. Wulfgang's request line goes into the
 questbook (`substrate/questbook/<fleet>/`, gitignored) before anything else happens. The quester
@@ -94,7 +124,8 @@ failure is loud: the step stops and says why.
 | request-line wording after the client's markup | `readShipment` refuses, and the line stays in the questbook |
 | the chamber squares in `PIT` are standable | the team aborts before the lever |
 | the 2507 corridor door at r92 opens to a `go` from r93c24-26, and the chamber walk passes it | the walk stops short and the team aborts at the chamber check |
-| `walk(2506)` gets through while the floors are moved (the moving `SOLUTIONSECTOR` is not baked into `m59-variable-sectors.json`) | the walk is refused, and the team aborts at the boss-area check |
+| the server's sector-1 packet arrives, the keeper applies the baked chamber state, and the fine exit lands on the spoke | `leaveChamber` aborts the team, naming the floor it saw or the refused chord |
+| `walk(2506)` from the spoke reaches the boss area | the walk is refused, and the team aborts at the boss-area check |
 | the keeper engages a level-115 boss, and an avar shaman on the evil route | `harvest` times out |
 | `loot` takes the head and the feather off the floor | the holder or quester check fails |
 | Tepal sells nerudite after `precious stones`; the Feast Hall dispensers' names and access | the prep lap reports nothing bought or dispensed |

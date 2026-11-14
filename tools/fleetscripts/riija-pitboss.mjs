@@ -23,10 +23,10 @@
 // goal predicate is "the holder has the head".
 //
 // WHAT A LIVE TRIAL MUST CONFIRM BEFORE THIS IS TRUSTED -- none of it is in our map yet:
-//   * that the chamber squares in m59-riija.mjs PIT are standable (they are inside the kod's bounds;
-//     walkability is unmeasured), and which floor heights let a body walk on to 2506 -- the moving
-//     SOLUTIONSECTOR is not baked into substrate/m59-variable-sectors.json, so `walk(2506)` from a
-//     chamber may be refused by the router even while the floor is up;
+//   * that the chamber squares in m59-riija.mjs PIT are standable (they are inside the kod's bounds);
+//     which floor heights let a body out is now MEASURED offline (m59-orc-pit-floors-test.mjs:
+//     B leaves at 0/100/250, A only at 600 or 750 -- 'plain' strands A) and baked as door states
+//     (m59-ceiling-doors.json), but the live floor packet and the fine exit are unconfirmed;
 //   * that the keeper's engagement rules will fight a level-115 quarry at all (threat ceiling);
 //   * that `loot` picks the head off the floor (it is an ordinary item with "get", bosshead.kod).
 // Every one of those fails LOUDLY here (a refused walk, a harvest that times out, a pack without the
@@ -36,6 +36,8 @@ import { depositWithRecovery } from '../m59-hall-access.mjs';
 import { postureStep, restorePostureStep } from '../m59-errand-posture.mjs';
 import { ROOMS, PIT, ITEMS, pitRoles, inChamber, onMarked, teamMark, teamRead, teamWait, teamForget } from '../m59-riija.mjs';
 import { enterGrogsAntechamber } from '../m59-island-route.mjs';
+import { readIslandFinePosition } from '../m59-island-finewalk.mjs';
+import { leaveChamber } from '../m59-orc-pit-exit.mjs';
 
 const TAG = 'riija-pitboss';
 const A = s => ({ ...s, anywhere: true });
@@ -51,7 +53,8 @@ export const script = {
   describe: 'A team of 3-5 solves the orc-pit chamber puzzle, kills the orc pit boss and its body, and stows the head in hall 713.',
   provenance: { pinned: '019bf448', verified: '2026-11-13', refuseOnDrift: false,
     touches: ['tools/m59-fleetscript.mjs', 'tools/m59-hall-access.mjs', 'tools/m59-riija.mjs', 'tools/m59-errand-posture.mjs',
-      'tools/m59-island-route.mjs', 'tools/m59-island-finewalk.mjs'] },
+      'tools/m59-island-route.mjs', 'tools/m59-island-finewalk.mjs', 'tools/m59-orc-pit-exit.mjs',
+      'substrate/m59-ceiling-doors.json'] },
   recipe: {
     effect: 'An "orc pit boss head" in the holder\'s pack, then in the chests of hall 713 (and a mystic sword if one dropped).',
     run: 'riija-pitboss agents=<a>,<b1>,<b2>,<b3> [lever=<b1>] [holder=<a>] [stow=hall]',
@@ -60,13 +63,13 @@ export const script = {
       'the holder: a member (rank sir+) of the guild that owns hall 713, or an ally, when stow=hall'],
     cost: { time: 'cave walk + puzzle + fight; the floors stay moved 60 s', risk: 'a boss fight; no live completion measured yet' },
     notes: ['The first agent stands in chamber A (2507), the rest in chamber B (2508).',
-      'solution=plain (default) or squares -- see PIT in tools/m59-riija.mjs for what each moves.'],
+      'solution=squares (default) or plain -- plain raises chamber A to 900, which strands A (see PIT in tools/m59-riija.mjs).'],
   },
   params: {
     agents: { type: 'agents', required: true, describe: 'the team, in order: the first goes to chamber A, the rest to chamber B' },
     lever: { type: 'string', default: '', describe: 'who pulls the lever (must be in chamber B; default the first B member)' },
     holder: { type: 'string', default: '', describe: 'who picks up and stows the head (default the first agent)' },
-    solution: { type: 'string', default: 'plain', options: ['plain', 'squares'], describe: 'which chamber heights to ask for' },
+    solution: { type: 'string', default: 'squares', options: ['squares', 'plain'], describe: 'which chamber heights to ask for (squares: A 600 / B 250, both chambers reach 2506)' },
     stow: { type: 'string', default: 'hall', options: ['hall', 'carry'], describe: 'deposit the head in the hall, or keep it in the pack' },
     hall: { type: 'room', default: ROOMS.hall, describe: 'the hall to stow it in' },
     alsoStow: { type: 'string', default: 'mystic sword', describe: 'other boss loot to pick up and stow (comma list of names)' },
@@ -80,7 +83,7 @@ export const script = {
   async steps(p) {
     const team = list(p.agents);
     const me = p.agent ?? team[0];
-    const roles = pitRoles(team, { lever: p.lever || null, solution: p.solution ?? 'plain' });
+    const roles = pitRoles(team, { lever: p.lever || null, solution: p.solution ?? 'squares' });
     const role = roles.find(r => r.agent === me);
     if (!role) throw Error(`${me} is not on the team ${team.join(',')}`);
     const puller = roles.find(r => r.lever).agent;
@@ -121,7 +124,7 @@ export const script = {
           return abort(agent, `not inside chamber ${role.side} of ${role.room} (at ${roomOf(v)} r${at?.row}c${at?.col})`);
         const wantMarked = PIT[role.side].marked.some(([r, c]) => r === role.row && c === role.col);
         if (wantMarked && !onMarked(at, role.side)) return abort(agent, `not on the marked square r${role.row}c${role.col}`);
-        if ((p.solution ?? 'plain') === 'plain' && onMarked(at, role.side))
+        if ((p.solution ?? 'squares') === 'plain' && onMarked(at, role.side))
           return abort(agent, `standing on a marked square r${at.row}c${at.col}, which changes the solution`);
         teamMark(key, agent, 'ready', { row: at.row, col: at.col });
         return { ok: true, in_chamber: role.side, at: `r${at.row}c${at.col}` };
@@ -149,8 +152,18 @@ export const script = {
         teamMark(key, agent, 'lever');
         return { ok: true, lever: 'switched' };
       }, 'pull the lever (the puller), or wait for it')),
-      // THROUGH, while the floors are moved (60 s, ResetPuzzle).
-      walk(ROOMS.pit, { why: 'the Lair of the Orc Pit Boss, while the chamber floors are moved' }),
+      // THROUGH, while the floors are moved (60 s, ResetPuzzle). Only leaving the chamber is on the
+      // clock: wait for the server's floor packet, walk the fine chords planned on the solved floor
+      // onto the spoke (tools/m59-orc-pit-exit.mjs), then an ordinary walk to 2506 from fixed floor.
+      // Before 2026-11-14 this was `walk(2506)` alone, planned on the shipped chamber -- a pocket --
+      // so every body walked out the long way and failed (live run 08:11Z).
+      A(verify(async ctx => {
+        try {
+          return await (ctx.pitExit ?? leaveChamber)(ctx, role.side, p.solution ?? 'squares',
+            { read: ctx.readFine ?? (() => readIslandFinePosition(ctx)) });
+        } catch (e) { return abort(ctx.agent, `off chamber ${role.side}: ${e.message}`); }
+      }, 'off the chamber onto its spoke while the floor is moved')),
+      walk(ROOMS.pit, { why: 'the Lair of the Orc Pit Boss, from the spoke' }),
       A(verify(async ({ agent, call, state }) => {
         const v = await call('look', { agent }, 30_000).catch(() => null);
         if (!inBossArea(v)) return abort(agent, `not in the boss area of 2506 (at ${roomOf(v)} r${v?.you?.row}c${v?.you?.col})`);

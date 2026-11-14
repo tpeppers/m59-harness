@@ -46,7 +46,7 @@ const b64 = m => Buffer.from(m).toString('base64');
 // room is actually in with no key at all, and `applyCeilingDoors` answers null for a key it
 // does not hold — so the one room-state that is true every time nobody has touched anything
 // would be the one the table could not describe.
-const positions = d => [...new Set([d.closed, d.open, d.shipped].filter(h => Number.isFinite(h)))];
+const positions = d => [...new Set([d.closed, d.open, d.shipped, ...(d.positions ?? [])].filter(h => Number.isFinite(h)))];
 
 // FULL COMBINATIONS UNTIL THEY STOP BEING AFFORDABLE, THEN THE ONES THAT HAPPEN.
 //
@@ -94,7 +94,13 @@ function statesFor(doors) {
 // banks) and OPEN is the other height. Only the rooms named here, so no other room's state keys
 // move: a key is the door heights joined, and a new door in a room would re-key every rail baked
 // against it.
-const FLOOR_LIFTS = Object.freeze({ 703: [2] });
+//
+// THE ORC PIT CHAMBERS (2507 orcpita.kod, 2508 orcpitb.kod) ARE FLOOR LIFTS WITH FOUR POSITIONS.
+// SOLUTIONSECTOR (1) rests at 500 and EvaluatePuzzle sets it to one of three solution heights for
+// 60 s (A 600/750/900, B 250/100/0; orcpitb.kod:15-29, :233-262), beside each room's ceiling door
+// (sector 2). Each chamber is a pocket at 500 and a spoke opens only at the height whose headroom
+// it admits, so every position is a state: `positions` carries all of the kod's heights.
+const FLOOR_LIFTS = Object.freeze({ 703: [2], 2507: [1], 2508: [1] });
 
 const rooms = {};
 const report = [];
@@ -171,7 +177,8 @@ for (const entry of varsectors.rooms) {
       const shippedFloor = Math.round((base.sectors[indices[0]]?.floorHeight ?? NaN) / 16);
       if (!s.heights.includes(shippedFloor)) return null;   // reported below as unbakeable
       return { id, name: s.name ?? null, kind: 'floor', closed: shippedFloor,
-               open: s.heights.find(h => h !== shippedFloor), shipped: shippedFloor, indices };
+               open: s.heights.find(h => h !== shippedFloor), shipped: shippedFloor,
+               ...(s.heights.length > 2 ? { positions: s.heights } : {}), indices };
     }
     const shippedKod = Math.round((base.sectors[indices[0]]?.ceilingHeight ?? NaN) / 16);
     return { id, ...(ids.length > 1 ? { ids } : {}), name: s.name ?? null,
