@@ -13,6 +13,7 @@
 import * as grudge from '../m59-grudge.mjs';
 import { tryFarmGearCache } from '../m59-farm-gear-cache.mjs';
 import { usesOceanCourier } from '../m59-farm-town.mjs';
+import { jalaSinger } from '../m59-jala-singer.mjs';
 import { activeConflicts, clearConflict, declareConflict, recordTargetKill, targetsFor } from '../m59-intel.mjs';
 import { findPath } from '../m59-map.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
@@ -211,7 +212,12 @@ export class PassCombatPart {
     const tooHurtToArm = armHealth !== null && armHealth < this.safety().fleeAt;
     // The same exemption as above, applied to the two branches that actually walk the
     // character somewhere. Stated as one local so the pair cannot drift apart later.
-    const postedCaster = !!this.policy.roomEnchant?.enabled;
+    // A JALA SINGER IS ARMED WITH ITS INSTRUMENT (2026-11-14, Loial): every Jala song refuses unless an instrument
+    // is in use (jala.kod CanPayCosts -> GetInstrumentLevel, player.kod:11665), and an instrument is not a weapon to
+    // isArmed. So a singer holding its lute in a sanctuary was stopped here every pass ("unarmed -- waiting for the
+    // weapon it asked for") and the drill below never ran; handed a mace it practised, and the songs were refused.
+    // Exempt it exactly like a posted caster: in a sanctuary, holding an instrument, drilling a Jala song it knows.
+    const postedCaster = !!this.policy.roomEnchant?.enabled || (this.sanctuary?.() && jalaSinger(this));
     // A nearby verified spare can replace missing gear without starting a town trip.
     if (!postedCaster && await tryFarmGearCache(this).catch(() => false)) return HANDLED;
     if (!postedCaster && await tryOceanSelfDedication(this).catch(() => false)) return HANDLED;
@@ -1051,3 +1057,4 @@ export class PassCombatPart {
   }
   // @end 1
 }
+
