@@ -2644,6 +2644,111 @@
    "groups": []
   },
   {
+   "room": 2506,
+   "rid": "RID_ORC_PIT",
+   "file": "object/active/holder/room/monsroom/bossroom/orcpit1.kod",
+   "sectors": [
+    {
+     "sector": 5,
+     "name": "SECTOR_DOOR3a",
+     "kind": "ceiling",
+     "heights": [
+      310,
+      380
+     ],
+     "cite_lines": [
+      151,
+      174
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 6,
+     "name": "SECTOR_DOOR3b",
+     "kind": "ceiling",
+     "heights": [
+      204,
+      274
+     ],
+     "cite_lines": [
+      153,
+      176
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 1,
+     "name": "SECTOR_DOOR1a",
+     "kind": "ceiling",
+     "heights": [
+      310,
+      380
+     ],
+     "cite_lines": [
+      208,
+      242
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 2,
+     "name": "SECTOR_DOOR1b",
+     "kind": "ceiling",
+     "heights": [
+      204,
+      274
+     ],
+     "cite_lines": [
+      210,
+      244
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 3,
+     "name": "SECTOR_DOOR2a",
+     "kind": "ceiling",
+     "heights": [
+      310,
+      380
+     ],
+     "cite_lines": [
+      222,
+      259
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 4,
+     "name": "SECTOR_DOOR2b",
+     "kind": "ceiling",
+     "heights": [
+      204,
+      274
+     ],
+     "cite_lines": [
+      224,
+      261
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": [],
+   "risk_groups": []
+  },
+  {
    "room": 2507,
    "rid": "RID_ORC_PIT_A",
    "file": "object/active/holder/room/monsroom/orcpita.kod",

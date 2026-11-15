@@ -128,6 +128,25 @@ the 30 minutes in `bossroom.kod`. Once the boss is dead, the last user leaving 2
 
 Any team size works.
 
+**Taking the head home (`pit-to-hall agents=<one> items=orc%20pit%20boss%20head`).** This walks one
+character from anywhere in 2500-2510 to Ko'catan and the hall (713 by default), then deposits the
+named items. Route and reasons are in `tools/m59-pit-to-hall.mjs`.
+
+1. **2507's north part:** a fine walk (`checkedIslandWalk`) to r6c59, then one hop east to 2506.
+   Plain `travel` and `walk_to` chords stalled there (2026-11-15).
+2. **2506:** door 1 is a ceiling slab on the c14/c15 line at r56-58. It rests shut and opens for
+   9 s to a `go` from r56-57 c14-15 (`orcpit1.kod:201-213`). The script walks onto r57c15, says
+   `go`, then walks row 57 west to r57c3 and hops to 2509.
+   - Before this, `m59-varsectors` missed every door in this room, because its constants are mixed
+     case (`SECTOR_DOOR1a`). The router therefore planned a coarse way round that the fine trace
+     refuses, which is the `travel 2506>2509` budget failure.
+   - 2506 is now in `m59-ceiling-doors.json`.
+3. **2509:** one ordinary hop to 2500.
+4. **2500 onward:** cave-walk-on's chain to Ko'catan, with 2502 and 2505 admitted one body at a
+   time.
+
+It resumes from wherever it stopped, and any failure names the step and the room and square.
+
 **Quester.** It first draws a kit from 713 containing only what is certain to be needed: the head,
 the ore on the good side, and pies. Then it asks each NPC. Wulfgang's request line goes into the
 questbook (`substrate/questbook/<fleet>/`, gitignored) before anything else happens. The quester

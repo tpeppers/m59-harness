@@ -174,6 +174,7 @@ const SUITES = [
   ['m59-fine-guides-test.mjs', 'baked directional fine walks retain live geometry, body, boarding, endpoint and closed-door checks'],
   ['m59-hollows-north-test.mjs', "the Hollows' north edge to 2507 is on the upper shelf: the lower body has no step-mask route, the controller turns north at r16c37 on level 9600 rails"],
   ['m59-orc-pit-floors-test.mjs', 'the orc pit chamber floors are baked door states; B leaves at 0/100/250, A only at 600/750 (plain 900 strands it); the fine exit lands on a fixed spoke'],
+  ['m59-pit-to-hall-test.mjs', "out of the orc pit complex: fine rails from 2507's north part, 2506's door 1 pressed and passed, 2509 one hop, then the cave chain"],
   ['m59-observed-geometry-test.mjs', 'typed room door observations update an external fine planner without mutating another character or the baked source'],
   ['m59-konima-crossing-test.mjs', 'distinct stock-gravity crossings and one-at-a-time admission send missed landings through the southbound gutter'],
   ['m59-fine-traffic-refuge-test.mjs', 'a live-body cut waits at a proved fine refuge and moves only after a fresh scene admits the route'],

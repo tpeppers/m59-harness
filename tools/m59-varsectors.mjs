@@ -110,7 +110,10 @@ const kodFiles = (dir) => {
 // `FEAST_DOOR_OPEN` to nothing and lost the Duke's feast hall from the group list.
 export function constantsInSource(src) {
   const consts = new Map();
-  for (const c of src.matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(\d+)\s*$/gm))
+  // MIXED CASE AFTER THE FIRST LETTER. orcpit1.kod (2506) writes `SECTOR_DOOR1a = 1` and
+  // `H_DOOR1a_UP = 380`; an all-capitals pattern dropped every door in the Lair of the Orc Pit Boss,
+  // so the router planned through its shut door 1 and `travel 2506>2509` ran out of budget there.
+  for (const c of src.matchAll(/^\s*([A-Z][A-Za-z0-9_]*)\s*=\s*(\d+)\s*$/gm))
     consts.set(c[1], Number(c[2]));
   return consts;
 }
@@ -588,7 +591,11 @@ if (isMain || process.argv[1]?.endsWith('m59-varsectors.mjs')) {
     if(selected != null && !rooms.some(r=>r.room===selected))throw Error('room not found: '+selected);
     if(selected != null){
       const prior=JSON.parse(readFileSync(out,'utf8'));
-      prior.rooms=prior.rooms.map(r=>r.room===selected?rooms.find(n=>n.room===selected):r);
+      const fresh=rooms.find(n=>n.room===selected);
+      // A room the previous scan missed entirely is ADDED, in room order -- replacing only would
+      // leave the one the fix was for out of the table.
+      prior.rooms=prior.rooms.some(r=>r.room===selected)?prior.rooms.map(r=>r.room===selected?fresh:r)
+        :[...prior.rooms,fresh].sort((a,b)=>(a.room??1e9)-(b.room??1e9));
       writeFileSync(out,JSON.stringify(prior,null,1)+'\n');
       console.log(`wrote room ${selected} to ${out}`);
       process.exit(0);
