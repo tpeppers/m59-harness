@@ -141,8 +141,8 @@ console.log('\nthe hall');
   {
     const shopSrc = (await import('node:fs')).readFileSync(new URL('./autopilot/town-shops.mjs', import.meta.url), 'utf8');
     ok('hall items ride along on any trip passing the hall (the rent walk to Frular), not only a full-pack trip',
-       /const passing = here && (weaponIds.length > 0 || itemIds.length > 0);/.test(shopSrc)
-       && /(plan.go || passing) ? itemIds : []/.test(shopSrc));
+       shopSrc.includes('const passing = here && (weaponIds.length > 0 || itemIds.length > 0);')
+       && shopSrc.includes('(plan.go || passing) ? itemIds : []'));
   }
   ok('magicWeapons:false carries none', !hallDepositPlan(normalizeFarmTown({ ...MARION, hall: { room: 714, magicWeapons: false } }),
      { purse: 0, bankAbove: 5000, weapons: 9 }).go);
