@@ -70,29 +70,40 @@ export function localDayKey(at = Date.now()) {
  * shape -- a misspelt key that silently meant "tithe nothing" is the failure this refuses.
  */
 export const GUILD_TITHE_MAX = 100_000;
+// A SHARE OF EVERY SALE (operator 2026-11-16: "make sure guild rent tithe is enabled at 50% (they can put the other money in
+// personal banks or hall chests)"). `share` is a fraction of each verified sale's proceeds, 0 < share <= 1; with no
+// dailyAmount it has no daily ceiling, with one the ceiling still holds. The rest of the money is the bank's or the hall's.
 export function normalizeGuildTithe(v) {
   if (v === null || v === undefined || v === false) return null;
-  let amount;
+  let amount, share = null;
   if (typeof v === 'number') amount = v;
   else if (v && typeof v === 'object' && !Array.isArray(v)) {
-    for (const k of Object.keys(v)) if (!['enabled', 'dailyAmount', 'daily_amount'].includes(k))
-      throw new Error(`guildTithe: unrecognised key ${k} (known: enabled, dailyAmount)`);
+    for (const k of Object.keys(v)) if (!['enabled', 'dailyAmount', 'daily_amount', 'share'].includes(k))
+      throw new Error(`guildTithe: unrecognised key ${k} (known: enabled, dailyAmount, share)`);
     if (v.enabled === false) return null;
     if (v.enabled !== undefined && v.enabled !== true) throw new Error('guildTithe.enabled must be true or false');
     amount = v.dailyAmount ?? v.daily_amount;
-  } else throw new Error('guildTithe is null, a daily amount, or { dailyAmount }');
+    if (v.share != null) {
+      share = Number(v.share);
+      if (typeof v.share === 'boolean' || !Number.isFinite(share) || share <= 0 || share > 1)
+        throw new Error('guildTithe.share must be a fraction of each sale, more than 0 and at most 1 (0.5 is half)');
+    }
+  } else throw new Error('guildTithe is null, a daily amount, or { dailyAmount, share }');
+  if (amount == null && share != null) return { enabled: true, daily_amount: GUILD_TITHE_MAX, share };
   const n = Number(amount);
   if (typeof amount === 'boolean' || !Number.isInteger(n) || n < 1 || n > GUILD_TITHE_MAX)
     throw new Error(`guildTithe.dailyAmount must be a whole number of shillings from 1 to ${GUILD_TITHE_MAX}`);
-  return { enabled: true, daily_amount: n };
+  return { enabled: true, daily_amount: n, ...(share != null ? { share } : {}) };
 }
 
 export function tithePaymentPlan({ dailyAmount, paidToday = 0, saleProceeds = 0,
-                                   purse = 0, walkingMoney = 0 } = {}) {
+                                   purse = 0, walkingMoney = 0, share = null } = {}) {
   const target = Math.max(0, Math.floor(Number(dailyAmount) || 0));
   const paid = Math.max(0, Math.floor(Number(paidToday) || 0));
   const remaining = Math.max(0, target - paid);
-  const proceeds = Math.max(0, Math.floor(Number(saleProceeds) || 0));
+  const sold = Math.max(0, Math.floor(Number(saleProceeds) || 0));
+  const s = Number(share);
+  const proceeds = Number.isFinite(s) && s > 0 && s <= 1 ? Math.floor(sold * s) : sold;
   const available = Math.max(0, Math.floor(Number(purse) || 0) -
     Math.max(0, Math.floor(Number(walkingMoney) || 0)));
   const amount = Math.min(remaining, proceeds, available);

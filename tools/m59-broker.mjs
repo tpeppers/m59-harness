@@ -12895,7 +12895,7 @@ const TOOLS = [
           description: 'How many rooms off the destination a courier will walk to hand goods over (0-3).' },
       }, description: 'one returning seller buys and delivers exact reagent shortfalls for active farmers in its destination room; null disables it' },
       guild_tithe: { type: ['object', 'null'], properties: {
-        enabled: { type: 'boolean' }, daily_amount: { type: 'number' },
+        enabled: { type: 'boolean' }, daily_amount: { type: 'number' }, share: { type: 'number' },
       }, description: 'pay at most this daily amount from verified town-sale proceeds to Frular for guild rent; null disables it' },
       reagent_coop: REAGENT_COOP_SCHEMA,
       guild_wants: { type: ['object', 'null'], properties: { enabled: { type: 'boolean' } },
@@ -14112,8 +14112,10 @@ const TOOLS = [
           const value = a.guild_tithe;
           if (typeof value !== 'object' || Array.isArray(value) || value.enabled !== true)
             throw new Error('guild_tithe must be null or an enabled settings object');
+          const share = Number(value.share);
           p.policy.guildTithe = { enabled: true,
-            daily_amount: Math.max(0, Math.floor(Number(value.daily_amount) || 0)) };
+            daily_amount: Math.max(0, Math.floor(Number(value.daily_amount) || 0)),
+            ...(Number.isFinite(share) && share > 0 && share <= 1 ? { share } : {}) };
         }
       }
       if (a.reagent_coop !== undefined) p.policy.reagentCoop = coopConfig(a.reagent_coop);

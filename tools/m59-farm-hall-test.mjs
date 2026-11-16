@@ -23,7 +23,7 @@ import { Autopilot } from './m59-autopilot.mjs';
 import { Session } from './m59-game.mjs';
 import { readToolSource } from './autopilot/source.mjs';
 import { normalizeTravelHunt, travelHuntDecision, roadHuntResume, ROAD_HUNT_PAUSE_CAP, TRAVEL_HUNT_ORIGINS } from './m59-travel-hunt.mjs';
-import { normalizeFarmTown, farmTownRoadRooms, isHallBoundWeapon, hallDepositPlan, curseErrandNext, CURSE_TRIES,
+import { normalizeFarmTown, farmTownRoadRooms, isHallBoundWeapon, isHallBoundItem, hallDepositPlan, curseErrandNext, CURSE_TRIES,
          NORTH_BARLOQUE, FRULAR_ROOM } from './m59-farm-town.mjs';
 import { normalizeGuildTithe } from './m59-tithe.mjs';
 import { hallVisitConfig } from './m59-reagent-coop-runtime.mjs';
@@ -121,6 +121,23 @@ console.log('\nthe hall');
   ok('bank_above 0 or null never sends money', !hallDepositPlan(t, { purse: 99999, keep: 0, bankAbove: 0 }).go);
   ok('two weapons wait, three go on their own', !hallDepositPlan(t, { purse: 0, bankAbove: 5000, weapons: 2 }).go
      && hallDepositPlan(t, { purse: 0, bankAbove: 5000, weapons: 3 }).go);
+  // HALL CARGO BY NAME (operator 2026-11-16, the CV skeleton farm: gems to the guild hall whenever the pack fills).
+  {
+    const g = normalizeFarmTown({ ...MARION, hall: { room: 714, items: ['emerald', 'sapphire', 'ruby', 'purple mushroom'], itemsTripAt: 85 } });
+    ok('hall.items resolve and itemsTripAt is kept', g.hall.items.length === 4 && g.hall.itemsTripAt === 85, JSON.stringify(g.hall));
+    ok('a gem is hall cargo by name, plural or not; a long sword is not',
+       isHallBoundItem(g, 'emerald') && isHallBoundItem(g, 'sapphires') && isHallBoundItem(g, 'Purple Mushrooms') && !isHallBoundItem(g, 'long sword'));
+    ok('gems in a half-full pack wait', !hallDepositPlan(g, { purse: 0, bankAbove: 5000, items: 3, fullness: 0.5 }).go);
+    const full = hallDepositPlan(g, { purse: 0, bankAbove: 5000, items: 3, fullness: 0.9 });
+    ok('gems in a pack at itemsTripAt open the visit', full.go && full.items === 3, JSON.stringify(full));
+    ok('and they ride along with a money visit whatever the fullness', hallDepositPlan(g, { purse: 9000, keep: 400, bankAbove: 5000, items: 2 }).items === 2);
+    ok('a full pack with no hall cargo is not a hall visit', !hallDepositPlan(g, { purse: 0, bankAbove: 5000, items: 0, fullness: 1 }).go);
+    ok('the default trip point is 80%', normalizeFarmTown({ ...MARION, hall: { room: 714, items: ['ruby'] } }).hall.itemsTripAt === 80);
+    let threw = false; try { normalizeFarmTown({ ...MARION, hall: { room: 714, itemsTripAt: 150 } }); } catch { threw = true; }
+    ok('an itemsTripAt over 100 is refused', threw);
+    ok('silence is the old hall: no item list, no item cargo', normalizeFarmTown(MARION).hall.items.length === 0
+       && !isHallBoundItem(normalizeFarmTown(MARION), 'emerald'));
+  }
   ok('magicWeapons:false carries none', !hallDepositPlan(normalizeFarmTown({ ...MARION, hall: { room: 714, magicWeapons: false } }),
      { purse: 0, bankAbove: 5000, weapons: 9 }).go);
   const coopSrc = (await import('node:fs')).readFileSync(new URL('./m59-reagent-coop-runtime.mjs', import.meta.url), 'utf8');

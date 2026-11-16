@@ -378,6 +378,7 @@ export class StatusPart {
       town_trip_control: this.townTripControlStatus(),
       guild_tithe: this.policy.guildTithe?.enabled ? {
         daily_amount: this.policy.guildTithe.daily_amount,
+        share: this.policy.guildTithe.share ?? null,
         paid_today: new TitheBook({ agent: this.name ?? this.s.name,
           fleet: TITHE_FLEET }).paidToday(),
         paid_since_restart: this.tally.guild_tithe ?? 0,

@@ -4,9 +4,21 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TitheBook, parseRentHours, parseRentLine, tithePaymentPlan,
+import { TitheBook, normalizeGuildTithe, parseRentHours, parseRentLine, tithePaymentPlan,
          SAY_RADIUS, squaredDistance, withinSayRange } from './m59-tithe.mjs';
 
+// A SHARE OF EACH SALE (operator 2026-11-16: "guild rent tithe is enabled at 50%").
+{
+  const half = tithePaymentPlan({ dailyAmount: 100_000, share: 0.5, paidToday: 0, saleProceeds: 1_201, purse: 5_000, walkingMoney: 100 });
+  assert.equal(half.amount, 600, 'half of a 1201 sale is 600');
+  const capped = tithePaymentPlan({ dailyAmount: 400, share: 0.5, paidToday: 0, saleProceeds: 2_000, purse: 5_000, walkingMoney: 100 });
+  assert.equal(capped.amount, 400, 'a daily amount still caps a share');
+  assert.deepEqual(normalizeGuildTithe({ share: 0.5 }), { enabled: true, daily_amount: 100_000, share: 0.5 });
+  assert.deepEqual(normalizeGuildTithe({ dailyAmount: 800, share: 0.25 }), { enabled: true, daily_amount: 800, share: 0.25 });
+  assert.throws(() => normalizeGuildTithe({ share: 50 }), /fraction/);
+  assert.throws(() => normalizeGuildTithe({ share: 0 }), /fraction/);
+  assert.deepEqual(normalizeGuildTithe(800), { enabled: true, daily_amount: 800 }, 'a bare number is the old daily amount, no share');
+}
 const full = tithePaymentPlan({ dailyAmount: 2_000, paidToday: 0,
   saleProceeds: 3_000, purse: 4_000, walkingMoney: 1_000 });
 assert.equal(full.amount, 2_000, 'the daily amount caps one payment');

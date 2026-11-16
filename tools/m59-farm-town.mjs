@@ -55,7 +55,7 @@ const TOP_KEYS = Object.freeze(['name', 'sell', 'buy', 'bank', 'keep', 'sellRese
 // Frular's room (the rent, m59-tithe.mjs FRULAR_ROOM). A farm town's `hall` road may leave the confinement for these three.
 export const NORTH_BARLOQUE = 101;
 export const FRULAR_ROOM = 700;
-export const HALL_DEFAULTS = Object.freeze({ magicWeapons: true, weaponsTripAt: 3 });
+export const HALL_DEFAULTS = Object.freeze({ magicWeapons: true, weaponsTripAt: 3, items: Object.freeze([]), itemsTripAt: 80 });
 export const REMOVE_CURSE_POTION = 'remove curse potion';
 const words = s => String(s ?? '').toLowerCase().replace(/[’`]/g, "'").split(/[^a-z0-9']+/).filter(Boolean);
 
@@ -158,8 +158,8 @@ export function normalizeFarmTown(v, { resolveItem = null } = {}) {
   }
   // THE GUILD HALL INSTEAD OF A BANK (operator 2026-11-07: "let them deposit in the guild chest instead of banking").
   if (v.hall != null) {
-    if (!plain(v.hall)) throw new Error('town.hall must be { room, magicWeapons?, weaponsTripAt? } or null');
-    for (const k of Object.keys(v.hall)) if (!['room', 'magicWeapons', 'weaponsTripAt'].includes(k)) throw new Error(`town.hall: unrecognised key ${k}`);
+    if (!plain(v.hall)) throw new Error('town.hall must be { room, magicWeapons?, weaponsTripAt?, items?, itemsTripAt? } or null');
+    for (const k of Object.keys(v.hall)) if (!['room', 'magicWeapons', 'weaponsTripAt', 'items', 'itemsTripAt'].includes(k)) throw new Error(`town.hall: unrecognised key ${k}`);
     const h = { room: room('town.hall.room', v.hall.room), ...HALL_DEFAULTS };
     if (v.hall.magicWeapons != null) {
       if (typeof v.hall.magicWeapons !== 'boolean') throw new Error('town.hall.magicWeapons must be true or false');
@@ -169,6 +169,16 @@ export function normalizeFarmTown(v, { resolveItem = null } = {}) {
       const n = Number(v.hall.weaponsTripAt);
       if (!Number.isInteger(n) || n < 1 || n > 20) throw new Error('town.hall.weaponsTripAt must be a whole number from 1 to 20');
       h.weaponsTripAt = n;
+    }
+    // HALL CARGO BY NAME (operator 2026-11-16, the CV skeleton farm: "every time they fill up their inventory with gems, have
+    // them deposit in one of the guild halls"). `items` are whole stacks carried to the chests on a hall visit and never sold;
+    // a pack at `itemsTripAt` percent full (weight or bulk, the same load the sale trigger reads) holding any of them opens
+    // the visit by itself. Silence is the old hall: weapons and money only.
+    if (v.hall.items != null) h.items = itemList('town.hall.items', v.hall.items, resolveItem);
+    if (v.hall.itemsTripAt != null) {
+      const n = Number(v.hall.itemsTripAt);
+      if (!Number.isInteger(n) || n < 1 || n > 100) throw new Error('town.hall.itemsTripAt must be a whole percent from 1 to 100');
+      h.itemsTripAt = n;
     }
     out.hall = h;
   }
@@ -333,19 +343,33 @@ export function isHallBoundWeapon({ o, name, equipped = null, cursed = false, he
  * `keep`; weapons go when there are `weaponsTripAt` of them, and ride along with any money visit.
  *   -> { go, shillings, weapons, why }
  */
-export function hallDepositPlan(town, { purse = 0, keep = 0, bankAbove = null, weapons = 0 } = {}) {
+export function hallDepositPlan(town, { purse = 0, keep = 0, bankAbove = null, weapons = 0, items = 0, fullness = 0 } = {}) {
   const h = town?.hall;
-  if (!h) return { go: false, shillings: 0, weapons: 0, why: 'no hall on this farm town' };
+  if (!h) return { go: false, shillings: 0, weapons: 0, items: 0, why: 'no hall on this farm town' };
   const rich = Number(bankAbove) > 0 && purse > Number(bankAbove);
   const shillings = rich ? Math.max(0, Math.floor(purse - keep)) : 0;
   const w = h.magicWeapons ? Math.max(0, Math.floor(Number(weapons) || 0)) : 0;
-  if (!shillings && w < h.weaponsTripAt)
-    return { go: false, shillings: 0, weapons: 0,
+  const n = h.items?.length ? Math.max(0, Math.floor(Number(items) || 0)) : 0;
+  const full = n > 0 && Number(fullness) * 100 >= (h.itemsTripAt ?? HALL_DEFAULTS.itemsTripAt);
+  if (!shillings && w < h.weaponsTripAt && !full)
+    return { go: false, shillings: 0, weapons: 0, items: 0,
              why: (rich ? 'over bank_above but nothing above the keep' : `purse ${purse} not over bank_above ${bankAbove ?? 'off'}`) +
-               (w ? `; ${w} hall weapon(s), under ${h.weaponsTripAt}` : '') };
-  return { go: true, shillings, weapons: w,
+               (w ? `; ${w} hall weapon(s), under ${h.weaponsTripAt}` : '') +
+               (n ? `; ${n} hall item stack(s), pack ${Math.round(Number(fullness) * 100)}% under ${h.itemsTripAt}%` : '') };
+  // Cargo rides along with any visit: a trip to the chests for money or weapons takes the gems too.
+  return { go: true, shillings, weapons: w, items: n,
            why: [shillings ? `purse ${purse} over bank_above ${bankAbove}: ${shillings} to the chests` : null,
-                 w ? `${w} magic weapon(s) for the chests` : null].filter(Boolean).join('; ') };
+                 w ? `${w} magic weapon(s) for the chests` : null,
+                 full ? `pack ${Math.round(Number(fullness) * 100)}% full with ${n} hall item stack(s)` : n ? `${n} hall item stack(s) ride along` : null]
+             .filter(Boolean).join('; ') };
+}
+
+/** Is this pack row hall cargo by name (town.hall.items)? Whole-name match, plural-tolerant, like the sale's keep list. */
+export function isHallBoundItem(town, name) {
+  const list = town?.hall?.items;
+  if (!list?.length || !name) return false;
+  const key = itemNameKey(name);
+  return list.some(i => { const k = itemNameKey(i); return k === key || `${k}s` === key || k === `${key}s`; });
 }
 
 /**

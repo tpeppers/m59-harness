@@ -54,6 +54,8 @@ export class TownTripPart {
     let packIn = null;
     try { packIn = Array.isArray(this.s.client?.inventory) ? packCounts(this.packAsItems()) : null; } catch { packIn = null; }
     this.townTrip = { target, nextService: -1, startedAt, trigger, purpose,
+      // How full the pack was as the trip opened (the hall visit reads it after the sale has emptied the pack).
+      fullnessIn: Number.isFinite(sellCall.fullness) ? Number(sellCall.fullness) : null,
       // The connection this trip was judged on; a different one means "ask again" (reassessTownTrip).
       client: this.s.client ?? null,
       packIn, trade: newTripTrade(),

@@ -27,7 +27,7 @@ import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan } from '../m59-
 import { TICKETS_FILE, TicketBook, readDeskOpen } from '../m59-vault-broker.mjs';
 import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP as REAGENT_SHOP_MAINLAND, SPAWN_FILE, TITHE_FLEET, onIsland, purchaseEnabled, reagentTargetFor, sleep , townTable } from '../m59-autopilot.mjs';
 import { inspectDispositionQuality } from '../m59-loot-policy-runtime.mjs';
-import { curseErrandNext, farmTownSeller, hallDepositPlan, isHallBoundWeapon, sellerMatches } from '../m59-farm-town.mjs';
+import { curseErrandNext, farmTownSeller, hallDepositPlan, isHallBoundItem, isHallBoundWeapon, sellerMatches } from '../m59-farm-town.mjs';
 
 export class TownShopsPart {
   // @part 1
@@ -697,7 +697,7 @@ export class TownShopsPart {
     await this.s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
     const book = new TitheBook({ agent: this.name ?? this.s.name, fleet: TITHE_FLEET });
-    const plan = tithePaymentPlan({ dailyAmount: cfg.daily_amount,
+    const plan = tithePaymentPlan({ dailyAmount: cfg.daily_amount, share: cfg.share ?? null,
       paidToday: book.paidToday(), saleProceeds: proceeds, purse: purseAmount(c),
       walkingMoney: this.walkingFloat() });
     if (!plan.amount) {
@@ -891,11 +891,25 @@ export class TownShopsPart {
     }).map(o => Number(o.id));
   }
 
+  /** Hall cargo by name (town.hall.items): whole stacks, never what is equipped, by id. [] without a list. */
+  hallBoundItemIds(c = this.s?.client) {
+    const town = this.policy?.farmTown;
+    if (!town?.hall?.items?.length || !c?.inventory) return [];
+    const worn = skills.equippedNow(c);
+    return (c.inventory || []).filter(o => !worn?.has?.(o.id) && isHallBoundItem(town, c.rsc?.get?.(o.nameRsc) || ''))
+      .map(o => Number(o.id));
+  }
+
+  /** The pack's load as a fraction (the sale trigger's own reading); 0 when it cannot be read. */
+  packFullnessNow() {
+    try { const f = Number(this.checkIfShouldSell?.()?.fullness); return Number.isFinite(f) ? f : 0; } catch { return 0; }
+  }
+
   /** What a farm town's sale must never offer: the cursed weapon and the hall's cargo (equipped gear is the sale's own rule). */
   saleExcludeIds() {
     const town = this.policy?.farmTown;
     if (!town?.hall && !town?.uncurse) return null;
-    const out = new Set(this.hallBoundWeaponIds());
+    const out = new Set([...this.hallBoundWeaponIds(), ...this.hallBoundItemIds()]);
     const cursed = this.cursedWeaponCarried();
     if (cursed) out.add(Number(cursed.id));
     return out;
@@ -913,8 +927,9 @@ export class TownShopsPart {
       if (cursed) return { trigger: 'curse', why: `${cursed.name} is cursed${cursed.wielded ? ' and in hand' : ''}: sell, then lift it in ${town.name ?? 'town'}` };
     }
     if (allowHall && town.hall && now - (this._hallTripAt ?? 0) > 30 * 60_000) {
+      const items = this.hallBoundItemIds().length;
       const plan = hallDepositPlan(town, { purse: carried, keep: this.walkingFloat(), bankAbove: above,
-        weapons: this.hallBoundWeaponIds().length });
+        weapons: this.hallBoundWeaponIds().length, items, fullness: items ? this.packFullnessNow() : 0 });
       if (plan.go) return { trigger: 'hall', why: plan.why };
     }
     return null;
@@ -1032,15 +1047,20 @@ export class TownShopsPart {
     await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
     const keep = Math.max(this.walkingFloat() + this.standingOrderReserve(), this.shoppingPlan?.().required_purse ?? 0,
       trip.purchasePlan?.required_purse ?? 0);
-    const ids = this.hallBoundWeaponIds(c);
-    const plan = hallDepositPlan(town, { purse: this.purseNow(), keep, bankAbove: this.bankAboveNow(), weapons: ids.length });
+    const weaponIds = this.hallBoundWeaponIds(c), itemIds = this.hallBoundItemIds(c);
+    // THE PACK AS THE TRIP LEFT, not as it is now: the sale has already emptied it, and a pack that left full of gems is
+    // exactly the trip the gems are due on.
+    const fullness = Math.max(Number(trip.fullnessIn) || 0, this.packFullnessNow());
+    const plan = hallDepositPlan(town, { purse: this.purseNow(), keep, bankAbove: this.bankAboveNow(), weapons: weaponIds.length,
+      items: itemIds.length, fullness });
+    const ids = [...weaponIds, ...(plan.go ? itemIds : [])];
     // On the way already (the rent tithe walked to Frular): weapons ride along whatever their count.
-    const passing = [101, 700, town.hall.room].includes(Number(this.s.world?.room?.num)) && ids.length > 0;
+    const passing = [101, 700, town.hall.room].includes(Number(this.s.world?.room?.num)) && weaponIds.length > 0;
     if (!plan.go && !passing) { trip.hallVisitDone = true; return null; }
     if (Date.now() < (this._hallNothingUntil ?? 0)) { trip.hallVisitDone = true; return null; }
     const returnTo = town.buy?.food?.[0]?.room ?? town.sell?.[0]?.room ?? Number(this.s.world?.room?.num);
     this.note('HALL VISIT — the guild chests instead of a bank', { why: plan.why || 'passing the hall with magic weapons',
-      shillings: plan.shillings, weapons: ids.length, hall: town.hall.room, then: returnTo });
+      shillings: plan.shillings, weapons: weaponIds.length, items: plan.go ? itemIds.length : 0, hall: town.hall.room, then: returnTo });
     const r = await runReagentCoop(this, 'tithe', { bankable: plan.shillings, returnTo, depositIds: ids,
       requestId: `farm-hall:${trip.startedAt}`, config: { ...hallVisitConfig(town.hall.room), farmTownHall: true } },
       TITHE_FLEET, this.hallJourney());
