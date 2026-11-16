@@ -2129,6 +2129,21 @@ export class M59Client {
         const height = body.length >= 5 ? body.readUInt16LE(3) : null;
         const type = body.length >= 1 ? body[0] : null;
         const speed = body.length >= 6 ? body[5] : null;
+        // WHERE THE SECTOR STARTS FROM, so the mover can tell how far it still has to go
+        // (m59-game.mjs validateFineTarget). The last height this sector was sent to, carried
+        // forward along its own animation if that one had not finished. Unknown (first packet
+        // for the sector in this room) stays null, and the mover then refuses as before.
+        let from = null;
+        const prior = sector != null ? this.room.sectorHeights?.get(sector) : null;
+        if (prior && Number.isFinite(prior.height)) {
+          from = prior.height;
+          const prevFrom = Number(prior.from), sp = Number(prior.speed);
+          if (Number.isFinite(prevFrom) && sp > 0 && Number.isFinite(prior.at)) {
+            const moved = sp * Math.max(0, Date.now() - prior.at) / 1000;
+            from = prevFrom > prior.height ? Math.max(prior.height, prevFrom - moved)
+                                           : Math.min(prior.height, prevFrom + moved);
+          }
+        }
         this.room.collisionInvalidated = {
           opcode: op,
           kind: BPNAME[op] || `bp ${op}`,
@@ -2137,12 +2152,13 @@ export class M59Client {
           // reading it already applies to a record with no `until`.
           sector,
           height,
+          from,
           type, speed,
           at: Date.now(),
           until: Date.now() + COLLISION_ANIMATION_MS,
         };
         if (sector != null && height != null) {
-          (this.room.sectorHeights ??= new Map()).set(sector, { height, type, speed, at: Date.now() });
+          (this.room.sectorHeights ??= new Map()).set(sector, { height, from, type, speed, at: Date.now() });
           this.emit('sector-height', { room: this.room?.id ?? null, sector, height, type, speed });
         }
         this.emit('collision-geometry-invalidated', { ...this.room.collisionInvalidated });

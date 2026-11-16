@@ -1268,7 +1268,7 @@ const validateFineTarget = compileSessionMethod(brokerSource,
     // The declared-mutable list, as the real functions: both are pure lookups over a frozen
     // table in a module that imports without taking the fleet lock, so stubbing them would
     // be testing a different rule from the one that ships.
-    isMutableGeometry, mutableBecause });
+    isMutableGeometry, mutableBecause, MAX_STEP_HEIGHT });
 // `noteGeometryDrift` is stubbed rather than lifted: this suite is about what the
 // collision contract DECIDES, and where the broker files the resulting drift record is
 // not that question. The decision itself is asserted below, off `validateFineTarget`,
@@ -3350,6 +3350,25 @@ if (![validateFineTarget, queueValidatedMove, confirmPosition, stepFine, ordinar
   setAnimation({ kind: 'BP_SECTOR_MOVE', sector: null,
                  at: Date.now(), until: Date.now() + 10_000 });
   ok('a record that cannot name its sector still blocks the whole room',
+     tryMove().reason === 'collision_geometry_changed');
+
+  // A SECTOR WITHIN A STEP OF ITS DESTINATION IS JUDGED, NOT REFUSED. 703's bridge (2026-11-16):
+  // the platforms drop 654 -> 500 at 16/s and turn back at 10 s, so they are flush with the bank
+  // for a third of a second; a mover that refuses the whole animation can never board them.
+  // Refused while the platform is still far off; judged by the ordinary trace once the remaining
+  // travel is within MAX_STEP_HEIGHT (384 client = 24 in packet units); and never relaxed for a
+  // record that cannot say where it started.
+  setAnimation({ kind: 'BP_SECTOR_MOVE', sector: liveSector, from: 654, height: 500, speed: 16,
+                 at: Date.now(), until: Date.now() + 10_000 });
+  ok('a lift still 154 from its destination refuses a step onto it',
+     tryMove().reason === 'collision_geometry_changed');
+  setAnimation({ kind: 'BP_SECTOR_MOVE', sector: liveSector, from: 654, height: 500, speed: 16,
+                 at: Date.now() - 9_000, until: Date.now() + 1_000 });
+  ok('the same lift 10 from its destination is stepped onto (the client would: within MAX_STEP_HEIGHT)',
+     tryMove().reason !== 'collision_geometry_changed', JSON.stringify(tryMove()));
+  setAnimation({ kind: 'BP_SECTOR_MOVE', sector: liveSector, height: 500, speed: 16,
+                 at: Date.now() - 9_000, until: Date.now() + 1_000 });
+  ok('but a record that does not say where the sector started still refuses',
      tryMove().reason === 'collision_geometry_changed');
   setAnimation(null);
 

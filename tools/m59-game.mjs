@@ -3685,6 +3685,28 @@ class Session {
       if (touches && !Number.isInteger(invalidated.sector) && isMutableGeometry(c.room.id)) {
         touches = false;
       }
+      // A SECTOR WITHIN A STEP OF WHERE IT IS GOING IS WHERE IT IS GOING.
+      //
+      // The refusal exists because our geometry takes the packet's DESTINATION height the
+      // moment it arrives, while the stock client animates the sector there; mid-flight the
+      // two disagree, and a step judged against the destination is not the step the client
+      // would allow. But the disagreement is only ever the sector's REMAINING travel, which
+      // the packet tells us (from, height, speed, at). Once that is within the client's own
+      // step limit (MAX_STEP_HEIGHT, move.c), the destination geometry is the step the client
+      // would judge, so the ordinary trace below decides it -- exactly as for a settled sector.
+      //
+      // Why it matters: a lift is ridden WHILE it moves. 703's bridge platforms reach the bank
+      // 9.6 s after the word and start back up at 10.0 s, so a body that may not step until the
+      // animation has finished can never board one (2026-11-16: Bad Polly and Rizzo, the lift
+      // called four times each, never left the bank). What stays refused: any sector still more
+      // than a step from its destination, and every record that does not say where it started,
+      // how fast it moves or which sector it is.
+      if (touches && narrowed && Number.isFinite(invalidated.height) && Number.isFinite(invalidated.from)
+          && Number(invalidated.speed) > 0 && Number.isFinite(invalidated.at)) {
+        const travel = Math.abs(invalidated.height - invalidated.from);
+        const remaining = Math.max(0, travel - Number(invalidated.speed) * Math.max(0, Date.now() - invalidated.at) / 1000);
+        if (remaining * (CLIENT_FINENESS / KOD_FINENESS) <= MAX_STEP_HEIGHT) touches = false;
+      }
       if (touches) return {
         available: false, moved: false, blocked: true,
         reason: 'collision_geometry_changed',
