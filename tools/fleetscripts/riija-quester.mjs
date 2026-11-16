@@ -159,7 +159,8 @@ export async function offer(ctx, npc, match, amount, { targetId = null, deadline
   check(roomOf(v) === room && d2 != null && d2 <= QUEST_NPC_RADIUS, 'Not within five squares of the same recipient; nothing offered.');
   check(Date.now() < deadline, 'The node deadline passed while approaching; nothing offered.');
   await beforeSend?.();
-  const r = await ctx.keeper('trade', { op: 'offer', to_id: target.id, items: [{ id: item.id, amount }] }, 30_000);
+  // allow_quest_items: the head and the feather are quest items, which an offer to a non-player otherwise strips.
+  const r = await ctx.keeper('trade', { op: 'offer', to_id: target.id, items: [{ id: item.id, amount }], allow_quest_items: true }, 30_000);
   check(r?.sent && !r?.error, r?.error ?? 'The keeper did not confirm sending the offer.');
   return { offered: item.name, amount, to: npc };
 }

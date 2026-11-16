@@ -3914,7 +3914,8 @@ const server = createServer(async (req, res) => {
                 const items = idList(args.items);
                 if (!items.length) { json({ error: 'offer needs items' }, 400); return; }
                 const since = c.evSeq;
-                await session.pacer.submit('trade', () => { if(args.stationary_token) requireStationaryTrade(session,args.stationary_token); return c.offer(to, items); });
+                // allow_quest_items: a quest hand-in (m59-quest-items.mjs); a sale never sets it.
+                await session.pacer.submit('trade', () => { if(args.stationary_token) requireStationaryTrade(session,args.stationary_token); return c.offer(to, items, { allowQuestItems: args.allow_quest_items === true }); });
                 json({ sent: true, since, to_id: to, count: items.length, trade: view() });
                 return;
               }

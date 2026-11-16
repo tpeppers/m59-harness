@@ -64,5 +64,12 @@ console.log('\noffer');
   ok('a trade to a PLAYER still carries the head (holder to quester)', c.sent.length === 1 && idsIn(c.sent[0].bytes.subarray(4)).join() === '103');
 }
 
+{
+  // A QUEST HAND-IN IS AN OFFER TO A NON-PLAYER TOO, and the quest NPCs are shopkeepers (the Bone Priestess is BUYABLE).
+  const c = fakeClient();
+  c.offer(900, [103], { allowQuestItems: true });
+  ok('a quest hand-in (allowQuestItems) carries the head to a non-player', c.sent.length === 1 && idsIn(c.sent[0].bytes.subarray(4)).join() === '103');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

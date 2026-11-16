@@ -1371,12 +1371,15 @@ export class M59Client {
   // {id, amount} to offer part of a stack — which is how money gets split.
   //
   // Only BP_REQ_OFFER is subject to the packet throttle; the other three are not.
-  offer(toId, items)    {
+  offer(toId, items, { allowQuestItems = false } = {}) {
     const id = objId(toId);
     const target = this.room?.objects?.get(id);
     // A MERCHANT BUYS BY OFFER, so an offer to a non-player never carries a quest item (m59-quest-items.mjs). A trade to
     // a player still does: the head travels from its holder to the quester that way.
-    if (target && !((target.flags ?? 0) & 0x0004)) {
+    // A QUEST HAND-IN IS ALSO AN OFFER TO A NON-PLAYER, and the quest NPCs are shopkeepers too (the Bone Priestess is
+    // BUYABLE), so no flag tells them from a merchant. The quest step says so itself: `allowQuestItems` (2026-11-16,
+    // shard A: the head must reach the Bone Priestess). Nothing that sells passes it.
+    if (target && !allowQuestItems && !((target.flags ?? 0) & 0x0004)) {
       items = this.withoutQuestItems([].concat(items), 'sell');
       if (!items.length) return;
     }
