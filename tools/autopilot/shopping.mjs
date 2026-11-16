@@ -176,8 +176,16 @@ export class ShoppingPart {
       if (plan?.error) return null;
       const heldBack = this.heldBackIds?.() ?? new Set();
       const sold = (plan?.items ?? []).filter(i => i.state === 'sell' && i.sale_amount > 0 && !heldBack.has(Number(i.id)));
-      const w = weighPack(sold.map(i => ({ name: i.name, amount: i.sale_amount })));
-      const freedStacks = sold.filter(i => i.sale_amount >= (i.amount || 1)).length;
+      // A FARM TOWN'S HALL TAKES ITS CARGO ON THE SAME TRIP (town.hall.items, hall weapons). 2026-11-16, the CV skeleton farm:
+      // Piggy at 100% bulk, most of it gems bound for the hall, and every trip was held as "full of kept stock" because only
+      // the counter's share was counted as relief.
+      const c0 = this.s.client;
+      const soldIds = new Set(sold.map(i => Number(i.id)));
+      const hallIds = new Set([...(this.hallBoundItemIds?.(c0) ?? []), ...(this.hallBoundWeaponIds?.(c0) ?? [])].map(Number));
+      const hallRows = (c0?.inventory ?? []).filter(o => hallIds.has(Number(o.id)) && !soldIds.has(Number(o.id)))
+        .map(o => ({ name: c0.rsc?.get?.(o.nameRsc) ?? o.name, amount: o.amount || 1 }));
+      const w = weighPack([...sold.map(i => ({ name: i.name, amount: i.sale_amount })), ...hallRows]);
+      const freedStacks = sold.filter(i => i.sale_amount >= (i.amount || 1)).length + hallRows.length;
       const frac = (v, max) => (max > 0 && Number.isFinite(v) ? v / max : 0);
       const after = Math.max(frac(cap.load.weight - (w?.weight ?? 0), cap.weight_max),
                              frac(cap.load.bulk - (w?.bulk ?? 0), cap.bulk_max));

@@ -327,7 +327,8 @@ export class MarketPart {
           fullness: Number(fullness.toFixed(3)), stacks, after_sale: relief.summary,
           why: 'selling everything the counter would take still leaves the pack over the trigger — ' +
                'the rest is kept, protected or wanted by the guild, and a walk to town cannot move it' });
-      return { sell: false, trigger: null, why: 'pack full of kept stock; a sell trip would not relieve it' };
+      // The fullness rides along: the hall errand (farmTownErrand -> packFullnessNow) reads it, and without it a held pack read 0%.
+      return { sell: false, trigger: null, fullness, why: 'pack full of kept stock; a sell trip would not relieve it' };
     }
     if (loadDue && !hold)
       return { sell: true, trigger: 'load', fullness, estimated_value: worth?.value,

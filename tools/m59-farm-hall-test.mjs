@@ -144,6 +144,15 @@ console.log('\nthe hall');
        shopSrc.includes('const passing = here && (weaponIds.length > 0 || itemIds.length > 0);')
        && shopSrc.includes('(plan.go || passing) ? itemIds : []'));
   }
+  {
+    const fsm = await import('node:fs');
+    const shopping = fsm.readFileSync(new URL('./autopilot/shopping.mjs', import.meta.url), 'utf8');
+    const market = fsm.readFileSync(new URL('./autopilot/market.mjs', import.meta.url), 'utf8');
+    ok('a sell trip counts the hall cargo as relief (gems bound for the hall are not "kept stock")',
+       shopping.includes('this.hallBoundItemIds?.(c0)') && shopping.includes('...hallRows]'));
+    ok('a held trip still reports its fullness, so the hall errand can read it',
+       market.includes("return { sell: false, trigger: null, fullness, why: 'pack full of kept stock"));
+  }
   ok('magicWeapons:false carries none', !hallDepositPlan(normalizeFarmTown({ ...MARION, hall: { room: 714, magicWeapons: false } }),
      { purse: 0, bankAbove: 5000, weapons: 9 }).go);
   const coopSrc = (await import('node:fs')).readFileSync(new URL('./m59-reagent-coop-runtime.mjs', import.meta.url), 'utf8');
