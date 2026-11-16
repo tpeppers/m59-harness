@@ -36,11 +36,21 @@ export function loadShopsSeen(file = SHOPS_SEEN_FILE) {
 
 const keyOf = (room, name) => `${room ?? '?'}:${foldName(name)}`;
 
+// A VAULT COUNTER IS NOT A SHOP. The vaultman answers the same list packet a merchant does, but what it lists is the
+// character's OWN deposits and the "price" is the withdrawal surcharge. Recorded as a shop, Itzal cha'Nosak (The Hungry
+// Vaults, Ko'catan 2005) read as "sells emeralds at 1 shilling" -- operator 2026-11-16: "that vaults room doesn't sell
+// anything". The vaults are in Barloque (114) and Ko'catan (2005) only (m59-fleetscript.mjs, `vault`).
+export const VAULT_ROOMS = Object.freeze(new Set([114, 2005]));
+export function isVaultCounter({ room = null, room_name = null } = {}) {
+  return VAULT_ROOMS.has(Number(room)) || /\bvault/i.test(String(room_name ?? ''));
+}
+
 // Record one opened shop. Returns the stored row, or null when there is nothing to key it
 // on — an unnamed seller cannot be found again by name, so it is not worth a row.
 export function recordShopSeen({ name, room, room_name = null, server = null, items = [] } = {},
                                { file = SHOPS_SEEN_FILE, now = Date.now() } = {}) {
   if (!foldName(name) || !Array.isArray(items) || !items.length) return null;
+  if (isVaultCounter({ room, room_name })) return null;   // a withdrawal list, not a stock list
   const book = loadShopsSeen(file);
   const row = {
     name: String(name), room: Number.isFinite(Number(room)) ? Number(room) : null, room_name,
@@ -67,6 +77,7 @@ export function recordShopSeen({ name, room, room_name = null, server = null, it
 export function withShopsSeen(merchants, seen) {
   const rows = (merchants ?? []).map(m => ({ ...m }));
   for (const s of Object.values(seen?.shops ?? {})) {
+    if (isVaultCounter(s)) continue;   // rows written before the vault guard existed
     const f = foldName(s.name);
     const match = rows.find(m => m.name != null && foldName(m.name) === f && m.room === s.room)
       ?? rows.find(m => m.name != null && foldName(m.name) === f && m.room == null);

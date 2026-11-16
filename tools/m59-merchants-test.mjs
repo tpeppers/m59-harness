@@ -388,6 +388,16 @@ console.log('\na merchant is found by the name people use, and the room maps eac
      findMerchants(merged, 'Ottoline')[0]?.room === 999);
   ok('...and by what she sells', sellersOf(merged, 'sapphire').some(m => m.name === 'Ottoline'));
   ok('the built catalogue is not mutated', !all.some(m => m.seen_live));
+
+  // A VAULT COUNTER IS NOT A SHOP (operator 2026-11-16): Itzal cha'Nosak's withdrawal list read as "emeralds, 1 shilling".
+  ok('a vaultman in the Hungry Vaults (2005) is not recorded as a shop',
+     recordShopSeen({ name: 'Itzal cha\'Nosak', room: 2005, room_name: 'The Hungry Vaults', items: [{ name: 'emerald', cost: 1 }] }, { file: tmp }) === null);
+  ok('nor the Barloque vaultman (114)',
+     recordShopSeen({ name: 'Obert Cair\'bre', room: 114, items: [{ name: 'diamond', cost: 1 }] }, { file: tmp }) === null);
+  const stale = { shops: { ...loadShopsSeen(tmp).shops,
+    '2005:itzal': { name: 'Itzal cha\'Nosak', room: 2005, room_name: 'The Hungry Vaults', items: [{ name: 'emerald', cost: 1 }] } } };
+  ok('a vault row already on disk is not folded into the catalogue',
+     !sellersOf(withShopsSeen(all, stale), 'emerald').some(m => m.room === 2005));
   try { fs.unlinkSync(tmp); } catch {}
 }
 
