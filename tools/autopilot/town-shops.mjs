@@ -1053,14 +1053,17 @@ export class TownShopsPart {
     const fullness = Math.max(Number(trip.fullnessIn) || 0, this.packFullnessNow());
     const plan = hallDepositPlan(town, { purse: this.purseNow(), keep, bankAbove: this.bankAboveNow(), weapons: weaponIds.length,
       items: itemIds.length, fullness });
-    const ids = [...weaponIds, ...(plan.go ? itemIds : [])];
-    // On the way already (the rent tithe walked to Frular): weapons ride along whatever their count.
-    const passing = [101, 700, town.hall.room].includes(Number(this.s.world?.room?.num)) && weaponIds.length > 0;
+    // On the way already (the rent tithe walked to Frular, next door): weapons AND hall items ride along whatever their count.
+    // 2026-11-16: Sweetums' first lap was opened by identify-loot, not a full pack, so the fullness rule held his 45 emeralds
+    // back while he stood beside the hall paying the rent.
+    const here = [101, 700, town.hall.room].includes(Number(this.s.world?.room?.num));
+    const passing = here && (weaponIds.length > 0 || itemIds.length > 0);
+    const ids = [...weaponIds, ...((plan.go || passing) ? itemIds : [])];
     if (!plan.go && !passing) { trip.hallVisitDone = true; return null; }
     if (Date.now() < (this._hallNothingUntil ?? 0)) { trip.hallVisitDone = true; return null; }
     const returnTo = town.buy?.food?.[0]?.room ?? town.sell?.[0]?.room ?? Number(this.s.world?.room?.num);
     this.note('HALL VISIT — the guild chests instead of a bank', { why: plan.why || 'passing the hall with magic weapons',
-      shillings: plan.shillings, weapons: weaponIds.length, items: plan.go ? itemIds.length : 0, hall: town.hall.room, then: returnTo });
+      shillings: plan.shillings, weapons: weaponIds.length, items: (plan.go || passing) ? itemIds.length : 0, hall: town.hall.room, then: returnTo });
     const r = await runReagentCoop(this, 'tithe', { bankable: plan.shillings, returnTo, depositIds: ids,
       requestId: `farm-hall:${trip.startedAt}`, config: { ...hallVisitConfig(town.hall.room), farmTownHall: true } },
       TITHE_FLEET, this.hallJourney());

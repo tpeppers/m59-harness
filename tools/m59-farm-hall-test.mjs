@@ -138,6 +138,12 @@ console.log('\nthe hall');
     ok('silence is the old hall: no item list, no item cargo', normalizeFarmTown(MARION).hall.items.length === 0
        && !isHallBoundItem(normalizeFarmTown(MARION), 'emerald'));
   }
+  {
+    const shopSrc = (await import('node:fs')).readFileSync(new URL('./autopilot/town-shops.mjs', import.meta.url), 'utf8');
+    ok('hall items ride along on any trip passing the hall (the rent walk to Frular), not only a full-pack trip',
+       /const passing = here && (weaponIds.length > 0 || itemIds.length > 0);/.test(shopSrc)
+       && /(plan.go || passing) ? itemIds : []/.test(shopSrc));
+  }
   ok('magicWeapons:false carries none', !hallDepositPlan(normalizeFarmTown({ ...MARION, hall: { room: 714, magicWeapons: false } }),
      { purse: 0, bankAbove: 5000, weapons: 9 }).go);
   const coopSrc = (await import('node:fs')).readFileSync(new URL('./m59-reagent-coop-runtime.mjs', import.meta.url), 'utf8');
