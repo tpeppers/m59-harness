@@ -24,6 +24,7 @@ import { recordSeen } from './m59-trails.mjs';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { loadResources } from './m59-rsc.mjs';
+import { isQuestItem } from './m59-quest-items.mjs';
 import { EnchantmentObservations } from './m59-enchantment-observations.mjs';
 import { AudioObservations, parseAudio } from './m59-audio-observations.mjs';
 import { groanBand } from './m59-player-health.mjs';
@@ -1272,7 +1273,29 @@ export class M59Client {
 
   // BP_REQ_DROP is {2,LIST_OBJ_PARM} — a LIST of ids, not one id. The single-item
   // form is the common case, so accept either.
-  drop(ids)             { this.send(BP.REQ_DROP, encodeIdList([].concat(ids))); }
+  // QUEST ITEMS NEVER LEAVE BY DROP (tools/m59-quest-items.mjs): filtered here, the one call every shed, eject and
+  // make-space path ends in, so no faculty can put a sword shard on the floor to carry loot. Nothing left: nothing sent.
+  drop(ids)             {
+    const kept = this.withoutQuestItems([].concat(ids), 'drop');
+    if (!kept.length) return;
+    this.send(BP.REQ_DROP, encodeIdList(kept));
+  }
+  /** Strip quest items from an id list (plain ids or {id, amount}); say what was held back. */
+  withoutQuestItems(list, why) {
+    const nameOf = entry => {
+      const id = objId(typeof entry === 'object' && entry !== null ? entry.id : entry);
+      const o = (this.inventory ?? []).find(x => x.id === id);
+      return o ? (this.rsc?.get?.(o.nameRsc) || '') : '';
+    };
+    const held = [], kept = [];
+    for (const entry of list) (isQuestItem(nameOf(entry)) ? held : kept).push(entry);
+    if (held.length) {
+      const names = held.map(nameOf);
+      console.warn(`[quest-items] ${why}: held back ${names.join(', ')} -- a quest item is never ${why === 'drop' ? 'dropped' : 'sold'}`);
+      this.emit?.('quest_item_kept', { why, items: names });
+    }
+    return kept;
+  }
 
   // PARAM_OBJECT carries the NUMBER tag and quantity for stackable items.
   // Bare IDs remain valid for non-stackable objects. Container GET is opcode 239;
@@ -1351,6 +1374,12 @@ export class M59Client {
   offer(toId, items)    {
     const id = objId(toId);
     const target = this.room?.objects?.get(id);
+    // A MERCHANT BUYS BY OFFER, so an offer to a non-player never carries a quest item (m59-quest-items.mjs). A trade to
+    // a player still does: the head travels from its holder to the quester that way.
+    if (target && !((target.flags ?? 0) & 0x0004)) {
+      items = this.withoutQuestItems([].concat(items), 'sell');
+      if (!items.length) return;
+    }
     this.pendingOfferTo = {
       id,
       name: target ? (this.rsc.get(target.nameRsc) || '') : '',
