@@ -22,6 +22,9 @@ node_modules/
 # The broker's job board (m59-jobboard.mjs): runtime state of THIS machine's runs, rewritten continuously.
 /substrate/jobs-*.json
 /substrate/jobs-*.json.tmp-*
+# Operator overrides (m59-overrides.mjs): which bodies THIS machine has told every fleetscript to leave alone, and until when.
+/substrate/overrides-*.json
+/substrate/overrides-*.json.tmp-*
 /substrate/courier-purchases/
 /substrate/fleet-state.json.*
 # Named fleets (--fleet <name>) keep a roster each under here. Same plaintext

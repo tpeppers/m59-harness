@@ -286,6 +286,8 @@ through a nested shelter order.
 - `node tools/m59-supply-test.mjs` (154) — a save landing between the call and the offer, with the
   old number recycled as a sapphire, offers the elderberry stack's NEW id; an id older than every
   remembered save is refused as `stale object id` with `stale_ids`, nothing offered.
+- `node tools/m59-overrides-test.mjs` (20) — an operator override (`m59-jobs cancel --agents`) expires on its own
+  clock, leaves unnamed bodies alone, throws on a file that will not parse, and liveStart reads it before the board.
 - `node tools/m59-fleetscript-test.mjs` (374) — the `supply` step retries a stale-id refusal once
   after a fresh read, sends the new id, sends every id with its name, and stops after two.
 - `node tools/m59-keeperproxy-test.mjs` — `ids_as_of`, `id_generations` and `saves` are checked on

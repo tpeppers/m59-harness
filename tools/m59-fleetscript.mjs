@@ -163,6 +163,7 @@ import { join, resolve } from 'node:path';
 import { registerJob, getJobContext } from './m59-jobclient.mjs';
 import { takeAgentLocks } from './m59-runlock.mjs';
 import { pilotHold, pilotRefusal, judgeJobs, jobRefusal, liveRoom, formatAge } from './m59-livestart.mjs';
+import { overridesPath, readOverrides, overridden, overrideRefusal } from './m59-overrides.mjs';
 export { legFor, liveRoom } from './m59-livestart.mjs';
 import { declaredControl, controlViolation } from './m59-control-guard.mjs';
 import { fleetName, stateFileFor, resolveControlUrl } from './m59-fleetpath.mjs';
@@ -5193,6 +5194,18 @@ async function liveStartGate({ name, agents, fleet, codeKick, pollMs, log, warnM
     return { ok: false, why: `${name}: refusing -- ${why}`, contended: verdict.live.flatMap(x => x.agents),
              jobs: verdict.live.map(x => ({ id: x.job.id, name: x.job.name, owner_pid: x.job.owner_pid ?? null })) };
   };
+
+  // 0. AN OPERATOR OVERRIDE (m59-overrides.mjs, `m59-jobs cancel --agents`): the operator has said "nothing drives this body
+  // for N minutes" -- most often because the chain it was on is known to fail. Read before anything else, from this checkout's
+  // substrate, and refused by name. Unreadable REFUSES: a guarantee that cannot be evaluated must not proceed (git-process §4).
+  {
+    let held;
+    try { held = overridden(readOverrides(overridesPath(join(REPO_ROOT, 'substrate'), fleet)), agents, now()); }
+    catch (e) { return { ok: false, why: `${name}: refusing -- the override file could not be read (${e.message})`, contended: agents }; }
+    if (held.length)
+      return { ok: false, why: `${name}: refusing -- ${held.map(o => overrideRefusal(o, now())).join('\n')}`,
+               contended: held.map(o => o.agent), overridden: held };
+  }
 
   let verdict = await boardCheck();
   let refused = refuseLive(verdict);

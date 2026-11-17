@@ -354,6 +354,16 @@ taking characters that a tripwire-paused job holds (on 2026-10-29: `buy-sapphire
 errand that had just killed Lew and Zoot) would otherwise see that job restart mid-launch. By ids or agents only —
 there is no `--all`, because it is not undone. Broker tool `job_cancel`; a broker started before it does not have it.
 
+**AND `cancel --agents` OVERRIDES THE BODY, NOT ONLY THE JOB** (`tools/m59-overrides.mjs`, 2026-11-17). Operator:
+*"Can we add a 'cancel/override' functionality ... so that we don't keep letting things run that we know will fail?"*
+Killing the job left three things running on a doomed chain: the supervisor that launched it went straight on to its
+next step for the same body, the keeper lease outlived the job (Rowlf's cancelled `buy` held "is busy" for 18 more
+minutes), and an open trade blocked the `make_space` that would have rescued him. So `cancel --agents` now also
+releases each keeper lease and open trade, and writes `substrate/overrides-<fleet>.json`: **liveStart refuses every
+fleetscript on an overridden body** — any supervisor, any session — for 15 min (`--hold N`, `--hold 0` for none), naming
+who set it and how to lift it. `m59-jobs override` lists them, `override clear --agents t11` lifts one; a rescue that
+must drive the body anyway waives `liveStart`, as it already must for a live job. An unreadable file refuses.
+
 Every run that holds characters is a **job the broker holds** (`tools/m59-jobboard.mjs`, persisted to
 `substrate/jobs-<fleet>.json`). Operator, 2026-10-25: *"any scripts can register themselves to be cancelled and/or
 restarted by alerts ... a universal job board that's held open by the broker"* — the day a hostile login found
