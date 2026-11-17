@@ -249,6 +249,13 @@ if (process.env.M59_KEEPER_ATTACH && !SPECTATE) {
     process.exit(3);
   }
 }
+// WATCHING, NOT DRIVING (m59-proxy-attach.mjs, "A WATCHER"). The broker attaches this keeper to the
+// person's own connection while they play, so `/state` -- and every broker tool built on it -- stays
+// live instead of freezing at the moment their login bumped us. A watcher builds its Autopilot (its
+// status projection is what readers see) and never starts it; it never fights, never answers a
+// player, and its client could not log in even if asked, because an attached client only attaches.
+const WATCHING = keeperAttachment?.watch === true;
+if (WATCHING) console.error(`[keeper] ${agent} WATCHING a person's connection: autopilot held, combat off, read-only`);
 const credHost = entry.credentials.host || host;
 const credPort = entry.credentials.port || serverPort;
 // THE BOOT ORDERS, AND THEY ARE RE-APPLIED ON EVERY REJOIN — so they are `let`, not
@@ -428,7 +435,8 @@ const session = new Session(agent, {
 });
 const attachmentView = () => keeperAttachment ? { agent,
   client_pid: keeperAttachment.client_pid, attach_port: keeperAttachment.port,
-  gate_control: keeperAttachment.gate_control, player: session.client?.selfId ?? keeperAttachment.player } : null;
+  gate_control: keeperAttachment.gate_control, player: session.client?.selfId ?? keeperAttachment.player,
+  ...(keeperAttachment.watch === true ? { watch: true } : {}) } : null;
 // `save game` renumbers the player object. Every subsequent attach must use the last
 // player ID actually observed on this shared connection, not the original launch ID.
 const refreshAttachment = () => {
@@ -479,7 +487,7 @@ let lastPenalty = null;                // the latest unsafe logoff's window, for
 let joinWanted = !dormancy;
 let joinGeneration = 0;
 let keeperJoinInFlight = null;
-session.combat.pvpEligibility = () => joinWanted;
+session.combat.pvpEligibility = () => joinWanted && !WATCHING;
 
 // THE WAR RESTART HANDOFF. A restart used to be a LOGOFF: the old keeper stopped, the character
 // left the world, and the broker's sweep logged it back in later -- one at a time over a minute
@@ -531,7 +539,7 @@ setInterval(() => {
 const isHostCharacter = !fleet?.[agent] && !!menagerieRoster[agent];
 session.combat.fleetmate = name => party.isFleetmate(name);
 session.combat.warEligibility = () => joinWanted && !isHostCharacter && !war.isNoncombatant(character) &&
-  process.env.M59_WAR_RESPONSE !== '0' && (autopilot?.policy ?? policy)?.warResponse !== false;
+  !WATCHING && process.env.M59_WAR_RESPONSE !== '0' && (autopilot?.policy ?? policy)?.warResponse !== false;
 // AND EVERY CHARACTER, HOSTS INCLUDED, IS A SENTINEL: it reports a war enemy it sees to the whole
 // fleet (a `sighted` alarm) and never fights because of it. A host is the point -- Loial stands
 // Outside Castle Victoria, on Morpheus's road to the stairs. `warSentinel: false` or
@@ -563,7 +571,7 @@ setInterval(() => { void session.joints.refresh(); }, 2000).unref?.();
 // THE PVP REAGENT RESERVE (m59-reagent-reserve.mjs): who this is, so client.cast can read this fleet's reserve file.
 session.reserveWho = { fleet: fleetName, agent, character };
 session.combat.sentinelEligibility = () => joinWanted &&
-  process.env.M59_WAR_SENTINEL !== '0' && (autopilot?.policy ?? policy)?.warSentinel !== false;
+  !WATCHING && process.env.M59_WAR_SENTINEL !== '0' && (autopilot?.policy ?? policy)?.warSentinel !== false;
 // WARBAND COMBAT (CombatMode.warbandTick): on while a swarm holds this character -- the terminal's S
 // key claims movement+work as `swarm/<leader>@terminal`. Never a host or a war noncombatant.
 session.combat.agentId = agent;
@@ -1164,7 +1172,7 @@ async function joinGenerationOnce(generation) {
     } catch (e) {
       console.error(`[hooks] keeper: not loaded (${e.message})`);
     }
-    if (mode === 'tick') {
+    if (mode === 'tick' && !WATCHING) {
       // WARM THE MAP THIS KEEPER'S ROUTER WILL USE, before the Router loads it.
       // loadMap() is cached per process, so calling it here (and building on the SAME map
       // object) means the Router's own loadMap() gets the warmed instance. Without this,
@@ -1292,6 +1300,10 @@ async function joinGenerationOnce(generation) {
         consumeCarry(CARRY_FILE);
       }
       assertJoinIntent(generation);
+      if (WATCHING) {
+        console.error(`[keeper] ${agent} watching (mode=${mode} held, never started)`);
+        return;
+      }
       // The farming strategy (if one is assigned) over the orders just re-imposed, before the first
       // pass reads them. The file's keys never enter `policy` above: only the assignment is an order.
       await autopilot.applyFarmStrategy?.('join');
@@ -4644,6 +4656,7 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && path === '/pass') {
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
       if (!requireAddressedWrite(req, asked)) return;
+      if (WATCHING) { json({ ok: false, watching: true, error: 'watching a person play; this keeper never drives' }); return; }
       if (autopilot?.running) {
         log(`[keeper] ${agent} forced pass`);
         // Force a pass by stopping and restarting
@@ -4810,6 +4823,7 @@ const server = createServer(async (req, res) => {
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
       if (!requireAddressedWrite(req, asked)) return;
       log(`[keeper] ${agent} resume requested`);
+      if (WATCHING) { json({ ok: false, watching: true, error: 'watching a person play; this keeper never drives' }); return; }
       if (autopilot && !autopilot.running) {
         autopilot.start();
         json({ ok: true, resumed: true });

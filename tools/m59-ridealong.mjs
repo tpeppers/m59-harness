@@ -53,7 +53,9 @@ export class RidealongControls {
   status(agent) {
     const rec = this.records.get(agent), keeper = this.io.keeper(agent);
     const ready = !!rec?.keeper_ready;
-    return { agent, automated: !!rec && rec.phase === 'active' && ready && !this.io.pilot(agent), keeper_ready: ready,
+    return { agent, automated: !!rec && rec.mode !== 'watch' && rec.phase === 'active' && ready && !this.io.pilot(agent), keeper_ready: ready,
+      // A WATCH (see watch() below): the person drives, the broker's keeper listens on the same connection.
+      watching: !!rec && rec.mode === 'watch' && rec.phase === 'active' && ready,
       attached: rec ? { ...rec, pid: keeper?.pid ?? null, log_path: this.io.logPath(agent) } : null,
       piloted: !!this.io.pilot(agent), transitioning: this.transitions.has(agent) };
   }
@@ -70,10 +72,11 @@ export class RidealongControls {
       if (!credentials) throw Error('agent is not in this broker\'s fleet');
       if (!io.pidAlive(want.client_pid)) throw Error('client process is no longer running');
       const prior = this.records.get(agent);
-      if (prior && !sameRidealong(prior, want)) throw Error('another client connection is already released; reclaim it first');
+      // A watcher on another (or a renumbered) connection is simply replaced below; a DRIVER is not.
+      if (prior && prior.mode !== 'watch' && !sameRidealong(prior, want)) throw Error('another client connection is already released; reclaim it first');
       const proxy = await io.proxyStatus(want);
       verifyRidealongProxy(want, proxy, credentials);
-      if (prior?.phase === 'active' && !io.pilot(agent)) {
+      if (prior?.mode !== 'watch' && prior?.phase === 'active' && !io.pilot(agent)) {
         prior.keeper_ready = !!await io.ready(agent, want);
         if (!prior.keeper_ready) throw Error('registered keeper attachment is not ready');
         return { ok: true, ...this.status(agent) };
@@ -90,6 +93,50 @@ export class RidealongControls {
       // No generic pilot release here: it schedules a LOGIN and marks the client as gone.
       // The same native connection is still in the world; only its driver has changed.
       io.unclaim(agent, pilot);
+      rec.phase = 'active'; rec.keeper_ready = true;
+      return { ok: true, ...this.status(agent) };
+    } catch (e) {
+      if (changed) {
+        const stopped = await io.stop(agent).catch(() => false);
+        if (stopped) this.records.delete(agent);
+        else { const rec = this.records.get(agent); if (rec) rec.phase = 'failed'; }
+      }
+      return { ok: false, error: e.message, ...this.status(agent) };
+    } finally { this.transitions.delete(agent); }
+  }
+  // WATCH: while the PERSON drives, run this character's keeper attached to their connection as a
+  // listener (m59-proxy-attach.mjs, "A WATCHER"), so the broker's reads stay live instead of
+  // freezing at the snapshot their login bumped. The pilot claim is KEPT -- the person is at the
+  // controls and every rule that protects a piloted character still applies -- and nothing here
+  // can drive: the keeper never starts its autopilot and the proxy drops all but resend requests.
+  // attach() replaces a watcher with a driver; reclaim() and suspend() end one like any record.
+  async watch(args) {
+    const io = this.io;
+    let want;
+    try { want = ridealongRequest(args, io.stateFile); } catch (e) { return { ok: false, error: e.message }; }
+    const agent = want.agent;
+    if (this.transitions.has(agent)) return { ok: false, error: 'a control transfer is already in progress', ...this.status(agent) };
+    const prior = this.records.get(agent);
+    if (prior && prior.mode !== 'watch') return { ok: false, error: 'the keeper is driving this connection; reclaim it first', ...this.status(agent) };
+    if (prior && sameRidealong(prior, want) && ['active', 'starting'].includes(prior.phase)) return { ok: true, already: true, ...this.status(agent) };
+    this.transitions.add(agent);
+    let changed = false;
+    try {
+      const credentials = io.credentials(agent);
+      if (!credentials) throw Error('agent is not in this broker\'s fleet');
+      if (!io.pidAlive(want.client_pid)) throw Error('client process is no longer running');
+      const pilot = io.pilot(agent);
+      if (!pilot || pilot.lease || pilot.pid !== want.client_pid)
+        throw Error('the current local pilot claim must belong to this exact client pid');
+      const proxy = await io.proxyStatus(want);
+      const row = verifyRidealongProxy(want, proxy, credentials, { requireGate: false });
+      if (row.gate?.holder === `keeper:${agent}`) throw Error('the controls are being released to the keeper; nothing to watch');
+      if (!await io.stop(agent)) throw Error('previous keeper did not stop; refusing a second keeper');
+      const rec = { ...want, mode: 'watch', proxy_pid: Number(proxy.pid) || null,
+        phase: 'starting', since: Date.now(), keeper_was_running: pilot.keeperWasRunning };
+      this.records.set(agent, rec); changed = true;
+      if (!await io.start(agent)) throw Error('watching keeper did not start');
+      if (!await io.ready(agent, want)) throw Error('watching keeper did not confirm this player and proxy');
       rec.phase = 'active'; rec.keeper_ready = true;
       return { ok: true, ...this.status(agent) };
     } catch (e) {

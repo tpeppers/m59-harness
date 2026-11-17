@@ -1,5 +1,17 @@
 # The offline test suites, and what each one pins
 
+`m59-pilot-watch-test.mjs` (33) pins the watcher: the keeper the broker attaches to a person's
+proxied connection so reads stay live while they play (docs/m59-plan-tab.md, "Live reads while you
+play"). It runs on the wire against the same lockstep fake server as the spectate suite, and checks
+the following. A watcher's resend requests reach the server with no gate held, are spaced
+`WATCH_GAP_MS` apart, and carry security values the server accepts. Its moves, attacks and looks
+are dropped, even with the gate naming its agent. The person steers afterwards. Requests made
+before calibration wait for it. `--no-watch-inject` only listens. A driver displaces a watcher,
+and a watcher displaces nobody and never ends a logoff. `RidealongControls.watch` keeps the pilot
+claim, refuses another client and a release in progress, and is replaced by `attach`. The plan desk
+asks for one watcher once, never while something is attached, and not at all with
+`M59_PLAN_WATCH=0`.
+
 `node --test tools/m59-activity-telemetry-test.mjs` checks shared runner/broker
 receipts, nested arrow shopping, zero-mana Mystic Touch fizzles, queued/trance
 unknowns, real guild withdrawal receipts, foreign-fleet exclusion, verified-result

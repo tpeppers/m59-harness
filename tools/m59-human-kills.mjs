@@ -22,7 +22,8 @@
 // because the proxy runs from whatever checkout its code is in and the broker reads the deploy's ledger -- with `human: true` and `source: 'proxy'` added. So every existing reader counts it
 // with no change, and this file's reader can split by hand / by keeper.
 //
-// NEVER TWICE. (1) Nothing is written while a keeper is attached to the person's connection (a spectate keeper /
+// NEVER TWICE. (1) Nothing is written while a keeper DRIVES the person's connection (a watching keeper only listens, so it
+// does not count; a spectate keeper /
 // Full Auto drives it then, and writes its own rows). (2) A human row a keeper row already covers -- same
 // character, same creature, within HUMAN_DEDUPE_MS -- is dropped by every reader that goes through
 // `dedupeKills`, which `countKills` in m59-ledger.mjs now does. With no human rows that is the identity.
@@ -160,7 +161,8 @@ export async function attachHumanKills(session, { log, ledgerDir = null } = {}) 
   const { recordEventIn } = await import('./m59-ledger.mjs');   // lazily: the observer itself is testable without it
   const obs = new HumanKillObserver({ comms: session.communications,
     record: (character, kind, detail) => recordEventIn(ledgerDir, character, kind, detail),
-    attached: () => !!session.attached, log });
+    // A WATCHER (m59-proxy-attach.mjs) only listens: the kills are still the person's, and nobody else writes them.
+    attached: () => !!session.attached && !session.attached.watch, log });
   const on = p => obs.serverPacket(p);
   session.on('received-server-packet', on);
   session.once('closed', () => session.removeListener('received-server-packet', on));

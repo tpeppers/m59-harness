@@ -734,6 +734,7 @@ Keepers, deaths and the numbers on the board — [`docs/m59-keeper.md`](docs/m59
 - "You suddenly feel a little tougher." is the only announcement of the only thing this fleet is for.
 - A keeper earning nothing looks exactly like a healthy one; that is what `yieldCheck` is for, and it was off for a year because `purpose` was missing from a schema.
 - A character can be spoken for, and the board has to say so — ask `isTakeable(committed)`, never `!committed`.
+- A character a PERSON is playing reads live only while a watcher is attached to their connection (`piloted.live: true`; docs/m59-plan-tab.md "Live reads while you play"). A stock client or a direct launch leaves every read frozen at their login, and the read says `live: false` rather than looking current.
 - A broker that lost a keeper port guesses one and commands whoever is there; two fleets on a machine is the working limit.
 - A wedge broken by a cancel is re-issued by the next pass with the SAME inputs — 589 breaks in 93 minutes, then 18 minutes dying on one square. The arm now counts breaks at a place, `travel()` sidesteps before re-planning and gives up out loud at five, and a hurt body that cannot move swings instead.
 - A RETREAT THAT WAS REFUSED IS NOT A RETREAT. `retreat_to_inn` is off, so `retreatToSafety` returns `{arrived:false}` having moved nothing, and five callers reported `progress()` for it — which also hides the body from every stall detector. Four deaths, the last at 0.0 squares per second with the decision correct on every pass.

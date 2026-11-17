@@ -36,13 +36,28 @@
 //
 // Handshake: the keeper's first line is JSON {"agent":"t15","player":<objId>}\n; the proxy
 // answers one JSON line, then raw frames flow both ways. Loopback only.
+//
+// A WATCHER IS A KEEPER THAT NEVER DRIVES ({"watch":true} in the hello). While a person plays,
+// the broker attaches the character's own keeper this way so `inventory`, `status` and the fleet
+// board read the live session instead of the snapshot the keeper held when the person's login
+// bumped it (operator, 2026-11-16: "it's always stale when I go to talk to Claude"). A watcher may
+// send only WATCH_PASS -- requests that the server resend what it already told the person's
+// client -- and only one every WATCH_GAP_MS, so the person's screen redraws at most that often.
+// Anything else it sends is dropped, gate or no gate. A DRIVER (a hello without `watch`) displaces
+// a watcher: releasing the controls to the keeper replaces the watching keeper with a driving one.
 
 import net from 'node:net';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parsePlayer } from './m59-parse.mjs';
-import { gateLive } from './m59-proxy-gate.mjs';
+import { gateLive, gateRefusal } from './m59-proxy-gate.mjs';
+
+// The resend requests a watcher may send without the controls: a subset of GATE_PASS
+// (m59-proxy-gate.mjs) with no look (a window on the person's screen), no chat, no quit, no mail.
+export const WATCH_PASS = new Set([40, 41, 42, 43, 44, 49, 50, 51, 52, 53, 117]);
+export const WATCH_GAP_MS = 500;
+const WATCH_QUEUE_MAX = 16;
 
 const HEADER = 7;
 const BP_PLAYER = 130, BP_REQ_MOVE = 100, BP_REQ_TURN = 101, BP_MOVE = 200, BP_TURN = 201;
@@ -86,10 +101,32 @@ export function forgeFor(payload, { playerId, dims }) {
 }
 
 // Wire one attached keeper to one proxy session. Returns a detach function.
-export function attachKeeper(session, sock, { agent, log = () => {}, mapFile = DEFAULT_MAP }) {
+export function attachKeeper(session, sock, { agent, watch = false, watchInject = true, log = () => {}, mapFile = DEFAULT_MAP }) {
   const holder = `keeper:${agent}`;
-  const stats = { to_keeper: 0, injected: 0, dropped_not_holder: 0, forged: 0, refused: 0 };
-  session.attached = { agent, stats, since: Date.now() };
+  const stats = { to_keeper: 0, injected: 0, dropped_not_holder: 0, forged: 0, refused: 0,
+                  ...(watch ? { watch_sent: 0, watch_queued: 0, watch_dropped: 0 } : {}) };
+  // `kick` (set below, once detach exists) is how a driver displaces a watcher (serveAttach).
+  session.attached ={ agent, stats, since: Date.now(), watch: !!watch };
+  // THE WATCHER'S RESEND REQUESTS. Held until the stream is calibrated (injecting before then is
+  // refused, see gateRefusal), then sent one per WATCH_GAP_MS. A repeat of an opcode already
+  // waiting is the same question asked twice and is dropped.
+  const queue = [];
+  let pump = null, lastSentAt = 0;
+  const flush = () => {
+    if (!queue.length) { clearInterval(pump); pump = null; return; }
+    if (Date.now() - lastSentAt < WATCH_GAP_MS) return;
+    if (!session.inGame || session.away || gateRefusal(session)) return;
+    const payload = queue.shift();
+    const r = session.injectOwned(payload);
+    if (r.sent) { stats.watch_sent++; lastSentAt = Date.now(); } else stats.refused++;
+  };
+  const watchRequest = payload => {
+    if (!watchInject || !WATCH_PASS.has(payload[0])) { stats.dropped_not_holder++; return; }
+    if (queue.some(q => q[0] === payload[0]) || queue.length >= WATCH_QUEUE_MAX) { stats.watch_dropped++; return; }
+    queue.push(payload); stats.watch_queued++;
+    flush();
+    if (queue.length && !pump) { pump = setInterval(flush, Math.ceil(WATCH_GAP_MS / 4)); pump.unref?.(); }
+  };
   const onFrame = whole => {
     const payload = whole.subarray(HEADER);
     if (payload[0] === BP_PLAYER) {
@@ -107,7 +144,10 @@ export function attachKeeper(session, sock, { agent, log = () => {}, mapFile = D
       if (buf.length < HEADER + len) return;
       const payload = Buffer.from(buf.subarray(HEADER, HEADER + len));
       buf = buf.subarray(HEADER + len);
-      if (!session.inGame || session.away || !payload.length) continue;
+      if (!payload.length) continue;
+      // A watcher never drives, whoever holds the gate: it is replaced by a driver, not promoted.
+      if (watch) { watchRequest(payload); continue; }
+      if (!session.inGame || session.away) continue;
       if (!(gateLive(session.gate) && session.gate.holder === holder)) { stats.dropped_not_holder++; continue; }
       // LOGGING OFF TO SURVIVE. The keeper's client sends BP_REQ_QUIT and then drops this socket
       // (m59-client.mjs attachedLogoff); the proxy takes the character out of the world on the shared
@@ -129,9 +169,12 @@ export function attachKeeper(session, sock, { agent, log = () => {}, mapFile = D
   let detached = false;
   const detach = () => {
     if (detached) return; detached = true;
+    clearInterval(pump); pump = null; queue.length = 0;
     session.off('server-frame', onFrame);
     if (session.attached?.stats === stats) session.attached = null;
   };
+  // Synchronous, so a driver displacing this watcher finds the session free at once.
+  session.attached.kick = () => { detach(); sock.destroy(); };
   sock.on('close', () => { detach(); log(`keeper ${agent} detached (${JSON.stringify(stats)})`); });
   sock.on('error', () => {});
   session.once('closed', () => sock.destroy());
@@ -150,13 +193,24 @@ export function serveAttach(port, getSession, log = m => console.error(m), opts 
       let hello; try { hello = JSON.parse(head.subarray(0, nl).toString('utf8')); } catch { sock.end('{"ok":false,"why":"bad hello"}\n'); return; }
       const s = getSession(hello.player != null ? Number(hello.player) : null);
       if (!s || !/^[a-z0-9_-]{1,40}$/.test(String(hello.agent ?? ''))) { sock.end('{"ok":false,"why":"no such session or bad agent"}\n'); return; }
+      const watch = hello.watch === true;
+      // A DRIVER DISPLACES A WATCHER (see the header); a watcher displaces nobody.
+      const displace = () => {
+        if (watch || !s.attached?.watch || s.attached.agent !== String(hello.agent)) return;
+        log(`keeper ${hello.agent} displaces watcher ${s.attached.agent}`);
+        s.attached.kick?.();
+      };
+      displace();
       if (s.attached) { sock.end(JSON.stringify({ ok: false, why: `keeper ${s.attached.agent} is already attached` }) + '\n'); return; }
+      // Bringing a character back from a logoff is a driver's decision, never a watcher's.
+      if (watch && s.away) { sock.end('{"ok":false,"why":"the character is logged off on this connection; a watcher waits"}\n'); return; }
       const rest = head.subarray(nl + 1);
       const accept = () => {
         if (sock.destroyed) return;
+        displace();
         if (s.attached) { sock.end(JSON.stringify({ ok: false, why: `keeper ${s.attached.agent} is already attached` }) + '\n'); return; }
         sock.write(JSON.stringify({ ok: true, player: s.playerId }) + '\n');
-        attachKeeper(s, sock, { agent: String(hello.agent), log, ...opts });
+        attachKeeper(s, sock, { agent: String(hello.agent), log, ...opts, watch });
         if (rest.length) sock.emit('data', rest);
       };
       // A keeper coming back from its survival logoff is what ends the logoff. It is answered only once

@@ -1027,7 +1027,7 @@ export function serveGateControl(port, getSession, identity = {}) {
     const sessions = () => getSession('all').map(s => ({ player_id: s.playerId, in_game: s.inGame,
       gate: gateView(s.gate), gateable: s.gateable, gate_refusal: gateRefusal(s), trade: s.trade.view(),
       human_move_ms_ago: s.lastHumanMoveAt ? Date.now() - s.lastHumanMoveAt : null,
-      attached: s.attached ? { agent: s.attached.agent, since: s.attached.since, ...s.attached.stats } : null }));
+      attached: s.attached ? { agent: s.attached.agent, since: s.attached.since, watch: !!s.attached.watch, ...s.attached.stats } : null }));
     if (req.method === 'GET' && (url.pathname === '/gate' || url.pathname === '/status'))
       return send(200, { ...identity, gate_control: port, sessions: sessions() });
     if (req.method !== 'POST' || !['/gate', '/ungate', '/trade/accept-from', '/trade/give'].includes(url.pathname))
@@ -1053,7 +1053,7 @@ export function serveGateControl(port, getSession, identity = {}) {
 export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
                              observe = false, control = null, onSession = () => {},
                              listenHost = '0.0.0.0', contextPort = null, communicationStateFile = null,
-                             gateable = false, gateControl = null, attachPort = null } = {}) {
+                             gateable = false, gateControl = null, attachPort = null, watchInject = true } = {}) {
   if(contextPort!==null && (!observe || control))throw Error('native context requires observe-only with no injection control');
   const communications=communicationStateFile?proxyCommunicationsConfig({stateFile:communicationStateFile,host,port}):null;
   const context=contextPort!==null?proxyContext({host,port,listen}):null;
@@ -1078,7 +1078,7 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
     pid: process.pid, listen, server: { host, port }, attach_port: attachPort, ridealong: 1,
   });
   // SPECTATE: a keeper attaches here and drives while it holds the gate (m59-proxy-attach.mjs).
-  if (attachPort) serveAttach(attachPort, pick, m => console.error(m));
+  if (attachPort) serveAttach(attachPort, pick, m => console.error(m), { watchInject });
   // RECORD WHERE A HUMAN ACTUALLY WALKS. One file per proxy run — see the note on
   // `walkLog` in the session. `--no-walklog` turns it off; it is on by default because
   // the trace is the only ground truth this repository has about walkable space, and the
@@ -1166,6 +1166,8 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
     gateable: process.argv.includes('--gate') || !!arg('--gate-control'),
     gateControl: arg('--gate-control') ? Number(arg('--gate-control')) : null,
     attachPort: arg('--attach') ? Number(arg('--attach')) : null,
+    // A watching keeper's resend requests (m59-proxy-attach.mjs WATCH_PASS). Off = it only listens.
+    watchInject: !process.argv.includes('--no-watch-inject') && process.env.M59_PROXY_WATCH_INJECT !== '0',
   });
   // Publish only after binding: a competing startup must never replace a live advert.
   server.once('listening', advertise);

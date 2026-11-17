@@ -829,7 +829,7 @@ export class M59Client {
       const a = this.attach;
       this.sock = net.connect(Number(a.port), '127.0.0.1');
       let head = Buffer.alloc(0), ready = false;
-      this.sock.on('connect', () => this.sock.write(JSON.stringify({ agent: a.agent, player: a.player }) + '\n'));
+      this.sock.on('connect', () => this.sock.write(JSON.stringify({ agent: a.agent, player: a.player, ...(a.watch === true ? { watch: true } : {}) }) + '\n'));
       this.sock.on('data', d => {
         if (ready) return this.onData(d);
         head = Buffer.concat([head, d]);

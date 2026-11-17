@@ -29,6 +29,50 @@ Gate expiry or loss restores native pilot protection. Closing the client
 lets the broker resume an ordinary connection after the shared proxy
 session closes. An unconfirmed release is reported as such.
 
+### Live reads while you play: the watcher (2026-11-16)
+
+Your login bumps the character's keeper, because Meridian allows one connection per
+character. Before this change, every broker read made after that point (`inventory`,
+`status`, `equipment`, the fleet board, a Claude session asking where you are) came from
+the keeper's last snapshot, frozen at your login.
+
+Now, while you hold the controls, the desk asks the broker for **`pilot action=watch`**.
+The broker stops the bumped keeper and starts the character's normal keeper **attached to
+your proxy connection as a watcher**. The watcher works as follows:
+
+- It hears every server frame of your session, so its `/state`, and every broker read built
+  on it, is current.
+- It never starts its autopilot. Combat, war response and the war sentinel are off, and
+  `/pass` and `/resume` are refused.
+- At the proxy, it may send only `WATCH_PASS` (`m59-proxy-attach.mjs`). These are resend
+  requests for player, room, inventory and stats, one per 500 ms at most, held until the
+  stream is calibrated. Everything else it sends is dropped, even if the gate names its
+  agent.
+- It keeps your pilot claim. The character stays human-held for every rule that protects a
+  piloted character, and your own kills are still counted by the proxy (`m59-human-kills.mjs`
+  only stops counting for a *driving* keeper).
+- **Release to Keeper** displaces the watcher with a driver. **Reclaim** stops the driver,
+  and the desk attaches a new watcher on its next tick.
+- `restart-keepers` stops a watcher instead of refusing it, and the desk re-attaches one on
+  the new code.
+- When the client closes, the watcher is stopped and the ordinary keeper logs back in, as
+  after a reclaim.
+
+MANAGE shows **Broker reads: live** or **Broker reads: snapshot**. A read of a piloted
+character carries `piloted: {live, ...}`, and the fleet row's `piloted.live` says the same.
+Without a watcher (a stock client, or no proxy), the read says `live: false` and gives the
+time the snapshot was taken.
+
+Switches:
+
+| switch | effect |
+|---|---|
+| `M59_PLAN_WATCH=0` | the desk never asks for a watcher |
+| `M59_PILOT_WATCH=0` | the broker refuses `watch` |
+| `--no-watch-inject` (or `M59_PROXY_WATCH_INJECT=0`) on the proxy | the watcher only listens, with no resend requests |
+
+Regression: `m59-pilot-watch-test.mjs`.
+
 This replaces the standalone spectate process described in the historical
 sections below. Reclaim old spectate sessions and relaunch their clients
 when updating. Install both patched `meridian.exe` and

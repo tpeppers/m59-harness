@@ -2032,6 +2032,14 @@ function ensurePendingSuccessorWatch() {
 // not come up, it is stopped and the old keeper's handoff is withdrawn: nothing changed.
 async function warRestartKeeper(agent, { timeoutMs = 90_000, deferPiloted = true, skipPiloted = false,
                                          deferMaxMinutes = null } = {}) {
+  // A WATCHER (ridealong.watch) drives nothing and holds no orders of its own: stopping it IS the
+  // restart, because the plan desk attaches a fresh one -- on the code now on disk -- within ~15s.
+  if (ridealong.records.get(agent)?.mode === 'watch') {
+    const stopped = await ridealong.suspend(agent, 'restart-keepers: watcher replaced on new code');
+    return { agent, ok: stopped, watcher: true,
+      why: stopped ? 'stopped the keeper watching a person\'s client; the plan desk re-attaches one on the new code'
+                   : 'the keeper watching a person\'s client did not stop' };
+  }
   if (ridealong.records.has(agent)) return { agent, ok: false,
     why: 'this keeper shares a debug client connection; reclaim and release it to load new keeper code' };
   const index = agentIndices.get(agent);
@@ -6406,7 +6414,7 @@ const jobBoard = new JobBoard({
 if (successorOf()) jobBoard.persist = false;
 { const t = setInterval(() => { try { jobBoard.sweep(); } catch { /* never fatal */ } }, 60_000); t.unref?.(); }
 const ridealongAttachment = r => ({ agent: r.agent, port: r.attach_port, player: r.player,
-  client_pid: r.client_pid, gate_control: r.gate_control });
+  client_pid: r.client_pid, gate_control: r.gate_control, ...(r.mode === 'watch' ? { watch: true } : {}) });
 const ridealongProxyStatus = r => fetch(`http://127.0.0.1:${r.gate_control}/status`, {
   signal: AbortSignal.timeout(3000),
 }).then(async response => {
@@ -6562,6 +6570,16 @@ async function maintainRidealongs() {
       if (Date.now() - rec.missing_since < 20_000) continue;
     } else delete rec.missing_since;
     if (row && row.attached?.agent !== agent) rec.keeper_ready = false;
+    // A WATCH (ridealong.watch) is the person's session with our keeper listening. The gate is the
+    // person's, never the watcher's, so it is not checked. A watcher that has stopped listening is
+    // stopped; the plan desk asks for another on its next tick, and the pilot claim never lapses.
+    if (rec.mode === 'watch') {
+      if (row?.attached?.agent === agent && row.attached.watch) { delete rec.deaf_since; continue; }
+      if (row?.gate?.holder === `keeper:${agent}`) continue;   // a release to the keeper is under way
+      rec.deaf_since ??= Date.now();
+      if (Date.now() - rec.deaf_since >= 15_000) await ridealong.suspend(agent, 'watching keeper is no longer attached');
+      continue;
+    }
     if (!row || row.gate?.holder !== `keeper:${agent}`)
       await ridealong.suspend(agent, 'native client gate released or expired');
   }
@@ -19646,7 +19664,9 @@ const TOOLS = [
           // the pid, so a closed client stops being an answer without anyone polling.
           // Null for every character nobody is playing, which is nearly all of them.
           piloted: (() => { const p = pilotOf(name);
-            return p ? { since: p.since, pid: p.pid, ...(p.lease ? { remote: p.lease.holder } : {}) } : null; })(),
+            return p ? { since: p.since, pid: p.pid, ...(p.lease ? { remote: p.lease.holder } : {}),
+              // LIVE: a keeper is watching their connection (ridealong.watch), so this row is current.
+              live: !!ridealong.status(name).watching } : null; })(),
           // WHICH KEEPER IS DRIVING: null for the character's own process, or the spectate keeper on a
           // person's connection that every read and order on this row is routed to (m59-spectate-route.mjs).
           driver: s instanceof KeeperProxy ? s.driver : null,
@@ -20186,11 +20206,15 @@ const TOOLS = [
       'THE BROKER DOES NOT HUNT FOR CLIENTS ON A TIMER. Scanning costs a process spawn, so it is ' +
       'armed by events rather than polled: at boot, when a claim ends, and when something launches ' +
       'a client. Anything starting a client OUT OF BAND should call `rearm` so the automatic claim ' +
-      'happens without the operator doing anything.',
+      'happens without the operator doing anything.\n' +
+      'LIVE READS WHILE PLAYING: `watch` (sent by the plan desk for a client launched with the fleet ' +
+      'terminal\'s L) attaches this character\'s keeper to the person\'s proxied connection as a ' +
+      'listener, so inventory/status/fleet stay current instead of freezing at login. It never drives; ' +
+      '`status` lists it under `attached` with `watching: true`.',
     schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['claim', 'renew', 'release', 'status', 'rearm', 'attach', 'reclaim', 'control_status'] },
+        action: { type: 'string', enum: ['claim', 'renew', 'release', 'status', 'rearm', 'attach', 'reclaim', 'control_status', 'watch'] },
         agent: { type: 'string', description: 'the character being played; required for claim/release' },
         pid: { type: 'number', description: 'process id of the client that was launched, on THIS machine; required for claim unless lease_ms is given' },
         lease_ms: { type: 'number', description: 'claim/renew: a remote claim held by heartbeat instead of a pid, 15000-300000 (default 60000). Lapses unless renewed' },
@@ -20198,10 +20222,10 @@ const TOOLS = [
         lease_id: { type: 'string', description: 'renew/release: the lease_id the claim returned. A renew of an ENDED lease (released, lapsed, superseded) answers released:true and is never re-claimed -- stop heartbeating. claim with a lease_id only continues that lease while it is live' },
         character: { type: 'string', description: 'name to expect in speech; defaults to the session\'s' },
         why: { type: 'string', description: 'for rearm: what launched a client, for the log' },
-        fleet_state: { type: 'string', description: 'attach/reclaim/control_status: exact absolute roster identity' },
-        attach_port: { type: 'number', description: 'attach/reclaim: loopback proxy keeper attachment port' },
-        gate_control: { type: 'number', description: 'attach/reclaim: loopback proxy gate status port' },
-        player: { type: 'number', description: 'attach/reclaim: exact native client player object id' },
+        fleet_state: { type: 'string', description: 'attach/reclaim/watch/control_status: exact absolute roster identity' },
+        attach_port: { type: 'number', description: 'attach/reclaim/watch: loopback proxy keeper attachment port' },
+        gate_control: { type: 'number', description: 'attach/reclaim/watch: loopback proxy gate status port' },
+        player: { type: 'number', description: 'attach/reclaim/watch: exact native client player object id' },
       },
       required: ['action'],
     },
@@ -20211,6 +20235,13 @@ const TOOLS = [
         return ridealong.attach(a);
       }
       if (a.action === 'reclaim') return ridealong.reclaim(a);
+      // LIVE READS WHILE A PERSON PLAYS: the character's own keeper attaches to their proxied
+      // connection and only listens (m59-ridealong.mjs watch()). The plan desk asks for it.
+      if (a.action === 'watch') {
+        if (SESSION_DRIVER !== 'keeper-process') return { ok: false, error: 'watching requires the keeper-process session driver' };
+        if (process.env.M59_PILOT_WATCH === '0') return { ok: false, disabled: true, error: 'M59_PILOT_WATCH=0 on this broker' };
+        return ridealong.watch(a);
+      }
       if (a.action === 'control_status') {
         if (!a.agent || typeof a.fleet_state !== 'string' ||
             !/^(?:[a-z]:[\\/]|\/)/i.test(a.fleet_state) ||
@@ -20450,6 +20481,8 @@ const CALLER_INTERNAL = Object.freeze({ transport: 'internal', local: true });
 // turning each wait into a rich `/state` rebuild would simply recreate the loud waiting the
 // demand split removes. Mutating keeper calls still perform their own cheap exact-identity
 // `/live` proof before writing.
+// Reads of one character's body, which say whether they are live while a person plays it (callTool).
+const PILOT_READ_TOOLS = new Set(['inventory', 'equipment', 'status', 'abilities', 'look']);
 const SNAPSHOT_OPTIONAL_TOOLS = new Set([
   'activity_telemetry',
   'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave', 'combat', 'combat_order',
@@ -20620,6 +20653,21 @@ async function callTool(name, args, caller) {
     // wrong is the one reading this reply.
     if (unrecognised && out && typeof out === 'object' && !Array.isArray(out))
       out.unrecognised_settings = unrecognised;
+    // A PERSON IS PLAYING THIS CHARACTER: say whether this read is live. With a watcher attached
+    // (ridealong.watch) the keeper reads their session as it happens; without one -- a stock client,
+    // no proxy -- every pack, vital and position here is the snapshot from when their login bumped
+    // the keeper, and it must not look current.
+    if (PILOT_READ_TOOLS.has(name) && args?.agent && out && typeof out === 'object' && !Array.isArray(out)) {
+      const p = pilotOf(args.agent);
+      if (p) {
+        const live = !!ridealong.status(args.agent).watching;
+        out.piloted = live ? { live: true, since: p.since, note: 'a person is playing; read live from their connection' }
+          : { live: false, stale_since: p.since,
+              note: 'a person is playing and no keeper is watching their connection: this is the state from ' +
+                    `${hhmmss(p.since)}, when their login bumped the keeper. Launch with the fleet terminal's L ` +
+                    '(the dev client through the plan proxy) for live reads.' };
+      }
+    }
     // STAMP EVERY REPLY THAT CARRIES OBJECT IDS with when they were read and whether a save
     // has renumbered them since, and remember what was handed out so the next call that
     // passes one back can be judged. One place, so a new tool is stamped without knowing it.

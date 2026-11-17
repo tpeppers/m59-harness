@@ -44,7 +44,8 @@ async function broker(args) {
 }
 
 // Injection points exercise the real transition ordering without a production fleet.
-export function createControlProvider({ find = findSession, callBroker = broker, proxy = http } = {}) {
+export function createControlProvider({ find = findSession, callBroker = broker, proxy = http,
+                                        watch = process.env.M59_PLAN_WATCH !== '0' } = {}) {
   const params = (ctx, found) => ({ agent: ctx.client.agent, pid: ctx.client.pid,
     fleet_state: ctx.stateFile ?? stateFileFor(ctx.fleet), attach_port: found.advert.attach,
     gate_control: found.advert.gate_control, player: found.session.player_id });
@@ -95,7 +96,16 @@ export function createControlProvider({ find = findSession, callBroker = broker,
           : `Waiting for the broker keeper. ${status?.error ?? 'Reclaim returns the controls to this client.'}` };
       else row = { id: 'control.take', title: `Controls held by ${gate.holder}`, disabled: true,
         describe: `${gate.reason || 'no reason given'}; only its holder can release it, or its lease expires.` };
-      return [{ group: 'Control', icon: 'keeper', ...row }, logRow(ctx)];
+      // Whether the broker sees this session live (a watching keeper is attached) or as a snapshot.
+      const watching = !!(found?.session?.attached?.agent === c.agent && found.session.attached.watch);
+      const w = ctx.desk.watch;
+      const readsRow = { id: 'control.reads', disabled: true,
+        title: watching ? 'Broker reads: live' : 'Broker reads: snapshot',
+        describe: watching
+          ? 'Your keeper is attached to this connection and only listens, so Claude and the fleet board see your pack, room and vitals as they change.'
+          : ctx.control === 'keeper' ? 'The keeper is driving; the broker reads it directly.'
+          : `The broker shows the state from when you logged in${w && !w.ok ? `: ${w.error}` : '; a watcher is being attached'}.` };
+      return [{ group: 'Control', icon: 'keeper', ...row }, { group: 'Control', icon: 'keeper', ...readsRow }, logRow(ctx)];
     },
     async tick(ctx) {
       const st = ctx.desk, c = ctx.client;
@@ -122,7 +132,24 @@ export function createControlProvider({ find = findSession, callBroker = broker,
             }
           }
         }
-      } else { st.nextGateRenew = null; st.keeperMissingAt = null; }
+      } else {
+        st.nextGateRenew = null; st.keeperMissingAt = null;
+        // LIVE READS WHILE YOU PLAY. With nobody attached to this client's connection, ask the broker
+        // to attach the character's own keeper as a WATCHER (pilot action=watch): it listens and never
+        // drives, so inventory, status and the fleet board stay current while the person plays
+        // (operator, 2026-11-16). Not awaited -- the broker stops one keeper and starts another, which
+        // takes seconds the desk's tick must not spend -- and spaced out, longer after a refusal.
+        const s = found?.session;
+        if (watch && s?.in_game && !gate && !s.attached && found.advert.attach && !st.watchPending &&
+            ctx.now >= (st.nextWatchAt ?? 0)) {
+          const at = ctx.now;
+          st.nextWatchAt = at + 15_000;
+          st.watchPending = Promise.resolve().then(() => callBroker({ action: 'watch', ...params(ctx, found) }))
+            .then(r => { st.watch = r; if (!r?.ok) st.nextWatchAt = at + 60_000; },
+                  e => { st.watch = { ok: false, error: e.message }; st.nextWatchAt = at + 60_000; })
+            .finally(() => { st.watchPending = null; });
+        }
+      }
       if (st.logTail?.enabled && c.capabilities?.logs) st.logs = [...st.logs ?? [], ...st.logTail.read(logPath(ctx))].slice(-64);
     },
     async run(entry, args, ctx) {
