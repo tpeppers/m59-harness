@@ -843,7 +843,9 @@ export class M59Client {
         this.state = 'game';
         this.log(`ATTACHED to player ${hello.player} through the proxy on ${a.port}`);
         this._armKeepalive?.();
-        try { this.requestPlayer(); this.roomContents(); this.requestInventory(); this.stats(1); this.stats(2); } catch { /* the keeper asks again */ }
+        // players() second: the who-list is the only way an attached client learns its OWN name
+        // (a dynamic resource, sent once at the person's login), and the keeper checks it.
+        try { this.requestPlayer(); this.players(); this.roomContents();this.requestInventory(); this.stats(1); this.stats(2); } catch { /* the keeper asks again */ }
         resolve();
         const rest = head.subarray(nl + 1);
         if (rest.length) this.onData(rest);

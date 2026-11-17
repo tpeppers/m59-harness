@@ -108,8 +108,9 @@ export function attachKeeper(session, sock, { agent, watch = false, watchInject 
   // `kick` (set below, once detach exists) is how a driver displaces a watcher (serveAttach).
   session.attached ={ agent, stats, since: Date.now(), watch: !!watch };
   // THE WATCHER'S RESEND REQUESTS. Held until the stream is calibrated (injecting before then is
-  // refused, see gateRefusal), then sent one per WATCH_GAP_MS. A repeat of an opcode already
-  // waiting is the same question asked twice and is dropped.
+  // refused, see gateRefusal), then sent one per WATCH_GAP_MS. A repeat of a request already
+  // waiting (same bytes) is the same question asked twice and is dropped; stats(1) and stats(2)
+  // share an opcode and are two questions.
   const queue = [];
   let pump = null, lastSentAt = 0;
   const flush = () => {
@@ -122,7 +123,7 @@ export function attachKeeper(session, sock, { agent, watch = false, watchInject 
   };
   const watchRequest = payload => {
     if (!watchInject || !WATCH_PASS.has(payload[0])) { stats.dropped_not_holder++; return; }
-    if (queue.some(q => q[0] === payload[0]) || queue.length >= WATCH_QUEUE_MAX) { stats.watch_dropped++; return; }
+    if (queue.some(q => q.equals(payload)) ||queue.length >= WATCH_QUEUE_MAX) { stats.watch_dropped++; return; }
     queue.push(payload); stats.watch_queued++;
     flush();
     if (queue.length && !pump) { pump = setInterval(flush, Math.ceil(WATCH_GAP_MS / 4)); pump.unref?.(); }

@@ -902,7 +902,19 @@ async function joinGenerationOnce(generation) {
     assertJoinIntent(generation);
     if (keeperAttachment) {
       const c = session.client;
-      const observed = c?.rsc?.get?.(c?.self?.nameRsc) ?? c?.self?.name ?? c?.me?.name;
+      // AN ATTACHED CLIENT DOES NOT KNOW ITS OWN NAME AT FIRST. A player's name is a DYNAMIC
+      // resource, pushed once at the person's login, long before we attached; until the who-list
+      // (BP_PLAYERS, asked for by connectAttached) arrives the lookup answers `<dynamic N>`, and
+      // comparing that refused every watcher on prod (Loial, 2026-11-16). Wait for a real name.
+      const nameOf = () => {
+        const n = c?.rsc?.get?.(c?.self?.nameRsc) ?? c?.self?.name ?? c?.me?.name;
+        return typeof n === 'string' && !/^<(dynamic|rsc)\b/.test(n) ? n : null;
+      };
+      for (let waited = 0; !nameOf() && waited < 10_000; waited += 250) {
+        if (waited % 2000 === 0) try { c?.players?.(); } catch { /* asked again below */ }
+        await new Promise(r => setTimeout(r, 250));
+      }
+      const observed = nameOf();
       if (String(observed ?? '').normalize('NFKC').trim().toLowerCase() !==
           String(character ?? '').normalize('NFKC').trim().toLowerCase()) {
         try { c?.sock?.destroy(); } catch {}

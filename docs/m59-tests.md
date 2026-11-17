@@ -1,6 +1,6 @@
 # The offline test suites, and what each one pins
 
-`m59-pilot-watch-test.mjs` (33) pins the watcher: the keeper the broker attaches to a person's
+`m59-pilot-watch-test.mjs` (35) pins the watcher: the keeper the broker attaches to a person's
 proxied connection so reads stay live while they play (docs/m59-plan-tab.md, "Live reads while you
 play"). It runs on the wire against the same lockstep fake server as the spectate suite, and checks
 the following. A watcher's resend requests reach the server with no gate held, are spaced

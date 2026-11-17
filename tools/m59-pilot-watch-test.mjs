@@ -103,11 +103,15 @@ const { M59Client } = await import('./m59-client.mjs');
 const watcher = new M59Client({ verbose: false });
 const r0 = received.length;
 await watcher.login('t15', 'unused');
-await tick(WATCH_GAP_MS * 4 + 200);
+await tick(WATCH_GAP_MS * 6 + 200);
 ok('the watcher attaches, marked as a watcher', watcher.state === 'game' && session.attached?.agent === 't15' && session.attached.watch === true);
 const opened = received.slice(r0);
 ok('its opening resend requests reach the server with NO gate held', !session.gate && opened.some(x => x.op === 40) && opened.some(x => x.op === 117),
    JSON.stringify(opened.map(x => x.op)));
+// Its own name is a dynamic resource sent at the person's login; only the who-list teaches it to
+// an attached client, and the keeper's identity check waits on it (Loial on prod, 2026-11-16).
+ok('it asks for the who-list, the only way it learns its own name', opened.some(x => x.op === 44), JSON.stringify(opened.map(x => x.op)));
+ok('stats groups 1 and 2 share an opcode and are both asked', opened.filter(x => x.op === 41).length === 2, JSON.stringify(opened.map(x => x.op)));
 ok('one at a time, at least WATCH_GAP_MS apart', opened.every((x, i) => i === 0 || x.at - opened[i - 1].at >= WATCH_GAP_MS - 25),
    JSON.stringify(opened.map(x => x.at - opened[0].at)));
 ok('with security values the server accepts', hungUp === null, hungUp ?? '');
