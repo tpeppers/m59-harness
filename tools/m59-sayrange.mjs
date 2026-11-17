@@ -156,10 +156,23 @@ export async function sayToNpc(step, { look, walkTo, speak, log = () => {} }) {
       why: `cannot read both positions, so cannot tell whether ${wantHeard} would ` +
            `hear this. Unknown is not close enough` };
 
-  const result = await speak(text), replies = result.replies ?? [];
+  // SAY IT AGAIN WHEN THE ANSWER IS NOT THE ONE ASKED FOR (operator 2026-11-17: "Try resaying the quest request statement
+  // immediately if it fails ... sometimes other quests 'override' it and cause the NPC to say something like 'I'm practicing my
+  // jeweling if you can bring my any unpolished gems.'"). With `expect` (a RegExp over the reply lines) and `retries`, a reply
+  // that does not match -- silence, or another quest's line -- is followed at once by the same words, up to `retries` more
+  // times. Every reply heard is returned, so a caller reading the lines sees the matching one wherever it came.
+  let result = await speak(text), replies = [...(result.replies ?? [])];
+  const expect = step.expect instanceof RegExp ? step.expect : null;
+  const matches = rs => !!expect && rs.some(r => expect.test(String(r?.text ?? r ?? '')));
+  let attempts = 1;
+  for (const max = Math.max(0, Math.floor(Number(step.retries) || 0)); expect && !matches(replies) && attempts <= max; attempts++) {
+    log(`say "${text}": ${wantHeard ?? 'the room'} answered ${replies.length ? 'something else' : 'nothing'} — saying it again (${attempts}/${max})`);
+    result = await speak(text);
+    replies.push(...(result.replies ?? []));
+  }
   return { ok: true, outcome: replies.length ? 'answered' : 'no_reply',
     said: text, to: wantHeard, squared_distance: d2, approached,
-    ...result, replies,
+    ...result, replies, attempts, ...(expect ? { matched: matches(replies) } : {}),
     ...(replies.length ? {} : { note:
       `in earshot (squared ${d2} <= ${radius}) and nothing came back — THIS one is ` +
       `a fact about ${wantHeard ?? 'the room'}, not about the distance` }) };

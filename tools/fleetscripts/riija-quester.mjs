@@ -110,8 +110,8 @@ export async function refresh(ctx) {
 }
 
 /** Say `text` to `npc` from within the quest node's 5 squares, and return what came back. */
-export async function conversation(ctx, npc, text) {
-  return sayToNpc({ text, to: npc, radius: QUEST_NPC_RADIUS }, {
+export async function conversation(ctx, npc, text, { expect = null, retries = 0 } = {}) {
+  return sayToNpc({ text, to: npc, radius: QUEST_NPC_RADIUS, expect, retries }, {
     look: () => view(ctx),
     walkTo: (p, opts) => ctx.call('walk_to', { agent: ctx.agent, ...p, arrive_within: opts.arriveWithin }, opts.timeoutMs),
     speak: async words => {
@@ -201,7 +201,8 @@ async function ask(ctx, key, expect) {
     return { ok: true, resumed: open };
   }
   const started = Date.now();
-  const r = await conversation(ctx, NPCS[SHARDS[key].npc], SHARDS[key].trigger);
+  // An NPC holding another quest's line answers that instead (or nothing): ask again at once, twice (m59-sayrange.mjs).
+  const r = await conversation(ctx, NPCS[SHARDS[key].npc], SHARDS[key].trigger, { expect, retries: 2 });
   check(r.ok && r.spoken_ok, r.why ?? 'Could not speak to the NPC.');
   const lines = (r.replies ?? []).map(x => x.text);
   // Stored even when unrecognised: the assignment is spoken only once.
