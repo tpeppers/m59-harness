@@ -20,10 +20,13 @@
 // WHY ONLY AGAINST WEAK PREY. Low vigor is not free: health regenerates (200-vigor)^2/6 + 1000 ms per point
 // (player.kod CalculateHealthTime), about 2.6x slower at 10 vigor than at 100, and below 12 a body cannot run. The
 // fleet's own record (provision.mjs) has characters at or below 85 vigor dying at 101.8 per thousand observations
-// against 4.4 at 86-120 -- fleet-wide, mostly against prey of their own size. So the default asks that the character's
-// maximum health be at least `preyRatio` times the level of the WORST huntable creature the room's spawn table can
-// produce, not merely the one being hunted. Survival -- flee lines, the 1-second ladder, ORDINARY_VIGOR_FLOOR (20,
-// below the trigger at 25, so a fighting character triggers first) -- is untouched.
+// against 4.4 at 86-120 -- fleet-wide, mostly against prey of their own size. So the default asks that the character
+// be OVERMATCHED (m59-overmatch.mjs): its maximum health at least 1.8 times the level of the strongest thing that can
+// stand in the room -- every row of its spawn table and every hostile creature in sight -- not merely the one being
+// hunted. (A ratio a policy writes here asks the older question instead: the worst HUNTABLE row, at that ratio.) The
+// 1-second ladder and ORDINARY_VIGOR_FLOOR (20, below the trigger at 25, so a fighting character triggers first) are
+// untouched; while the skill is still running an overmatched body that reaches the floor waits it out on a wall,
+// because resting cannot pay until it ends (Autopilot.overmatchSpentWait).
 //
 // THE POLICY: `secondWindFarming`, from the broker's `second_wind_farming`:
 //   'auto' (default)  on when the character knows Second Wind and is OVERMATCHED (m59-overmatch.mjs): the same

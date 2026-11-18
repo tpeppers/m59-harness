@@ -8,9 +8,9 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 16 methods: safety, threat, holdWorks, noteSpotRush, spotRushedAt, recordShelterStop, wallHere,
-//   armed, armedForSure, recovered, observe, recordRestOutcome, operatorSurvivalStandDown,
-//   releaseHold, creatureLevel, holdWorthwhile
+// 18 methods: safety, healthLines, fightOpensFromWall, threat, holdWorks, noteSpotRush, spotRushedAt,
+//   recordShelterStop, wallHere, armed, armedForSure, recovered, observe, recordRestOutcome,
+//   operatorSurvivalStandDown, releaseHold, creatureLevel, holdWorthwhile
 import { relayFarmPeerEvidence } from '../m59-relay-farming.mjs';
 import { publishCooperativePresence } from '../m59-cooperative-logoff.mjs';
 import { publishFleetHealth } from '../m59-fleet-health.mjs';

@@ -649,6 +649,17 @@ test('a crowd wall asked for by name keeps its hysteresis; the default gives a w
   assert.match(src, /this\.fightOpensFromWall\(\) && !this\.hold && room\?\.num != null/);
 });
 
+test('a body holding a wall its cover no longer proves still reads its flee floor (the Great Ocean, never overmatched)', async () => {
+  // Room 552 with mollusk cover recovery on is the one place `sheltered` can be false while a wall is held, and so the
+  // one place the "testing this spot" margin is read. It reads the policy's own flee number, as it always did.
+  const k = keeper({ maxHealth: 150, health: 150, vigor: 90, room: 552,
+    policy: { hunt: 'mollusk creature', assignedRoom: 552, molluskCoverRecovery: true } });
+  k.ap.hold = { room: 552, col: 20, row: 20, takenAt: Date.now(), proven: true };
+  k.ap.currentRecoveryWall = () => null;
+  assert.equal(k.ap.overmatch().active, false);
+  assert.equal(await k.pass(), CONTINUE);
+});
+
 test('a death record says whether the body was fighting on the overmatch lines', () => {
   const k = keeper({ maxHealth: 150, monsters: two });
   k.ap.overmatch();

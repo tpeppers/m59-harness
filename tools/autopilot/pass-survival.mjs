@@ -529,6 +529,9 @@ export class PassSurvivalPart {
     // beyond the pause. Bounded twice, because being wrong here means sitting still
     // while something eats us: only while we still have flee margin in hand, and for
     // one pass at a time, so observe() gets to adjudicate quickly either way.
+    // The margin is the policy's own flee number, or the verdict's while overmatched (healthLines): the same line the
+    // flee rung above reads, either way.
+    const fleeFloor = lines.overmatch ? lines.fleeBelow : this.policy.fleeBelow;
     let testing = !sheltered && !!this.hold && !this.hold.failures &&
                     hp !== null && hp >= fleeFloor;
     // RESTING IN A COMBAT ZONE IS SOMETHING YOU DO BEHIND A WALL OR NOT AT ALL.
@@ -1161,6 +1164,11 @@ export class PassSurvivalPart {
         s.world?.roomBinding?.room === room
         ? { at: Date.now(), roomId: c.room.id, bodyId: c.selfId, life: s.lifeBoundary } : null;
       this.tally.rests++;
+      // OVERMATCHED, THE VIGOR THIS REST REACHES FOR: the bar of a rest begun spent, and nothing at all for a rest that is
+      // only for health -- vigor is not what that body sat down for, and a bar Second Wind forbids would hold it there
+      // to the end of the leash. null leaves the targets below exactly as they were.
+      const overmatchVigorTarget = vigorBar && !openSupportRest && !relayRest
+        ? (vigorNeedsRest && !vigorBar.blocked ? vigorBar.rest / skills.VIGOR_MAX : 0) : null;
       // Sheltered, resting is free and uninterruptible, so take it all the way to
       // full rather than to a threshold — the next fight starts from whatever we
       // stand up with, and there is nothing to spend the difference on.
@@ -1176,11 +1184,8 @@ export class PassSurvivalPart {
                                 : Math.min(0.99, Math.max(0.95, restAt + 0.02)),
         // Use a threshold resting can reach. The Relay mode has a confirmed
         // personal cap, while ordinary recovery keeps its existing target.
-        // Overmatched: the bar of a rest begun spent, and nothing at all for a rest that is only for health -- vigor
-        // is not what that body sat down for, and a bar Second Wind forbids would hold it there to the end of the leash.
-        vigor: openSupportRest ? vigorRestAt : (relayRest ? relayProfile.cap / skills.VIGOR_MAX
-          : vigorBar ? (vigorNeedsRest && !vigorBar.blocked ? vigorBar.rest / skills.VIGOR_MAX : 0)
-          : REST_VIGOR_CAP),
+        vigor: overmatchVigorTarget
+          ?? (openSupportRest ? vigorRestAt : (relayRest ? relayProfile.cap / skills.VIGOR_MAX : REST_VIGOR_CAP)),
         // A short leash while the spot is only a hypothesis: resting does not look at
         // anything, so a two-minute rest in a corner that does not work is two minutes
         // of being hit with nobody watching.

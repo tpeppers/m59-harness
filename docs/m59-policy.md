@@ -349,9 +349,10 @@ maximum health is at least `prey_ratio` (1.8) times the level of the STRONGEST t
 every row of the room's spawn table, huntable or not, and every hostile creature in sight. Not what it hunts -- what
 can hit it while it hunts. Room 377 is level-30 giant rats and a level-105 lupogg, so a 150-health farmer there is not
 overmatched; nor is anyone against trolls (90, and the stone troll at 120), or with a creature of unknown level in
-sight, or in a room with no spawn table. It is also off while the body is not the farm's: travelling or on an errand
-(a journey keeps its own lines), a faculty leased away, recovering from a death, or within five minutes of a player's
-blow. Every inactive verdict says why in one sentence.
+sight, or in a room whose table can spawn one (the Mausoleum's shadow mummy; a townsperson a room creates is not one),
+or in a room with no spawn table. It is also off while the body is not the farm's: travelling or on an errand (a
+journey keeps its own lines), a faculty leased away, recovering from a death, poisoned or diseased, or within five
+minutes of a player's blow. Every inactive verdict says why in one sentence.
 
 1.8 and not 2: the operator counts Kermit (143), Lew (146), Rizzo (148) and Piggy (149) as overmatched against level 75,
 which is 1.91 to 1.99.
@@ -362,27 +363,44 @@ which is 1.91 to 1.99.
 |---|---|---|
 | stop opening fights, go and rest | below `engageAt` 0.75 (0.9 under 30 health) or `rest_below` | below `rest_below` **0.34** |
 | get up from the wall | `hold_resume_above` 0.9 | `resume_above` **0.67** |
-| break a fight off; the logoff ladder; the watchdog and the 1-second ladder (`safety().fleeAt`) | `max(flee_below, two of the biggest blows)` | `flee_below` **0.25** |
+| break a fight off; the watchdog and the 1-second ladder (`safety().fleeAt`) | `max(flee_below, two of the biggest blows)` | `flee_below` **0.25** |
+| the play-dead logoff | on arrival at a recovery wall; at the flee line; at `doomed_in_open_below` / `doomed_in_spot_below` (0.3) | only below `flee_below`: the doomed thresholds are capped there, and a stop above it takes its wall without one |
 | vigor is a reason to sit | under the resting cap (80), or spent | only SPENT (under `ordinaryVigorFloor`, 20) |
 | vigor a fight is opened at (`fightFloor`) | the fed 140 / the rested 70 | the ordinary floor (20); 0 with Second Wind |
 | a wall for a fight | at `wall_at_attackers`, or always (`pull_to_safe_wall`) | none -- unless `overmatch.wall_at_attackers` says so |
 
+**Three places ended a rest, with three numbers, and now they read one answer.** The survival dispatcher
+(`continueSurvivalDecisionStep`, which runs before the ladder) ended a recovery only at FULL health and 80 vigor; the
+rest gate rested to `hold_resume_above`; `releaseRestedHold` let the wall go at the resting ceiling. The dispatcher was
+the one that actually held a farmer on its wall, because the pass never reached the other two.
+`Autopilot.overmatchRested` is the one answer all three ask while overmatched: health at the resume line, and vigor no
+longer a reason to sit.
+
+**The logoff belongs to the flee line.** Every play-dead logoff opens a healing session (`m59-healing-session.mjs`) that
+bars a second logoff, and every town trip, until the body is back at FULL health -- which a farmer that returns to the
+fight at two thirds may not see for an hour. So a stop above the flee line, for health or for spent vigor, is a
+voluntary one: the same wall, no logoff on arrival. Below the line the doomed and flee rungs log off as they always
+did, and a wall that turns out not to hold still answers with a reconnect. **And a body that HAS spent its logoff heals
+as it always did:** while that session is open its resume line is `hold_resume_above` again (`lines.healing_session` on
+status). With no wall to be had at all, the open-floor rungs below are the ones the ladder always had.
+
 A rest begun spent runs to its bar: the resting ceiling (80, less a ring of lethargy), or just clear of the floor (30)
-when Second Wind is the vigor supply. It is a voluntary stop, so it takes a wall without the emergency logoff a health
-recovery performs. **Spent while Second Wind is still running** is the one state resting cannot fix: the server holds
-the rest threshold at 10 until the skill ends and refuses food with it, so the body waits on its wall, on its feet, and
-says so once a minute (`spent, and resting cannot pay yet`) instead of resting, gaining nothing and giving the square up.
+when Second Wind is the vigor supply. **Spent while Second Wind is still running** is the one state resting cannot fix:
+the server holds the rest threshold at 10 until the skill ends and refuses food with it, so the body waits on its wall,
+on its feet, and says so once a minute (`spent, and resting cannot pay yet`) instead of resting, gaining nothing and
+giving the square up.
 
 **It outranks `pull_to_safe_wall`.** The roster carries `pull_to_safe_wall: true` on half the fleet -- it was the
 default -- including Kermit and three other Castle Victoria and Ancient Place farmers, exactly the characters the order
 names. To keep an overmatched character on walls, say so where the decision is made: `overmatch: "off"`, or
 `overmatch: { wall_at_attackers: 2 }`.
 
-**Untouched:** a journey (`travel_guard`, `travelHoldBelow`, `travelStartHealth`, `travelHoldResumeAbove`), death
-recovery (rests to whole), poison (shelters in place), the doomed rung (`doomed_in_open_below` / `doomed_in_spot_below`
-keep their own numbers, which sit between the rest and flee lines), the PvP response, and the needle, patrol, buddy,
-gang-up, guard-zone and room-enchant postures. Target choice, the pull machinery, chase on foot, loot and town trips
-are not changed by this either.
+**Untouched:** a journey (`travel_guard`, `travelHoldBelow`, `travelStartHealth`, `travelHoldResumeAbove`, and the
+"too hurt to set off" gate of `leaveHold`), death recovery (rests to whole), poison (shelters in place: the verdict is
+off while it lasts), the PvP response, and the needle, patrol, buddy, gang-up, guard-zone and room-enchant postures.
+Target choice, the pull machinery, chase on foot, loot and town trips are not changed by this either. A body that is
+NOT overmatched reads exactly the numbers it read before: `safety()` is `skills.safetyFor`, the doomed thresholds are
+the policy's, and a recovery ends where it always ended.
 
 | value | meaning |
 |---|---|
@@ -396,7 +414,9 @@ not set the three health lines -- when a character rests and flees stays with th
 
 `autopilot status` reports `overmatch`: the verdict (`active`, `why`, `ratio`, `prey_level`), the `lines` every farming
 decision is reading at that moment, `opens_fight_from_wall`, the `vigor` bars, and `spent_rest_since`. The journal says
-`overmatch on: ...` and `overmatch off: ...` once on each edge.
+`overmatch on: ...` and `overmatch off: ...` once on each edge (a logoff is not an edge), and a death record carries
+`vitals.overmatch` -- how long before the death the verdict was last on, in which room, and the lines it gave -- so a
+death on these lines can be told from one on the old ones.
 
 **THE ROSTER REMEMBERS THE OLD DEFAULT OF ITS NEIGHBOUR.** `overmatch` is a new key, so every character gets `"auto"`
 from the code. `second_wind_farming` is not: the broker saves a character's WHOLE policy on every `autopilot` call, so

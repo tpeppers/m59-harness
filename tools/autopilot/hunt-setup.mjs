@@ -8,11 +8,12 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 32 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
+// 38 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
 //   bannedWeaponsNow, huntsTrolls, bareHandedByTraining, touchSpellNow, huntAreaHere,
 //   nearestHuntAreaSquare, huntPriorityOrder, huntPriorityStatus, gangUpPlayersHere, gangUpVerdict,
 //   gangUpBars, gangUpLapsedPull, gangUpFilter, gangUpStatus, patrolHere, patrolEngageFilter,
 //   patrolWalk, patrolStatus, applyFarmStrategy, secondWindFarming,
+//   overmatch, overmatchPvp, overmatchVigor, overmatchVigorRest, overmatchRested, overmatchSpentWait,
 //   farmStrategyHook, farmStrategyStatus, policyForOrders, farmStrategyPushEcho,
 //   farmStrategyGate, farmStrategyFarming, rereadWeapons
 import { spellCost } from '../m59-deskpractice.mjs';
