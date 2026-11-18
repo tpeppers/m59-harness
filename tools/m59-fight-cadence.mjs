@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 // THE SWING CLOCK: WHAT MAY HAPPEN BETWEEN TWO SWINGS, AND WHEN A FIGHT IS HANDED BACK.
 //
-// Pure: no socket, no clock of its own, no policy. `Session.attackRounds` (m59-game.mjs) asks it whether to turn
-// before a swing, `fight()` (m59-skills.mjs) asks it whether a fight goes on for another round, and the farm pass
-// records what it measured. tools/m59-fight-cadence-test.mjs pins all of it.
+//   node tools/m59-fight-cadence.mjs --fleet prod --since 30m      the pace of that window's kills, off the ledger
+//   node tools/m59-fight-cadence.mjs --fleet prod --since 6h --who Piggy,Lew --json
+//   node tools/m59-fight-cadence-test.mjs                          offline, on a virtual clock
+//
+// Pure, apart from that one read-only report: no socket, no clock of its own, no policy. `Session.attackRounds`
+// (m59-game.mjs) asks it whether to turn before a swing, `fight()` (m59-skills.mjs) asks it whether a fight goes on
+// for another round, and the farm pass records what it measured. tools/m59-fight-cadence-test.mjs pins all of it.
 //
 // MEASURED, prod 2026-11-18. Four Castle Victoria farmers (143-149 max health, skeletons and zombies), keeper
 // journals over six minutes, every break-off that followed another fight outcome:
@@ -45,6 +49,8 @@
 //   so "the server has spoken since my last swing left" is the ordinary case and a read is owed only when it has not.
 //
 // Anything here that is a number is a number about the SERVER, not an opinion about this fleet: none of it is policy.
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Degrees the bearing to a target may sit from our facing before a swing turns first. Half an octant; see above. */
 export const SWING_REFACE_DEG = 22.5;
@@ -229,3 +235,87 @@ export function killTotals(tally) {
            ...(tally.counted ? { kill_swings: tally.swings } : {}),
            kill_ms: Math.max(0, Math.round(tally.lastAt - tally.firstAt)) };
 }
+
+// ---------------------------------------------------------------- reading it back off the ledger
+
+const median = xs => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b), m = (s.length - 1) / 2;
+                       return (s[Math.floor(m)] + s[Math.ceil(m)]) / 2; };
+
+/**
+ * THE PACE OF A WINDOW'S KILLS, FROM THE LEDGER'S `killed` ROWS. Pure: rows in, one line per character and a total.
+ *
+ *   swing_ms            median gap between two attack packets inside one call      (the server's second: about 1050)
+ *   seconds_per_round   sum of kill_ms over sum of kill_rounds                     (1.71 on prod before the swing clock)
+ *   rounds_per_kill     median kill_rounds                                         (7 before)
+ *   handed_back         kills that took more than one fight() call
+ *
+ * A row written before these fields existed, or by a fight that does not report them (a fight-back kill carries its
+ * own call's pace and no kill totals), is counted in `kills` and not in `measured`: every figure is over the
+ * measured rows only, and is null, never 0, when there are none.
+ */
+export function paceReport(events = []) {
+  const blank = character => ({ character, kills: 0, measured: 0, swing: [], rounds: [], ms: 0, sum: 0, handed_back: 0 });
+  const by = new Map(), all = blank('ALL');
+  for (const e of events) {
+    if (e?.kind !== 'killed') continue;
+    const who = String(e.character ?? '?');
+    if (!by.has(who)) by.set(who, blank(who));
+    for (const row of [by.get(who), all]) {
+      row.kills++;
+      if (Number.isFinite(e.swing_ms)) row.swing.push(e.swing_ms);
+      if (!(Number.isFinite(e.kill_rounds) && e.kill_rounds > 0 && Number.isFinite(e.kill_ms))) continue;
+      row.measured++; row.rounds.push(e.kill_rounds); row.ms += e.kill_ms; row.sum += e.kill_rounds;
+      if (e.kill_calls > 1) row.handed_back++;
+    }
+  }
+  const line = r => ({ character: r.character, kills: r.kills, measured: r.measured,
+                       swing_ms: r.swing.length ? Math.round(median(r.swing)) : null,
+                       seconds_per_round: r.sum ? +(r.ms / r.sum / 1000).toFixed(2) : null,
+                       rounds_per_kill: r.measured ? median(r.rounds) : null,
+                       handed_back: r.measured ? r.handed_back : null });
+  return { rows: [...by.values()].sort((a, b) => b.kills - a.kills).map(line), total: line(all) };
+}
+
+async function main() {
+  const argv = process.argv.slice(2), a = { since: '30m' };
+  for (let i = 0; i < argv.length; i++) {
+    const k = argv[i], v = () => argv[++i];
+    if (k === '--fleet') a.fleet = v(); else if (k === '--dir') a.dir = v(); else if (k === '--since') a.since = v();
+    else if (k === '--who') a.who = v().split(',').map(s => s.trim()).filter(Boolean);
+    else if (k === '--json') a.json = true; else if (k === '--help' || k === '-h') a.help = true;
+    else throw new Error(`unknown argument ${k} (--fleet <name> | --dir <ledger dir>, --since 30m|6h|2d, --who a,b, --json)`);
+  }
+  const { readFileSync, existsSync, readdirSync, createReadStream } = await import('node:fs');
+  if (a.help) { console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 9).join('\n')); return; }
+  const m = /^(\d+(?:\.\d+)?)([mhd])$/.exec(String(a.since));
+  if (!m) throw new Error(`--since wants 30m, 6h or 2d, not ${a.since}`);
+  const to = Date.now(), from = to - Number(m[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2]];
+  const { fleetName, ledgerDirFor } = await import('./m59-fleetpath.mjs');
+  const dir = a.dir ?? ledgerDirFor(a.fleet ?? fleetName());
+  // AN ABSENT DIRECTORY IS NOT AN EMPTY ONE (m59-ledger.mjs readLedger): say which was read, and refuse a guess.
+  if (!existsSync(dir)) { console.error(`no ledger at ${dir}: the directory does not exist (name the fleet, or pass --dir)`); process.exit(2); }
+  const day = t => new Date(t).toISOString().slice(0, 10);
+  const files = readdirSync(dir).filter(f => /^fleet-\d{4}-\d{2}-\d{2}\.jsonl$/.test(f) && f.slice(6, 16) >= day(from) && f.slice(6, 16) <= day(to)).sort();
+  const { createInterface } = await import('node:readline');
+  const events = [];
+  for (const f of files) {
+    // Streamed, and parsed only where the row can matter: a day of ledger is tens of megabytes.
+    for await (const text of createInterface({ input: createReadStream(resolve(dir, f)), crlfDelay: Infinity })) {
+      if (!text.includes('"kind":"killed"')) continue;
+      let row; try { row = JSON.parse(text); } catch { continue; }
+      if (row.t >= from && row.t <= to && (!a.who || a.who.includes(row.character) || a.who.includes(row.agent))) events.push(row);
+    }
+  }
+  const report = { ...paceReport(events), source: { dir, files: files.length, since: a.since } };
+  if (a.json) { console.log(JSON.stringify(report, null, 1)); return; }
+  const cell = (v, w) => String(v ?? '-').padStart(w);
+  console.log(`kills in the last ${a.since}, from ${files.length} file(s) in ${dir}`);
+  console.log('character              kills  measured  swing_ms  s/round  rounds/kill  handed back');
+  for (const r of [...report.rows, report.total])
+    console.log(`${r.character.padEnd(20)}  ${cell(r.kills, 5)}  ${cell(r.measured, 8)}  ${cell(r.swing_ms, 8)}  ${cell(r.seconds_per_round, 7)}  ${cell(r.rounds_per_kill, 11)}  ${cell(r.handed_back, 11)}`);
+  if (report.total.kills && !report.total.measured)
+    console.log('no kill in this window carries the pace fields: the keepers that made them predate the swing clock');
+}
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+if (isMain) main().catch(e => { console.error(e.message); process.exit(1); });
