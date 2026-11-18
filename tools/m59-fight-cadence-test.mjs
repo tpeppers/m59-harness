@@ -23,9 +23,12 @@
 //   - a hit sends its sentence, and the resistance band a little LATER as its own delivery;
 //   - health is pushed on change and never otherwise (DrawHealth, user.kod:6631).
 //
-// The last block is the comparison the operator asked for: one ten-round kill, asked for the way the farm pass
-// asks, against the same kill at the old budget of three rounds a call with the measured pass between calls.
+// One block is the comparison: a ten-round kill asked for the way the farm pass now asks, against the same kill at
+// the old budget of three rounds a call with the measured 1.56 s of pass between calls. The last block is the farm
+// pass itself: what it asks fight() for, when its gate wants the body back, and what it writes to the journal and
+// the ledger.
 
+import './m59-test-ledger.mjs';          // FIRST: a test that touches keeper code never writes a real fleet's history
 import { mock } from 'node:test';
 import { M59Client, BP } from './m59-client.mjs';
 import { OF } from './m59-parse.mjs';

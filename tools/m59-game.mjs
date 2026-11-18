@@ -5241,9 +5241,11 @@ class Session {
     // Guarded: a session double in a test has no ring to sweep, and the rounds' own
     // collection is already the answer there.
     if (typeof c.eventsSince === 'function') keep(c.eventsSince(exchangeFrom));
-    heardViewRefusal();
     const messages = [...collected.entries()].sort((a, b) => a[0] - b[0]).map(e => e[1]);
-    if (messages.some(notInViewText)) this.swingViewRefused = c;
+    // A view refusal of the LAST swing is the next call's to act on. With an event ring it is looked for since that
+    // swing (an earlier one in this call was already turned for); a double with no ring has only this call's lines.
+    if (typeof c.eventsSince === 'function') heardViewRefusal();
+    else if (messages.some(notInViewText)) this.swingViewRefused = c;
     // SAY THAT THE SWING WAS REFUSED, on the path that nearly every character in this fleet
     // takes. The broker's own `attack` tool computes `could_not_swing` and prints the cure —
     // stand up and swing again — but only on the in-process branch. Keeper-backed sessions
