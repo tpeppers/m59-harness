@@ -436,6 +436,19 @@ still fires by itself under 25 when the pack is empty. And restart the KEEPERS b
 old code that is pushed `"auto"` reads it the old way (twice the worst huntable spawn) with the old rest rules, which
 is the combination that sat farmers on a wall waiting for vigor the skill forbids.
 
+**WHAT NO OFFLINE SUITE CAN SAY, AND WHERE TO READ IT ONCE THE KEEPERS ARE ON THIS CODE.** The suite pins the decisions;
+it cannot pin the room. Each of these is a question about a live farmer, with the field or the sentence that answers it:
+
+| question | read |
+|---|---|
+| is it on, and if not, why | `autopilot status .overmatch.active` and `.why`; on a Castle Victoria farmer `.overmatch.lines` reads rest 0.34, resume 0.67, flee 0.25 and `.overmatch.opens_fight_from_wall` is `false` |
+| did the yield move | the fleet row's `kills_30m` (the ledger's, not the keeper's own tally, which a restart empties), against 25-30 before and the operator's 60 |
+| does it still walk to a wall while healthy | the journal: `took a wall before resting` above a third of its health is the old rule still in force; `hurt, and far stronger than this room — a wall before a rest` is this one, and belongs under 34% |
+| does it leave the wall again | `leaving the wall — rested to the overmatch lines`, at two thirds and not at nine tenths. After a play-dead logoff `.overmatch.lines.resume` reads `hold_resume_above` until the body is whole: that is the healing session, not a fault |
+| what the skill's cooldown costs | `spent, and resting cannot pay yet — waiting it out`, once a minute while it lasts, and `.overmatch.spent_rest_since`. A large share of the half hour here is an argument for meals, never for a lower line |
+| does the verdict flap | count the `overmatch on:` and `overmatch off:` edges in an hour; `.why` names the level or the unlisted creature that turned it off (a faction soldier in sight does, for as long as it is in sight) |
+| did these lines cost a life | a death record's `vitals.overmatch`: a small `ms_before` is a death on these lines, and it is absent when the verdict was never on |
+
 ## SECOND WIND IS THE LARDER AGAINST WEAK PREY — `second_wind_farming`
 
 ```bash
