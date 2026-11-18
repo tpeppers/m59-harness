@@ -169,10 +169,11 @@ export class PassSurvivalPart {
     // policy keys the roster carries (0.3, and 0.35 on a spot for several farmers), and left alone they sit ABOVE the
     // line an overmatched farmer rests at: a body resting on its wall at 34.7% with a skeleton beside it read as doomed
     // and logged off, and the verdict's flee line was never the line that fired. Capped, never raised: a policy that
-    // says doomed below 0.2 still means 0.2.
-    const doomedBelow = this.hold ? (this.policy.doomedInSpotBelow ?? 0.3) : (this.policy.doomedInOpenBelow ?? 0.3);
-    const doomedLine = lines.overmatch ? Math.min(doomedBelow, lines.flee) : doomedBelow;
-    const doomedAt = Math.round((v.health?.max ?? 0) * doomedLine);
+    // says doomed below 0.2 still means 0.2. Not overmatched, the policy's number is the number, as it always was.
+    const doomedLineOf = below => (lines.overmatch ? Math.min(below, lines.flee) : below);
+    const doomedAt = Math.round((v.health?.max ?? 0) * doomedLineOf(this.hold
+      ? (this.policy.doomedInSpotBelow ?? 0.3)
+      : (this.policy.doomedInOpenBelow ?? 0.3)));
     const doomed = hp !== null && near.length && v.health?.value != null &&
                    v.health.value <= doomedAt;
     // PLAY DEAD ONLY WHERE STANDING STILL IS ALREADY SAFE. FLEE EVERYWHERE ELSE.
@@ -259,7 +260,7 @@ export class PassSurvivalPart {
                                : 'no wall to run to — freezing is all that is left', {
           health: v.health.value, adjacent: near.length,
           took: !!rushed?.took, why: rushed?.why ?? null,
-          doomed_below: doomedLine,
+          doomed_below: doomedLineOf(this.policy.doomedInOpenBelow ?? 0.3),
         });
       }
       const wall = this.wallHere();

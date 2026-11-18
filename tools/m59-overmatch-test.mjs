@@ -554,6 +554,7 @@ test('plumbing: the strategy-file key validates, refuses the health lines, and y
 });
 
 // ------------------------------------------------------------------ the logoff, the session and the dispatcher
+import { readFileSync } from 'node:fs';
 
 test('the logoff belongs to the flee line: above it a hurt overmatched farmer takes its wall the voluntary way', async () => {
   // 30%: under the rest line, over the flee line, two things adjacent, and a roster that says doomed_in_spot_below 0.35.
@@ -658,6 +659,21 @@ test('a body holding a wall its cover no longer proves still reads its flee floo
   k.ap.currentRecoveryWall = () => null;
   assert.equal(k.ap.overmatch().active, false);
   assert.equal(await k.pass(), CONTINUE);
+});
+
+test('plumbing: the broker takes `overmatch`, refuses nonsense whole, and the key rides to the keeper with the whole policy', () => {
+  // The broker cannot be imported (importing runs it), so this is read off its source, like every broker pin here.
+  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  assert.match(broker, /overmatch: \{ description: 'OVERMATCH \(m59-overmatch\.mjs\): "auto" \(default\)/);
+  assert.match(broker, /if \(a\.overmatch !== undefined\) \{\s*try \{ normOvermatch\(a\.overmatch\); p\.policy\.overmatch = a\.overmatch; \}\s*catch \(e\) \{ return \{ started: false, reason: `overmatch refused: \$\{e\.message\}`, note: 'nothing was changed' \}; \}/);
+  // Every prod character is keeper-backed: keeperPolicy posts p.policy WHOLE, so there is no per-key list to forget
+  // this one on, and the keeper's POST /policy assigns whatever it is handed.
+  assert.match(broker, /return keeperPolicy\(agent, s\._index, \{ policy: p\.policy, mode: p\.mode, via \}\);/);
+  const keeper = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  assert.match(keeper, /Object\.assign\(autopilot\.policy, fields\);/);
+  // And status carries the verdict beside second_wind, which is what a deploy is checked against.
+  const status = readFileSync(new URL('./autopilot/status.mjs', import.meta.url), 'utf8');
+  assert.match(status, /second_wind: [^\n]+\n[\s\S]{0,700}overmatch: \(\(\) => \{/);
 });
 
 test('a death record says whether the body was fighting on the overmatch lines', () => {

@@ -196,7 +196,7 @@ caring about safe spots at all". One predicate, asked by the wall decision (`hol
 The room decides, not the quarry: 150 health in the Sewers is not overmatched, because the room also rolls a level-105
 lupogg. Trolls are never it. The table of lines, the values `overmatch` takes, what it leaves alone and how to read it
 on `autopilot status` are in [`docs/m59-policy.md`](m59-policy.md#overmatch-a-farmer-far-stronger-than-its-prey-fights-in-the-open-and-does-not-stop--overmatch);
-`tools/m59-overmatch.mjs` is the predicate and `node tools/m59-overmatch-test.mjs` (32, offline) pins it.
+`tools/m59-overmatch.mjs` is the predicate and `node tools/m59-overmatch-test.mjs` (33, offline) pins it.
 
 ## Touch spells are the weapon — `touch_spell`
 

@@ -320,7 +320,7 @@ walking hurt characters straight past the only free healing on the road.
 ## OVERMATCH: A FARMER FAR STRONGER THAN ITS PREY FIGHTS IN THE OPEN AND DOES NOT STOP — `overmatch`
 
 ```bash
-node tools/m59-overmatch-test.mjs       # 32, offline
+node tools/m59-overmatch-test.mjs       # 33, offline
 ```
 
 Operator, 2026-11-17/18: *"Characters seem to rest far more than needed, especially when farming creatures significantly
