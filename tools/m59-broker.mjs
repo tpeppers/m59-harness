@@ -12836,8 +12836,9 @@ const TOOLS = [
         'huntable or not, and every hostile creature in sight -- opens no fight from a wall and takes none for a crowd ' +
         '(whatever pull_to_safe_wall says; wall_at_attackers: N puts a crowd wall back), rests for health only below ' +
         'rest_below (0.34) and gets up at resume_above (0.67), breaks off below flee_below (0.25), and sits for vigor only ' +
-        'when spent (under 20). Off while travelling, on an errand, leased, recovering from a death, in PvP, or with an ' +
-        'unknown creature in sight. "off" is the lines and walls this character had before. null resets to the default' },
+        'when spent (under 20). Off while travelling, on an errand, leased, recovering from a death, poisoned, in PvP, or ' +
+        'with a creature of unknown level in sight or in the room spawn table. The play-dead logoff moves to flee_below. ' +
+        '"off" is the lines and walls this character had before. null resets to the default' },
       lock_no_combat: { type: 'boolean', description: 'THE NO-COMBAT LOCK, a lockdown that accepts ANY NO_COMBAT room (every ' +
         'inn, shop, bank and hall): the keeper locks the character (assigned_room and confine_rooms) to the no-combat room ' +
         'it stands in, re-deciding on every pass, so a character a person leaves in another inn stays THERE; outside a ' +
