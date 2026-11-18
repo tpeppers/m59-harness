@@ -384,7 +384,7 @@ through a nested shelter order.
   ratio; `eat` keeps meals; and on a fake keeper in the cave, `fightFloor()` is 0 and `provision()` eats nothing, while
   an overmatched farmer WITHOUT the skill is not second-wind farming and has the ordinary floor (20).
 
-- `m59-overmatch-test.mjs` (26): the predicate one farmer in three is run on. **The normal form** (auto by default;
+- `m59-overmatch-test.mjs` (32): the predicate one farmer in three is run on. **The normal form** (auto by default;
   either spelling of each key) and its refusals, each with its reason: an unknown key, a ratio under 1,
   `flee_below` not under `rest_below`, `rest_below` not under `resume_above`, a fractional `wall_at_attackers`, both
   spellings of one key disagreeing; a strategy file may say mode, ratio and the crowd wall and is refused the three
@@ -392,23 +392,32 @@ through a nested shelter order.
   2; the comparison is exact, never the rounded ratio (134.9 rounds to 1.8 and is under it); what can STAND in the room
   decides (150 against trolls and the stone troll, 150 in the Sewers with its level-105 lupogg, 40 against level 50 are
   all off; a troll walking into view turns it off); every inactive answer -- off, not farming, held, health unknown,
-  recovering, PvP, no spawn table, an unknown creature in sight, an unreadable policy -- says why in one sentence;
-  `on` needs only farming, a known bar, no recovery and no PvP. **The wiring, on a fake keeper standing in room 38
-  built on `Autopilot.prototype`:** the verdict is gathered from the room it stands in and is off for a journey, an
-  errand, a suspended journey, a lease, a death recovery and a player's blow in the last five minutes, while other
-  players in the room change nothing; ONE journal note on each edge and none for a keeper that was never overmatched;
+  recovering, poisoned, PvP, no spawn table, a table that can spawn a creature of unknown level, an unknown creature
+  in sight, an unreadable policy -- says why in one sentence; `on` needs only farming, a known bar, no recovery, no
+  poison and no PvP. **The wiring, on a fake keeper standing in room 38 built on `Autopilot.prototype`:** the verdict is
+  gathered from the room it stands in and is off for a journey, an errand, a suspended journey, a lease, a death
+  recovery, poison, the Mausoleum's unlevelled mummies and a player's blow in the last five minutes, while other
+  players in the room and a townsperson in its spawn table change nothing; ONE journal note on each edge, none for a
+  logoff (no client is not an edge) and none for a keeper that was never overmatched;
   `safety()` and `healthLines()` answer the verdict's lines and, not overmatched, `deepEqual` what `skills.safetyFor`
   always said; `holdWorthwhile` takes no wall with three in reach **whatever `pull_to_safe_wall` says**, takes one at
   `overmatch.wall_at_attackers`, and for a body that is not overmatched returns the same object as with overmatch off;
   `fightFloor()` is 20, 0 with Second Wind, and the old floor otherwise. **Then the survival stage itself:** the case
   the live A/B found -- 60% health and 70 vigor -- returns CONTINUE with no wall and no logoff under both postures,
   where the same body with overmatch off, and a 99-health body, go for a recovery wall; 79 of 200 vigor is not hurt and
-  15 is, taking its wall the voluntary way; below a third is the recovery wall and the room-retreat rung reads 34%; a
+  15 is, taking its wall the voluntary way; below a third goes for a wall and the room-retreat rung reads 34%; a
   rest begun spent runs to 80, or to 30 with Second Wind, and a ceiling the keeper did not model never parks a body that
   is no longer spent; spent while Second Wind runs waits on its wall without sitting, noting it once; a health rest ends
-  just above the resume line and `releaseRestedHold` lets the wall go at 0.67 and the vigor bar (0.9 and the cap with
-  overmatch off); death recovery, a journey and a suspended journey keep the old lines; and the strategy-file key
-  validates, refuses the health lines and yields with `work`.
+  just above the resume line and `releaseRestedHold` lets the wall go at 0.67 (a rest begun spent runs to its bar; 0.9
+  and the cap with overmatch off); death recovery, a journey and a suspended journey keep the old lines; and the
+  strategy-file key validates, refuses the health lines and yields with `work`. **And the three things the first draft
+  got wrong:** the logoff belongs to the flee line (30% with two adjacent takes its wall with no logoff even under a
+  roster `doomed_in_spot_below` of 0.35, 24% is the doomed rush and the logoff, and with overmatch off 30% is doomed as
+  before); a body that has spent its logoff rests to `hold_resume_above` until the healing session closes; the survival
+  dispatcher ends an overmatched recovery at the same lines (70% and 60 vigor finishes the decision; poison, 60% and a
+  spent body do not); a crowd wall asked for by `overmatch.wall_at_attackers` keeps its release hysteresis; a body
+  holding a wall its cover no longer proves (room 552) still reads its flee floor -- the `ReferenceError` the baseline
+  comparison caught; and a death record carries the last moment the verdict was on.
 
 - `m59-chase-test.mjs` (16): OFF by default (`fight()` without `chase` is the old local approach; the keeper orders,
   fights and closes on foot only under `policy.chaseOnFoot === true`, which defaults false). Chase on foot (`m59-chase.mjs`) on the real Icky Cave map. The operator's r35c45 -> r35c58
