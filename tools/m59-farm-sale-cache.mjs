@@ -10,7 +10,7 @@ import { idsCurrent } from './m59-idgen.mjs';
 import { claimGift, releaseGift } from './m59-interest-store.mjs';
 import { saleBlocked } from './m59-inventory-intent.mjs';
 import { ITEM_RARITY, weighItem } from './m59-items.mjs';
-import { annotateRow } from './m59-make-space.mjs';
+import { annotateRow, freeOf, MAKE_SPACE_MAX } from './m59-make-space.mjs';
 import { liveMoveOrder } from './m59-move-origin.mjs';
 import { dropSpec, OF } from './m59-parse.mjs';
 import { reagentKey } from './m59-reagent-reserve.mjs';
@@ -35,6 +35,8 @@ const fullPackFree = 20;
 const retryMs = 30_000;
 const cacheLifeMs = 5 * 60_000;
 const attempts = new WeakMap();
+const spaceAttempts = new WeakMap();
+const tradeGoods = new Set([...FARM_SALE_CACHE_ITEMS, 'diamond', 'emerald', 'ruby']);
 const same = (a, b) => !!a && !!b && a.row === b.row && a.col === b.col;
 const placed = p => Number.isSafeInteger(p?.row) && Number.isSafeInteger(p?.col) && !p.predicted;
 const within = (a, b, reach) => Math.abs(a.row - b.row) + Math.abs(a.col - b.col) <= reach;
@@ -115,6 +117,46 @@ function reservedForFleet(records, name) {
   for (const row of records.values()) for (const [wanted, amount] of row.needs ?? [])
     if (reagentKey(wanted) === name && Number.isFinite(amount) && amount > 0) demand += amount;
   return demand;
+}
+
+// The ward deposit remains the first choice. If the pack is already too
+// tight for a replacement weapon, use the same sale-plan drop engine as
+// FleetScript's make-space without sending the farmer on a town trip.
+export async function tryFarmTradeGoodsSpace(pilot, now = Date.now) {
+  const s = pilot.s, c = s.client, pose = { row: c?.self?.row, col: c?.self?.col };
+  const room = c?.room?.id, self = c?.selfId, generation = c?.idGenerations, save = c?.idsAsOf?.()?.last_save_at;
+  const safe = () => {
+    const ids = c?.idsAsOf?.();
+    if (!c || s.client !== c || c.room?.id !== room || c.selfId !== self || c.idGenerations !== generation ||
+        !same(c.self, pose) || !eligibleBody(pilot, s, c, now()) || !idsCurrent(ids) || ids.last_save_at !== save) return false;
+    const scene = ward(pilot, s, c);
+    return !!scene && quietAt(c, scene, c.self);
+  };
+  if (!eligibleBody(pilot, s, c, now()) || now() - (spaceAttempts.get(c) ?? -Infinity) < retryMs) return false;
+  const capacity = carryCapacity(c), free = freeOf(capacity);
+  if (!capacity?.load?.exact || !free || Math.min(free.bulk, free.weight) >= 100 || !safe()) return false;
+  spaceAttempts.set(c, now());
+  const result = await pilot.makeSpaceNow({ bulk: MAKE_SPACE_MAX, weight: MAKE_SPACE_MAX,
+    why: 'Ocean farm: reserve room for rearming', beforeDrop: safe, filterPlan: plan => {
+      if (!plan || plan.error) return plan;
+      const demands = interest.records();
+      const heldBack = pilot.heldBackIds?.() ?? new Set();
+      const surplus = new Map(FARM_SALE_CACHE_ITEMS.map(name => [name,
+        Math.max(0, amountOf(c, name) - floors[name] - reservedForFleet(demands, name))]));
+      const items = [];
+      for (const row of plan.items ?? []) {
+        const name = itemKey(row.name);
+        if (!tradeGoods.has(name)) continue;
+        const allowed = annotateRow(row, { heldBack });
+        if (!allowed.droppable) continue;
+        const amount = Math.min(allowed.sale_amount, surplus.get(name) ?? Infinity);
+        if (amount <= 0) continue;
+        if (surplus.has(name)) surplus.set(name, surplus.get(name) - amount);
+        items.push({ ...row, sale_amount: amount });
+      }
+      return { ...plan, items };
+    } });
+  return result?.dropped?.length > 0;
 }
 
 function chooseParcel(pilot, c, book, now, state) {
