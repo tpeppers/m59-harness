@@ -200,6 +200,7 @@ import { survivalOffConflict, survivalOffLeaseMs, accepts, refusal } from './m59
 import { requiresVerdict, factsFromStatus, requestFor, resetFloor } from './m59-strategy-gate.mjs';
 import { normalizeLootEject, normalizeTradeGoods } from './m59-loot-eject.mjs';
 import { normSecondWindFarming } from './m59-second-wind.mjs';
+import { normOvermatch } from './m59-overmatch.mjs';
 import { normalizePurseLease } from './m59-purse-lease.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
@@ -12824,10 +12825,20 @@ const TOOLS = [
         'the next safe moment, and a remove-curse practice cast on self is made only while one is worn. Rings are refused. Default null' },
       cook_food: { description: 'COOK FROM THE ROAD (m59-cook-food.mjs): true | false | { first, reserveCasts }. Cast create food ' +
         'from carried elderberry and herbs before eating carried food while below the vigor ceiling. Default off' },
-      second_wind_farming: { description: 'SECOND WIND FARMING (m59-second-wind.mjs): "off" (default), "auto", "on"/true, "off"/false, or ' +
-        '{ mode, prey_ratio, eat }. Auto: a farmer that knows Second Wind, in a room whose worst huntable prey is at most ' +
-        '1/prey_ratio (default 2) of its max health, keeps NO vigor floor and eats NOTHING -- it fights down to 25 vigor, where ' +
-        'the skill adds 40 + stamina/2 + ability and rolls to improve. eat: true keeps the meals. Survival is untouched' },
+      second_wind_farming: { description: 'SECOND WIND FARMING (m59-second-wind.mjs): "auto" (default), "on"/true, "off"/false, or ' +
+        '{ mode, prey_ratio, eat }. Auto: a farmer that knows Second Wind and is OVERMATCHED (see overmatch: the same predicate ' +
+        'and ratio) keeps NO vigor floor and eats NOTHING -- it fights down to 25 vigor, where the skill adds 40 + stamina/2 + ' +
+        'ability and rolls to improve. A prey_ratio written here keeps its older meaning instead: max health over the worst ' +
+        'HUNTABLE spawn of the room. eat: true keeps the meals. "off" restores the old floor and the old meals' },
+      overmatch: { description: 'OVERMATCH (m59-overmatch.mjs): "auto" (default), "on"/true, "off"/false, or { mode, prey_ratio, ' +
+        'rest_below, resume_above, flee_below, wall_at_attackers }. Auto: a FARMER whose max health is at least prey_ratio ' +
+        '(default 1.8) times the level of the strongest thing that can stand in its room -- every row of the room spawn table, ' +
+        'huntable or not, and every hostile creature in sight -- opens no fight from a wall and takes none for a crowd ' +
+        '(whatever pull_to_safe_wall says; wall_at_attackers: N puts a crowd wall back), rests for health only below ' +
+        'rest_below (0.34) and gets up at resume_above (0.67), breaks off below flee_below (0.25), and sits for vigor only ' +
+        'when spent (under 20). Off while travelling, on an errand, leased, recovering from a death, poisoned, in PvP, or ' +
+        'with a creature of unknown level in sight or in the room spawn table. The play-dead logoff moves to flee_below. ' +
+        '"off" is the lines and walls this character had before. null resets to the default' },
       lock_no_combat: { type: 'boolean', description: 'THE NO-COMBAT LOCK, a lockdown that accepts ANY NO_COMBAT room (every ' +
         'inn, shop, bank and hall): the keeper locks the character (assigned_room and confine_rooms) to the no-combat room ' +
         'it stands in, re-deciding on every pass, so a character a person leaves in another inn stays THERE; outside a ' +
@@ -13957,6 +13968,12 @@ const TOOLS = [
       if (a.second_wind_farming !== undefined) {
         try { normSecondWindFarming(a.second_wind_farming); p.policy.secondWindFarming = a.second_wind_farming; }
         catch (e) { return { started: false, reason: `second_wind_farming refused: ${e.message}`, note: 'nothing was changed' }; }
+      }
+      // OVERMATCH (m59-overmatch.mjs). Stored as written, like second_wind_farming: the keeper normalises on every
+      // question, and a value that will not normalise is refused here, whole, before anything is changed.
+      if (a.overmatch !== undefined) {
+        try { normOvermatch(a.overmatch); p.policy.overmatch = a.overmatch; }
+        catch (e) { return { started: false, reason: `overmatch refused: ${e.message}`, note: 'nothing was changed' }; }
       }
       if (a.loot_eject !== undefined) {
         try { p.policy.lootEject = normalizeLootEject(a.loot_eject); }

@@ -311,6 +311,23 @@ export class StatusPart {
       // an empty pack rather than a bad threshold.
       // SECOND WIND FARMING (m59-second-wind.mjs): whether the skill is this character's larder here, and why.
       second_wind: (() => { try { return this.secondWindFarming?.() ?? null; } catch { return null; } })(),
+      // OVERMATCH (m59-overmatch.mjs): whether this farmer is far stronger than everything that can stand in its room,
+      // and why or why not. `lines` are the health lines every farming decision is reading at this moment (the
+      // verdict's while active, the policy's otherwise), `opens_fight_from_wall` the wall posture in force, `vigor` the
+      // bars a spent rest runs by, and `spent_rest_since` is set while a rest begun spent is still running to its bar.
+      overmatch: (() => {
+        try {
+          const verdict = this.overmatch?.() ?? null;
+          if (!verdict) return null;
+          const lines = this.healthLines?.() ?? null;
+          return { ...verdict,
+            lines: lines ? { rest: lines.rest ?? null, resume: lines.resume ?? null,
+                             engage: lines.engage ?? null, flee: lines.flee ?? null } : null,
+            opens_fight_from_wall: this.fightOpensFromWall?.() ?? null,
+            vigor: verdict.active ? (this.overmatchVigor?.() ?? null) : null,
+            spent_rest_since: this.spentRestSince ?? null };
+        } catch { return null; }
+      })(),
       vigor: this.vigor.engagements || this.vigor.waited ? {
         floor_now: this.fightFloor(), want: WANT_FIGHT_VIGOR,
         engagements: this.vigor.engagements,

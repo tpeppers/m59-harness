@@ -183,6 +183,21 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). The engagement ceiling, the spawn tabl
   effect, and that question turns on block, on shields, and on the spell modifier the
   create-food loop runs on. See `ARMOUR` and `absorbsSomething` in `m59-skills.mjs`.
 
+## Far stronger than the room — `overmatch`
+
+A farmer whose maximum health is at least 1.8 times the level of the strongest thing that can stand in its room (every
+spawn-table row, huntable or not, and every hostile creature in sight) is **overmatched**, and fights differently: no
+wall for a fight, whatever `pull_to_safe_wall` and `wall_at_attackers` say; a rest for health only below a third of its
+bar, ended at two thirds; a fight broken off below a quarter; and vigor a reason to sit only when spent. Operator,
+2026-11-17/18: such farmers "could probably all just rely on second wind and constantly fight", and should not "be
+caring about safe spots at all". One predicate, asked by the wall decision (`holdWorthwhile`), the health lines
+(`safety()`, `healthLines()`), the rest gate, the fight floor and Second Wind farming alike, so they cannot disagree.
+
+The room decides, not the quarry: 150 health in the Sewers is not overmatched, because the room also rolls a level-105
+lupogg. Trolls are never it. The table of lines, the values `overmatch` takes, what it leaves alone and how to read it
+on `autopilot status` are in [`docs/m59-policy.md`](m59-policy.md#overmatch-a-farmer-far-stronger-than-its-prey-fights-in-the-open-and-does-not-stop--overmatch);
+`tools/m59-overmatch.mjs` is the predicate and `node tools/m59-overmatch-test.mjs` (34, offline) pins it.
+
 ## Touch spells are the weapon — `touch_spell`
 
 A touch spell (acid touch, touch of flame, holy touch, icy fingers, zap) is a personal

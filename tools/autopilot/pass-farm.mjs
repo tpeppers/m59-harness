@@ -1150,6 +1150,20 @@ export class PassFarmPart {
       // wall the instant a crowd of two became a crowd of one — mid-fight, with something
       // still swinging — and the next pass would find two again and walk back. Take at
       // two, hold while anything is in contact, let go when the floor is clear.
+      //
+      // AND AN OVERMATCHED FARMER GIVES IT BACK AT ONCE, WHATEVER IS IN CONTACT (m59-overmatch.mjs). The hysteresis above
+      // exists because a released wall would be re-taken on the next pass; an overmatched farmer takes none (worth.hold
+      // is false whatever the crowd), so there is nothing to thrash against, and keeping the wall is what turns the next
+      // fight into "holding position", "it moved out of reach" and a pull. Whatever this wall was for -- a crowd, a
+      // fight opened from it before the farmer outgrew the room, a rest that has ended (a hurt body never reaches this
+      // line: the survival stage owns that pass) -- it is not for this. Dropping the claim moves nobody.
+      //
+      // UNLESS A CROWD WALL WAS ASKED FOR BY NAME. With overmatch.wall_at_attackers set (worth.bar) a wall IS re-taken
+      // at the bar, so that wall keeps the hysteresis above: let go only with the floor clear.
+      if (worth.overmatch && this.hold && !worth.hold && !this.isRoomEnchantPost?.()
+          && (worth.bar == null || (!this.pendingPull && !(this.inReachOfUs()?.length)))) {
+        this.releaseHold('overmatched: no wall is held for a fight against prey this far below us');
+      }
       if (!opensFightFromWall(this.policy) && this.hold && !worth.hold
           && !this.pendingPull && !(this.inReachOfUs()?.length)) {
         this.releaseHold('the crowd this wall was taken for has cleared, and the wall is ' +
@@ -1201,7 +1215,8 @@ export class PassFarmPart {
       // GATED ON THE OPENING PULL, because that is what it is a consequence of: if a
       // fight may only be opened from a wall, a room with no wall cannot be fought in.
       // With `pullToSafeWall` false the fight opens in the open and the room is fine.
-      if (!groupApproach && opensFightFromWall(this.policy) && !this.hold && room?.num != null) {
+      // An overmatched farmer opens every fight in the open whatever the key says (fightOpensFromWall).
+      if (!groupApproach && this.fightOpensFromWall() && !this.hold && room?.num != null) {
         // Ask once per room, not once per pass. takeSafeSpot is a scan plus pathfinds,
         // and the answer does not change while we stand here — but it DOES change when
         // the book learns something, so this is per session rather than persisted.

@@ -8,7 +8,7 @@ export const SURVIVAL_TRACE_LIMITS = Object.freeze({ events: 192, damage: 64,
   string_chars: 400, detail_depth: 5, detail_array: 32, detail_keys: 48, throttle_keys: 32 });
 const traces = new WeakMap();
 const operations = new AsyncLocalStorage();
-const policyKeys = ['fleeBelow', 'restBelow', 'blindWalkWatchdog', 'panicLogoff',
+const policyKeys = ['fleeBelow', 'restBelow', 'overmatch', 'blindWalkWatchdog', 'panicLogoff',
   'useSafeSpots', 'requireSafeWall', 'wallAtAttackers', 'doomedInOpenBelow',
   'doomedInSpotBelow', 'freezeMs', 'breakOutViaLogoff', 'breakOutAbove', 'pull',
   'travelGuard', 'travelFleeFrom', 'travelHold', 'travelHoldBelow', 'travelWallBelow',

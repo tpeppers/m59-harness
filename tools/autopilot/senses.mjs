@@ -8,12 +8,13 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 16 methods: safety, threat, holdWorks, noteSpotRush, spotRushedAt, recordShelterStop, wallHere,
-//   armed, armedForSure, recovered, observe, recordRestOutcome, operatorSurvivalStandDown,
-//   releaseHold, creatureLevel, holdWorthwhile
+// 18 methods: safety, healthLines, fightOpensFromWall, threat, holdWorks, noteSpotRush, spotRushedAt,
+//   recordShelterStop, wallHere, armed, armedForSure, recovered, observe, recordRestOutcome,
+//   operatorSurvivalStandDown, releaseHold, creatureLevel, holdWorthwhile
 import { relayFarmPeerEvidence } from '../m59-relay-farming.mjs';
 import { publishCooperativePresence } from '../m59-cooperative-logoff.mjs';
 import { publishFleetHealth } from '../m59-fleet-health.mjs';
+import { readSession } from '../m59-healing-session.mjs';
 import { OF } from '../m59-parse.mjs';
 import { opensFightFromWall } from '../m59-policydiff.mjs';
 import { recordRest } from '../m59-restwatch.mjs';
@@ -31,7 +32,60 @@ export class SensesPart {
 
   // The arithmetic moved to skills.safetyFor(client, policy) so the GOAP keeper's
   // watchdog reads the same withdraw line this one does. A move, not a fix.
-  safety() { return skills.safetyFor(this.s.client, this.policy); }
+  //
+  // AND WHILE OVERMATCHED (m59-overmatch.mjs) THE VERDICT'S LINES ARE THE LINES. safetyFor hard-codes "do not start a
+  // fight below 0.75" and derives the flee line from two of the game's biggest blows, and no policy could lower either:
+  // that is what kept 150-health farmers off level-75 skeletons at 74% of their bar. Every reader of the fight gate
+  // (engageAt), the fight loop's disengageAt, the flee rung, the watchdog and the 1-second ladder (fleeAt) asks here,
+  // so they move together or not at all. Not overmatched, this answers exactly what it always did.
+  safety() {
+    const base = skills.safetyFor(this.s.client, this.policy);
+    const om = this.overmatch?.();
+    if (!om?.active) return base;
+    return { ...base, fleeAt: om.flee_below, engageAt: om.rest_below, overmatch: true };
+  }
+
+  // THE HEALTH LINES A FARMING DECISION READS, IN ONE PLACE:
+  //   rest       sit down below this (open floor)            policy.restBelow          | overmatch rest_below
+  //   resume     get up from a wall at this                  policy.holdResumeAbove    | overmatch resume_above
+  //   engage     do not open a fight below this              safety().engageAt         | overmatch rest_below
+  //   flee       break off and answer with the logoff below  safety().fleeAt           | overmatch flee_below
+  //   fleeBelow  the policy's own flee number, unscaled      policy.fleeBelow          | overmatch flee_below
+  // Not overmatched, `rest`, `resume` and `fleeBelow` are the RAW policy values -- possibly undefined -- so each caller
+  // keeps the fallback it always had and nothing changes for a body that is not overmatched. A journey does not ask
+  // here: travelHoldBelow, travelStartHealth, travelHoldResumeAbove and travel_guard are its own lines.
+  //
+  // A BODY THAT HAS SPENT ITS LOGOFF HEALS AS IT ALWAYS DID. A play-dead logoff opens a healing session
+  // (m59-healing-session.mjs) that bars a second logoff until the body is back at FULL health. An overmatched farmer
+  // that went back to the fight at two thirds would be doing it with its last resort already used, so while a session is
+  // open the resume line is hold_resume_above again (`healing_session: true` says so). The rest line does not move.
+  healthLines() {
+    const om = this.overmatch?.();
+    if (om?.active) {
+      const lines = { overmatch: true, rest: om.rest_below, resume: om.resume_above, engage: om.rest_below,
+                      flee: om.flee_below, fleeBelow: om.flee_below };
+      let session = null;
+      try { session = readSession(String(this.s?.name ?? '')); } catch { session = null; }
+      if (session?.logoffs >= 1) {
+        lines.resume = Math.max(lines.resume, this.policy?.holdResumeAbove ?? 0.9);
+        lines.healing_session = true;
+      }
+      return lines;
+    }
+    const p = this.policy ?? {}, safe = this.safety();
+    return { overmatch: false, rest: p.restBelow, resume: p.holdResumeAbove, engage: safe.engageAt,
+             flee: safe.fleeAt, fleeBelow: p.fleeBelow };
+  }
+
+  // DOES A FIGHT OPEN BY WALKING TO A WALL? The keeper's answer, which is the policy's (opensFightFromWall) unless the
+  // farmer is overmatched. Operator, 2026-11-18: "we definitely don't want people farming monsters less than half
+  // their strength to be caring about safe spots at all." The roster carries pull_to_safe_wall true on half the fleet
+  // (it was the default), Kermit and three other Castle Victoria and Ancient Place farmers among them, so a predicate
+  // that deferred to that key would have left exactly the characters the order names on their walls. To keep an
+  // overmatched character on walls say so where the decision is made: overmatch 'off', or overmatch.wall_at_attackers.
+  fightOpensFromWall() {
+    return opensFightFromWall(this.policy) && !this.overmatch?.()?.active;
+  }
 
   // ------------------------------------------------------------- safe spots
   //
@@ -700,6 +754,24 @@ export class SensesPart {
     const levels = names.map(n => this.creatureLevel(n)).filter(x => x != null);
     const worst = levels.length ? Math.max(...levels) : null;
     const crowd = this.threat().near.length;
+
+    // OVERMATCHED: NO WALL FOR THIS FIGHT, WHATEVER THE POSTURE (m59-overmatch.mjs; fightOpensFromWall above says why
+    // pull_to_safe_wall does not outrank it). Everything that can stand in this room is under 1/preyRatio of our bar, so
+    // two in reach is the ordinary state of the farm and not the thing a wall is for: measured on Castle Victoria, 78% of
+    // kills were made from a wall and the room gave 31% of its spawn ceiling. The one way back to a crowd wall is the
+    // verdict's own wall_at_attackers, which is null unless somebody set it.
+    const om = this.overmatch?.();
+    if (om?.active) {
+      const attackers = this.threat().adjacent.length;
+      const bar = Number.isFinite(om.wall_at_attackers) ? om.wall_at_attackers : null;
+      if (bar != null && attackers >= bar)
+        return { hold: true, level: worst, my_level: mine, crowd, attackers, bar, overmatch: true,
+                 why: `overmatched, and ${attackers} creatures are inside melee reach against overmatch.wall_at_attackers ` +
+                      `of ${bar} — the one crowd this character was told to take a wall for` };
+      return { hold: false, level: worst, my_level: mine, crowd, attackers, bar, overmatch: true,
+               why: `overmatched (${om.why}): ${attackers} in reach, and no wall is taken for a fight against ` +
+                    'prey this far below us — fight it where it stands' };
+    }
 
     // THE WALL IS A RESPONSE, NOT A POSTURE — unless `pullToSafeWall` says otherwise.
     //

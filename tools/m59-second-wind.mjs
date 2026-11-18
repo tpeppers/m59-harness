@@ -20,25 +20,34 @@
 // WHY ONLY AGAINST WEAK PREY. Low vigor is not free: health regenerates (200-vigor)^2/6 + 1000 ms per point
 // (player.kod CalculateHealthTime), about 2.6x slower at 10 vigor than at 100, and below 12 a body cannot run. The
 // fleet's own record (provision.mjs) has characters at or below 85 vigor dying at 101.8 per thousand observations
-// against 4.4 at 86-120 -- fleet-wide, mostly against prey of their own size. So the default asks that the character's
-// maximum health be at least `preyRatio` times the level of the WORST huntable creature the room's spawn table can
-// produce, not merely the one being hunted. Survival -- flee lines, the 1-second ladder, ORDINARY_VIGOR_FLOOR (20,
-// below the trigger at 25, so a fighting character triggers first) -- is untouched.
+// against 4.4 at 86-120 -- fleet-wide, mostly against prey of their own size. So the default asks that the character
+// be OVERMATCHED (m59-overmatch.mjs): its maximum health at least 1.8 times the level of the strongest thing that can
+// stand in the room -- every row of its spawn table and every hostile creature in sight -- not merely the one being
+// hunted. (A ratio a policy writes here asks the older question instead: the worst HUNTABLE row, at that ratio.) The
+// 1-second ladder and ORDINARY_VIGOR_FLOOR (20, below the trigger at 25, so a fighting character triggers first) are
+// untouched; while the skill is still running an overmatched body that reaches the floor waits it out on a wall,
+// because resting cannot pay until it ends (Autopilot.overmatchSpentWait).
 //
 // THE POLICY: `secondWindFarming`, from the broker's `second_wind_farming`:
-//   'off' (default)   never; the old floor and the old meals -- until a farm strategy says `secondWind`
-//   'auto'            on when the character knows Second Wind, is farming, and the room's prey is weak enough
+//   'auto' (default)  on when the character knows Second Wind and is OVERMATCHED (m59-overmatch.mjs): the same
+//                     predicate, at the same ratio, that takes its walls and its rests away. One question, one answer.
 //   true / 'on'       on whenever it knows Second Wind and is farming, whatever the prey
-//   false             the same as 'off'
-//   { mode, preyRatio, eat }   eat: true keeps the meals while still dropping the floor
+//   false / 'off'     never; the old floor and the old meals
+//   { mode, preyRatio, eat }   eat: true keeps the meals while still dropping the floor. A prey ratio WRITTEN HERE
+//                     keeps the meaning it had before overmatch existed: this character's maximum health over the
+//                     worst HUNTABLE creature of the room's table, at that ratio, whatever overmatch says.
+//
+// THE DEFAULT WAS 'off' UNTIL 2026-11-18 (a staged rollout: the Icky Cave first, by strategy file). The operator's
+// order that day made it the fleet's default: farmers far stronger than their prey "could probably all just rely on
+// second wind and constantly fight".
 //
 // PURE. The keeper's half is `Autopilot.secondWindFarming` (tools/autopilot/hunt-setup.mjs).
 
 export const SECOND_WIND_DEFAULTS = Object.freeze({
-  // OFF by default: a farm strategy turns it on (`secondWind: 'auto'`). Operator 2026-11-05: Icky Cave first, then wider.
-  mode: 'off',
-  // Character max health over the level of the worst huntable creature in the room's spawn table. Scooter and Zoot,
-  // 120 health against the cave's level-50 spider, are 2.4.
+  mode: 'auto',
+  // Used only when a policy WRITES a ratio: character max health over the level of the worst huntable creature in the
+  // room's spawn table. Scooter and Zoot, 120 health against the cave's level-50 spider, are 2.4. With no ratio written,
+  // 'auto' asks the overmatch predicate instead and this number is not consulted.
   preyRatio: 2,
   eat: false,
 });
@@ -75,12 +84,15 @@ export function normSecondWindFarming(v) {
  *   knows        the character has Second Wind (ability > 0, or the skill in its list when the ability is unread)
  *   maxHealth    the character's maximum health
  *   preyLevels   levels of the huntable creatures the room's spawn table can produce
+ *   overmatch    the overmatch verdict (m59-overmatch.mjs overmatchVerdict) for the same moment, or null
  * Returns { active, eat, why, ratio, prey_level, mode }.
  */
-export function secondWindVerdict({ policy, farming, knows, maxHealth, preyLevels = [] } = {}) {
+export function secondWindVerdict({ policy, farming, knows, maxHealth, preyLevels = [], overmatch = null } = {}) {
   let p;
   try { p = normSecondWindFarming(policy); } catch (e) { return { active: false, eat: true, mode: 'invalid', why: e.message }; }
-  const base = { mode: p.mode, prey_ratio_wanted: p.preyRatio };
+  // A ratio the policy WROTE is the old question, asked the old way. Without one, 'auto' asks overmatch.
+  const ownRatio = !!policy && typeof policy === 'object' && (policy.preyRatio ?? policy.prey_ratio) !== undefined;
+  const base = { mode: p.mode, prey_ratio_wanted: ownRatio || p.mode !== 'auto' ? p.preyRatio : (overmatch?.prey_ratio_wanted ?? null) };
   if (p.mode === 'off') return { ...base, active: false, eat: true, why: 'second_wind_farming is off' };
   if (!farming) return { ...base, active: false, eat: true, why: 'not farming' };
   if (!knows) return { ...base, active: false, eat: true, why: 'does not know Second Wind' };
@@ -89,6 +101,12 @@ export function secondWindVerdict({ policy, farming, knows, maxHealth, preyLevel
   const ratio = preyLevel && Number.isFinite(maxHealth) && maxHealth > 0 ? +(maxHealth / preyLevel).toFixed(2) : null;
   if (p.mode === 'on')
     return { ...base, active: true, eat: p.eat, ratio, prey_level: preyLevel, why: 'second_wind_farming is on' };
+  if (!ownRatio) {
+    const about = { ratio: overmatch?.ratio ?? null, prey_level: overmatch?.prey_level ?? null, by: 'overmatch' };
+    if (overmatch?.active) return { ...base, ...about, active: true, eat: p.eat, why: `overmatched: ${overmatch.why}` };
+    return { ...base, ...about, active: false, eat: true,
+             why: overmatch ? `not overmatched: ${overmatch.why}` : 'no overmatch verdict for this moment' };
+  }
   if (ratio === null)
     return { ...base, active: false, eat: true, ratio, prey_level: preyLevel,
              why: preyLevel === null ? 'nothing known about what this room spawns' : 'own maximum health unknown' };
