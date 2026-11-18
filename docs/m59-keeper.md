@@ -998,3 +998,13 @@ and healing occurs afterwards, not to flee through it and risk low-health travel
   flee line when `spentAndCornered` (logoff spent, exit just tried from this room, no recovery wall): one exchange in
   place per pass, with the exit asked again between. A working spot is still kept, and still one logoff per session.
   `m59-leaking-spot-test.mjs` (43).
+- **THREE PLACES END A REST, AND THE ONE THAT RUNS FIRST IS NOT THE ONE YOU WILL EDIT.** A body that took a recovery
+  wall carries a survival decision in status `recovering`, and `continueSurvivalDecisionStep` -- at the top of
+  `passOnce`, before the ladder -- keeps it there until FULL health and 80 vigor (or `farmVigorWorkReady`: full health,
+  quarry within eight squares). While it does, `passFleeAndRest`'s rest gate (which rests to `hold_resume_above`) and
+  `releaseRestedHold` (which lets the wall go at the resting ceiling) are never reached. So lowering either of those
+  two changes nothing a farmer does; the dispatcher's line is the one that held the Castle Victoria farmers on their
+  walls at 140 of 150 health. `Autopilot.overmatchRested` is the one answer all three read for an
+  [overmatched](m59-policy.md#overmatch-a-farmer-far-stronger-than-its-prey-fights-in-the-open-and-does-not-stop--overmatch)
+  farmer; for everybody else the three numbers are still three, and the first is still the one that binds.
+  `m59-overmatch-test.mjs` (34).

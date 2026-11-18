@@ -413,7 +413,7 @@ the policy's, and a recovery ends where it always ended.
 | value | meaning |
 |---|---|
 | `"auto"` (default) | on when the predicate holds |
-| `"on"` / `true` | on whenever farming, whatever the prey (still off while held, recovering or in PvP) |
+| `"on"` / `true` | on whenever farming, whatever the prey (still off while held, recovering, poisoned or in PvP) |
 | `"off"` / `false` | never: the lines and walls this character had before, exactly |
 | `{ mode, prey_ratio, rest_below, resume_above, flee_below, wall_at_attackers }` | no `mode` means `"auto"`. Refused unless `flee_below` < `rest_below` < `resume_above` |
 
@@ -430,7 +430,11 @@ death on these lines can be told from one on the old ones.
 from the code. `second_wind_farming` is not: the broker saves a character's WHOLE policy on every `autopilot` call, so
 every character whose keeper was started since 2026-11-05 carries the old default `"off"` as if somebody had ordered
 it, and a default changed in code never reaches it. Push `second_wind_farming: "auto"` once to each farmer that should
-rely on the skill (`autopilot status .second_wind.mode` says which it has).
+rely on the skill (`autopilot status .second_wind.mode` says which it has). Until then an overmatched farmer keeps its
+meals, which is no hardship: it eats when there is room, never waits to digest above the ordinary floor, and the skill
+still fires by itself under 25 when the pack is empty. And restart the KEEPERS before the broker: a keeper still on the
+old code that is pushed `"auto"` reads it the old way (twice the worst huntable spawn) with the old rest rules, which
+is the combination that sat farmers on a wall waiting for vigor the skill forbids.
 
 ## SECOND WIND IS THE LARDER AGAINST WEAK PREY — `second_wind_farming`
 
