@@ -2762,6 +2762,7 @@ export function findCreature(s, needle, { attackableOnly = true, includePlayers 
 // a threshold, and stop rather than dying — but report everything, so the caller can
 // override next time.
 import {withIntent,setIntentTarget} from './m59-intent-observations.mjs';
+import { pressVerdict, handedBackNote, swingPace, outOfReachText } from './m59-fight-cadence.mjs';
 export const SHORT_FIGHT_APPROACH_SQUARES = 8;
 export function fight(s,options){return withIntent(s,null,()=>fightWithIntent(s,options));}
 async function fightWithIntent(s, {
@@ -2782,6 +2783,21 @@ async function fightWithIntent(s, {
   // It stays as a bound on a single call — a caller that wants to re-decide is entitled
   // to say when — but it is no longer the mechanism that makes a fight abandonable.
   rounds = 3,
+  // PRESS A FIGHT THAT IS WORKING (2026-11-18, m59-fight-cadence.mjs). The farm pass was the caller that got 3
+  // "by omission", and it cost two fifths of every fight: a healthy farmer landing two blows in three journaled
+  // "broke off - still alive after 3 rounds" five times running on one skeleton, and each hand-back was 1.56 s of
+  // pass plus 1.5 s of this function's own setup and tail for 3.15 s of swinging.
+  //
+  // `pressRounds` is the most rounds this ONE call may run while its swings keep landing. `rounds` is unchanged
+  // and is what a fight gets with no proof it is getting anywhere, so nothing lands -> it still ends after
+  // `rounds`, exactly as before. Past that, another round is granted only while a hit has landed inside the last
+  // `rounds` rounds, the last swing was not refused as out of reach, and `pressWhile` -- the CALLER'S gate,
+  // asked before each such round -- returns nothing. `pressWhile` returns a sentence when the caller wants the
+  // body back (its health line for starting a fight, its vigor floor, a wall it would now take), and that
+  // sentence is the reason on the result. Null `pressRounds` is every caller that chose its own number: a training
+  // bout's one round, the needle's, the buddy's six, the fight-back's ten, the broker tool's twelve.
+  pressRounds = null,
+  pressWhile = null,
   swingsPerRound = 1,
   // Read-only observer of affirmative server hit messages for this exact quarry.
   // Called before post-round stats/cleanup, so a cooperative waiter can return promptly.
@@ -2836,6 +2852,8 @@ async function fightWithIntent(s, {
   const c = s.need();
   const log = [];
   const say = (stage, detail) => { log.push({ stage, ...detail }); return detail; };
+  // What this call cost, from its first line to the moment its outcome is known (the loot sweep is not in it).
+  const startedAt = Date.now();
 
   // Refresh before choosing: an id from a stale look may be a corpse by now.
   // SKIP THE REFRESH when holding position OR when the target is far away:
@@ -3075,16 +3093,19 @@ async function fightWithIntent(s, {
   let killed = false, disengaged = null, roundsFought = 0, drifted = null, stoodUp = false;
   let weaponLoss = null;
   const combatLines = [];
+  // THE ROUND BUDGET'S OWN STATE (pressVerdict): rounds since a blow last landed on this foe, whether the last
+  // exchange was refused as out of reach, and, when the budget and nothing else ends the fight, which edge it was.
+  let sinceHit = 0, lastOutOfReach = false, handedBack = null, staleVitals = null;
+  // When each attack packet left, as attackRounds reports it. `null` once any exchange failed to report (an older
+  // keeper behind this broker): swings that were not counted are reported as not counted, never as zero.
+  let swingTimes = [];
 
-  // FACE THE TARGET. An attack on something behind you is refused with a
-  // message about view, not range. The walk may have turned us the wrong
-  // way, or the target may have moved since we last faced it.
-  const meNow = c.self;
-  if (meNow && foe.col != null && foe.row != null) {
-    const deg = (Math.atan2(foe.row - meNow.row, foe.col - meNow.col) * 180 / Math.PI + 360) % 360;
-    await c.face(deg);
-    say('faced target', { deg: Math.round(deg), target: foeName });
-  }
+  // FACING IS attackRounds' NOW, AND ONLY WHEN IT IS NEEDED. This function used to send a turn here and another
+  // before every round, straight to the socket and outside the pacer, and attackRounds then sent a paced one of
+  // its own before every swing: two turn packets a swing at a target that had not moved. The server reads whole
+  // squares and refuses only what is behind our facing's octant line (player.kod:4188), so `faceForSwing` in
+  // m59-game.mjs turns when the bearing has actually left our facing, and when the server says it cannot see
+  // the target.
 
   let eligibilityRevoked = false;
   const fightCancelled = () => {
@@ -3094,7 +3115,10 @@ async function fightWithIntent(s, {
     return eligibilityRevoked;
   };
 
-  for (let r = 0; r < rounds; r++) {
+  for (let r = 0; ; r++) {
+    // THE BUDGET FIRST, where the loop condition was. Without `pressRounds` this is `r < rounds` and nothing else.
+    const budget = pressVerdict({ round: r, rounds, pressRounds, sinceHit, outOfReach: lastOutOfReach });
+    if (!budget.go) { handedBack = { why: budget.why }; break; }
     // Asked before the round as well as inside it. A cancel that lands between rounds
     // must not buy another exchange.
     if (fightCancelled())
@@ -3116,16 +3140,18 @@ async function fightWithIntent(s, {
         break;
       }
     }
-    const b = c.evSeq;
+    // A ROUND PAST THE PROOF BUDGET IS THE CALLER'S TO REFUSE. It passed its own gates on the way in (health to
+    // start a fight, vigor, no wall wanted) and would have been asked again at every hand-back; pressing must not
+    // take that question away from it, so it is asked here, before each round it did not explicitly grant. A gate
+    // that throws is a gate that cannot say yes.
+    if (budget.pressing && typeof pressWhile === 'function') {
+      let reason = null;
+      try { reason = pressWhile() || null; }
+      catch (e) { reason = `the caller's gate could not answer (${e.message})`; }
+      if (reason) { handedBack = { why: 'gate', gate: String(reason) }; break; }
+    }
     // The threshold goes DOWN into the round, not just around it. Checking after four
     // swings meant checking once every four seconds against a death that takes two.
-    // Re-face the target each round — it may have moved.
-    const itNow = c.room.objects.get(foe.id);
-    const meRound = c.self;
-    if (itNow && meRound && itNow.col != null && meRound.col != null) {
-      const deg = (Math.atan2(itNow.row - meRound.row, itNow.col - meRound.col) * 180 / Math.PI + 360) % 360;
-      await c.face(deg);
-    }
     let streamedHits=0;
     const notifyHits=async(messages,{fallback=false}={})=>{
       const hits=landedHitSummary(messages,foeName).hits;
@@ -3136,9 +3162,17 @@ async function fightWithIntent(s, {
     };
     const res = await s.attackRounds(foe.id, swingsPerRound,
       { abortBelow: disengageAt, shouldCancel: fightCancelled, onMessages:typeof onLandedHit==='function'?notifyHits:null });
-    if (!eligibilityRevoked || res.cancelled?.at_swing !== 0) roundsFought++;
+    // A round the exchange refused to open on stale vitals sent nothing, and is not a round.
+    if ((!eligibilityRevoked || res.cancelled?.at_swing !== 0) && res.stale?.at_swing !== 0) roundsFought++;
     combatLines.push(...res.messages);
     await notifyHits(res.messages,{fallback:true});
+    // What the budget reads next round: did a blow land on THIS foe, and was the swing refused as out of reach
+    // (the three sentences of player.kod:243-245, spoken only to the attacker). And when each attack left.
+    const landedNow = landedHitSummary(res.messages, foeName).hits;
+    sinceHit = landedNow > 0 ? 0 : sinceHit + 1;
+    lastOutOfReach = landedNow === 0 && res.messages.some(outOfReachText);
+    if (swingTimes && Array.isArray(res.swing_at)) swingTimes.push(...res.swing_at);
+    else swingTimes = null;
 
     // REFUSED FOR WHO THEY ARE, IN THIS ROOM. "Only those in guilds may attack each other here."
     // Every further round is the same refusal; the session has already remembered it, so the
@@ -3266,6 +3300,10 @@ async function fightWithIntent(s, {
     // a kill, and neither it nor a lethal blow to us may send inventory/use traffic.
     if (!c.room.objects.has(foe.id)) { killed = true; break; }
 
+    // THE SERVER ANSWERED NEITHER THE LAST SWING NOR A HEALTH READ, so attackRounds sent no further attack. Another
+    // round would be the same question asked again; stop, say so, and let the caller look at the connection.
+    if (res.stale) { staleVitals = res.stale; break; }
+
     // A live fight may continue after a shatter only with a replacement the server's
     // use list verifies. Otherwise stop before another attack silently becomes a punch.
     if (weaponBroke) {
@@ -3355,6 +3393,9 @@ async function fightWithIntent(s, {
   }
   const after = c.vitals();
   const landed = landedHitSummary(combatLines, foeName);
+  // THE PACE, SO IT CAN BE READ FOR EVER AFTER (m59-fight-cadence.mjs): attack packets sent, the mean gap between
+  // consecutive ones, and what this call cost from its first line to here. The loot sweep is not in `fight_ms`.
+  const pace = swingTimes ? swingPace(swingTimes) : null;
 
   const out = {
     fought: true, target: foeName, killed, rounds: roundsFought,
@@ -3363,6 +3404,8 @@ async function fightWithIntent(s, {
     target_id: foe.id,
     landed_hits: landed.hits,
     damage_dealt: landed.damage,
+    ...(pace ? { swings: pace.swings, swing_ms: pace.swing_ms } : {}),
+    started_at: startedAt, fight_ms: Date.now() - startedAt,
     health: { before: before.health, after: after.health },
     // Worth saying out loud: it means a round went nowhere, and it means whatever sat
     // this character down is not doing so again by itself.
@@ -3401,9 +3444,18 @@ async function fightWithIntent(s, {
                `Pull it back or wait — chasing it is what the spot is for not doing.`;
     return out;
   }
+  if (!killed && staleVitals) {
+    out.stale_vitals = staleVitals;
+    out.note = `the server has answered neither the last swing nor a health read (${staleVitals.silent_ms} ms of ` +
+               `silence), so no further attack was sent after ${roundsFought} round(s): the disengage line cannot ` +
+               `be held against a number that old. The monster is still there; look at the connection first.`;
+    return out;
+  }
   if (!killed) {
-    out.note = `still alive after ${roundsFought} rounds. Either it is too strong, or your attacks are missing — ` +
-               `check the combat lines: "too far away" means the geometry moved you, "avoids/dodges" means you are just unlucky.`;
+    // The round budget, and nothing else, ended it. `handed_back.why` says which edge: `rounds` (the plain budget,
+    // as always), or, for a pressed fight, `cap`, `quiet`, `out_of_reach` or the caller's own `gate`.
+    out.handed_back = handedBack ?? { why: 'rounds' };
+    out.note = handedBackNote(roundsFought, out.handed_back);
     return out;
   }
 

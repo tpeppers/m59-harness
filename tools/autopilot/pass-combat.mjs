@@ -13,6 +13,7 @@
 import * as grudge from '../m59-grudge.mjs';
 import { tryFarmGearCache } from '../m59-farm-gear-cache.mjs';
 import { usesOceanCourier } from '../m59-farm-town.mjs';
+import { paceFields } from '../m59-fight-cadence.mjs';
 import { jalaSinger } from '../m59-jala-singer.mjs';
 import { activeConflicts, clearConflict, declareConflict, recordTargetKill, targetsFor } from '../m59-intel.mjs';
 import { findPath } from '../m59-map.mjs';
@@ -1038,7 +1039,7 @@ export class PassCombatPart {
       });
       this.ledgerEvent('killed', {
         creature: f.target, room: room?.name ?? null, room_num: room?.num ?? null,
-        rounds: f.rounds, from_safe_spot: holding, ...(roadHunt ? { road_hunt: true } : { fought_back: true }),
+        rounds: f.rounds, from_safe_spot: holding, ...(roadHunt ? { road_hunt: true } : { fought_back: true }), ...paceFields(f),
         looted: looted.length ? looted.join(', ') : undefined,
       });
       this.fledInARow = 0;

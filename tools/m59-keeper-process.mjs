@@ -76,6 +76,7 @@ import { readWho } from './m59-who.mjs';
 import { combatWatchStore } from './m59-combat-watch-store.mjs';
 import { renderState } from './m59-world.mjs';
 import * as skills from './m59-skills.mjs';
+import { swingPace } from './m59-fight-cadence.mjs';
 import { FLEET_KEEP } from './m59-items.mjs';
 import * as party from './m59-party.mjs';
 import * as war from './m59-war.mjs';
@@ -2720,11 +2721,14 @@ const server = createServer(async (req, res) => {
             const BURST = 8;
             let spent = 0, lastR = null, killed = false, exchanges = 0;
             let landed = 0, refused = 0;
+            // What actually left, across every burst: attackRounds reports each call's own (m59-fight-cadence.mjs).
+            const swingAt = []; let turns = 0, polls = 0;
             const hp0 = c?.vitals?.()?.health?.value ?? null;
             while (spent < swings) {
               const take = Math.min(BURST, swings - spent);
               lastR = await session.attackRounds(t.id, take, { abortBelow });
               spent += take; exchanges++;
+              swingAt.push(...(lastR?.swing_at ?? [])); turns += lastR?.turns ?? 0; polls += lastR?.polls ?? 0;
               for (const m of (lastR?.messages ?? [])) {
                 if (OUT_OF_RANGE.test(String(m))) refused++; else landed++;
               }
@@ -2733,6 +2737,9 @@ const server = createServer(async (req, res) => {
               // Health is the other terminator: attackRounds aborts on it, and carrying on
               // would just re-enter a fight it already refused.
               if (lastR?.aborted) break;
+              // And so is a server that answered neither the last swing nor a health read (`stale`): every
+              // further burst would be that same unanswered question, a second and a half at a time.
+              if (lastR?.stale) break;
             }
 
             // THE CORPSE IS THE POINT, AND SO IS WHAT IT DROPPED. A kill nobody picks up is a
@@ -2754,7 +2761,10 @@ const server = createServer(async (req, res) => {
                    why: traded ? undefined
                       : `closed to ${t.d} square(s) but every one of ${refused} swing(s) was ` +
                         `refused as out of range — reach is shorter than the distance reported`,
-                   ...(lastR ?? {}) });
+                   ...(lastR ?? {}),
+                   // The last burst's own counts would read as the fight's; these are the fight's. `swings_spent`
+                   // is budget consumed, `swings` is attack packets that left, `swing_ms` the mean gap between them.
+                   ...swingPace(swingAt), swing_at: undefined, turns, polls });
             return;
           }
           // WHO IS ONLINE. The broker's `who` tool called `c.players()` on the picture client and

@@ -19,6 +19,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | find out whether another agent is already working on your topic | `node tools/m59-intent.mjs nearby "<topic>"` — see [`docs/m59-fleetscratch.md`](docs/m59-fleetscratch.md) |
 | move a character; edit the router, the mover, an anchor or a bake | [`docs/m59-routing.md`](docs/m59-routing.md) |
 | decide what to fight; change a threat, prey, spawn or armour rule | [`docs/m59-combat.md`](docs/m59-combat.md) |
+| change what happens BETWEEN TWO SWINGS (the turn, the health read, the settle), how long one farm fight runs before it is handed back (`pressRounds`, `fight_rounds`), or read a fight's pace off the ledger (`swing_ms`, `kill_rounds`, `kill_ms`) | [`docs/m59-combat.md`](docs/m59-combat.md#the-swing-clock--a-swing-a-second-and-a-fight-that-is-landing-runs-to-the-kill), `tools/m59-fight-cadence.mjs` |
 | debug a keeper, a death, a stall, or a rate that reads zero | [`docs/m59-keeper.md`](docs/m59-keeper.md) |
 | buy, sell, trade, supply, bank, or change a loadout | [`docs/m59-economy.md`](docs/m59-economy.md) |
 | send any guild command, or found or fund a hall | [`docs/m59-guilds.md`](docs/m59-guilds.md) |

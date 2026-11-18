@@ -3151,6 +3151,48 @@ dropped only when a fresh look at its own id says it is broken, un-condemned whe
 sound, kept when no reply (or a reply under another id) came. The last case checks that
 `makeWeapon` passes the keeper's `heldBackIds` and protected names.
 
+## m59-fight-cadence-test.mjs (113) — a swing every 1.05 s, and a landing fight is not handed back every three rounds
+
+Prod 2026-11-18: four healthy 143–149 health farmers in Castle Victoria journaling "broke off - still alive
+after 3 rounds" five times running on one skeleton, at a median 1.71 s a round against a server that takes a
+swing a second (`IsOkayAttackTime`, player.kod:5305). The suite runs the REAL `Session`, `Pacer`, `M59Client`
+and `fight()` on node:test's mock clock; only the wire is replaced, by a model of what the server does with each
+packet: an attack arriving inside 1000 ms of the last accepted one is refused in silence and counted, a target
+behind our facing's octant line is refused with "You can't see your selected target." (the eight clauses of
+`TargetWithinSightAndRange`, ported), a hit sends its sentence and the resistance band a little later, and health
+is pushed on change only. It pins:
+
+- **the facing rule against the server's own clauses**: over every facing a client can send and every offset inside
+  six squares (60,480 pairs), no swing `swingFacing` leaves unturned is one the server refuses for view;
+- **the cadence**: ten swings leave 1050 ms apart with one turn, no health read and eleven packets where there were
+  thirty, called as one exchange or one swing at a time, at 100 ms and at 320 ms of lag; the skeleton stepping round
+  us costs exactly one more turn and no late swing; a view refusal forces the next turn; nothing is ever sent inside
+  the server's attack timer;
+- **what stops the next swing still stops it**: health pushed below `abortBelow` while the next swing waits its turn,
+  damage taken in the exchange (read from the push alone), a cancel between swings, a vanished target (at once: no
+  settle, no read); the healing reflex still runs before every swing and after every exchange;
+- **the resistance sentence** is still collected, from a multi-swing exchange, from a single swing, and from a
+  single swing whose reply was itself slow;
+- **silence**: a swing nothing answered is followed by one health read before the next swing; when neither is
+  answered the next swing is NOT sent (`stale`), and the fight goes on when the server answers again;
+- **the press** (`pressVerdict`, then `fight()`): a ten-round kill is one call; the cap, three rounds with nothing
+  landed, a quarry out of reach from the start (three rounds, as before) or stepping away mid-fight (one refused
+  swing), the caller's gate and a gate that throws each hand the fight back and say which; a training bout's one
+  round, six rounds, and nothing passed at all behave exactly as before; the disengage line, a cancel, a held
+  wall's quarry leaving reach and a deaf server still end a pressed fight;
+- **the comparison**: one ten-round kill at three rounds a call with the measured 1.56 s pass between calls against
+  the same kill pressed (4 calls and 1.41 s a round against 1 call and 1.03);
+- **the farm pass**: `farmFightPress` presses an ordinary fight to `policy.fightRounds` or 12 and not a training
+  bout or a covered-pull alternate; its gate hands back for health under `engageAt`, vigor through the floor and
+  a wall the pass would now take, each only as a change; the journal's `killed` / `broke off` lines and the
+  ledger's `killed` row carry `swings`, `fight_ms`, `swing_ms` and, for a kill, `kill_calls`, `kill_rounds`,
+  `kill_swings`, `kill_ms`; and `paceReport`, which `node tools/m59-fight-cadence.mjs --fleet <name> --since 30m`
+  prints, measures only the rows that carry them and reads null, never zero, where none does.
+
+Run against the loop before the change, the same model gives 4 calls, 15.4 s and 56 packets for that kill.
+`m59-combat-safety-test.mjs` and `m59-healing-wands-test.mjs` call the shipped `attackRounds` on session
+doubles, which is why its three helpers are module functions and not methods.
+
 ## m59-loot-sound-gear-test.mjs (21) — floor gear is taken only when a look says it is sound
 
 Operator, 2026-10-31: "only pick up affirmatively non-broken". A broken longbow looks identical on
