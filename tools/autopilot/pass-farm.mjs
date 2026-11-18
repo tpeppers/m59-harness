@@ -39,8 +39,10 @@ export class PassFarmPart {
 
   recordInterruptedFarmOutcome(f,{room,holding,preempted}={}) {
     const receipt={creature:f?.target??null,room_num:room?.num??null,room:room?.name??null,
-      killed:f?.killed===true,died:f?.died===true,rounds:f?.rounds??null,
+      killed:f?.killed===true,died:f?.died===true,rounds:f?.rounds??null,...paceFields(f),
       from_safe_spot:!!holding,preempted,reason:f?.reason??f?.why??null};
+    // This fight is not recorded by recordFarmFightOutcome, so the quarry it ended must not stay on the tally.
+    if(f?.killed===true||f?.died===true)this.quarryTally=null;
     this.ledgerEvent('interrupted_farm_result',receipt);
     if(f?.killed===true){
       this.tally.kills=(this.tally.kills??0)+1;this.killTimes?.push(Date.now());

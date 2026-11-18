@@ -3103,8 +3103,9 @@ async function fightWithIntent(s, {
   // FACING IS attackRounds' NOW, AND ONLY WHEN IT IS NEEDED. This function used to send a turn here and another
   // before every round, straight to the socket and outside the pacer, and attackRounds then sent a paced one of
   // its own before every swing: two turn packets a swing at a target that had not moved. The server reads whole
-  // squares and refuses only what is behind our facing's octant line (player.kod:4188), so Session.faceForSwing
-  // turns when the bearing has actually left our facing, and when the server says it cannot see the target.
+  // squares and refuses only what is behind our facing's octant line (player.kod:4188), so `faceForSwing` in
+  // m59-game.mjs turns when the bearing has actually left our facing, and when the server says it cannot see
+  // the target.
 
   let eligibilityRevoked = false;
   const fightCancelled = () => {

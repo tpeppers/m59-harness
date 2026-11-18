@@ -2737,6 +2737,9 @@ const server = createServer(async (req, res) => {
               // Health is the other terminator: attackRounds aborts on it, and carrying on
               // would just re-enter a fight it already refused.
               if (lastR?.aborted) break;
+              // And so is a server that answered neither the last swing nor a health read (`stale`): every
+              // further burst would be that same unanswered question, a second and a half at a time.
+              if (lastR?.stale) break;
             }
 
             // THE CORPSE IS THE POINT, AND SO IS WHAT IT DROPPED. A kill nobody picks up is a

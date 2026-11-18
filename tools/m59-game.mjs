@@ -1549,6 +1549,48 @@ export function gateCapFilter(cands = [], inventory = [], nameOf = o => o?.name 
   return { keep, skipped };
 }
 
+// ===================== THE SWING CLOCK'S THREE QUESTIONS (m59-fight-cadence.mjs) =====================
+//
+// Module functions that take the session, NOT methods on it. `Session.attackRounds` is called on session doubles
+// (`Session.prototype.attackRounds.call(double, ...)`: m59-combat-safety-test, m59-healing-wands-test), and a
+// double has the fields these read -- `client`, `pacer`, `faceToward`, `lastSwing` -- but not the prototype.
+
+// HAS THE SERVER SPOKEN SINCE OUR LAST SWING LEFT? The stream is ordered and health is pushed on every change
+// (player.kod:5823 NewHealth -> user.kod:6631 DrawHealth), so ANYTHING received after the swing means the
+// health in memory is no older than that swing. `lastGameMsgAt` is stamped by the client on every game message
+// it parses; the exchange's own wait marks the swing answered when it hands back an event.
+function swingAnswered(session, c) {
+  const last = session.lastSwing;
+  if (!last || last.client !== c || last.answered) return true;
+  if ((c.lastGameMsgAt ?? 0) > last.at) { last.answered = true; return true; }
+  return false;
+}
+
+// ASK FOR HEALTH OUTRIGHT, because nothing has arrived since the last swing left. One paced read and a bounded
+// wait for anything the server says after that swing: the stat reply, or the swing's own late sentence. False
+// means it answered neither, and the caller must not swing on the number it holds.
+async function askVitals(session, c) {
+  const last = session.lastSwing?.client === c ? session.lastSwing : null;
+  const asked = await session.pacer.submit('read', () => { if (session.client !== c) return false; c.stats(1); return true; });
+  if (asked === true) {
+    const got = await c.waitFor({ since: last?.seq ?? c.evSeq, kinds: ['stat', 'message', 'vanished'],
+                                  timeoutMs: VITALS_POLL_MS });
+    if (last && got?.events?.length) last.answered = true;
+  }
+  return swingAnswered(session, c);
+}
+
+// TURN BEFORE A SWING ONLY WHEN THE SERVER COULD REFUSE THE BLOW FOR IT (swingFacing, m59-fight-cadence.mjs).
+// True when a turn was sent. `swingViewRefused` is the client the server last refused for view: what we believe
+// about our own facing is then wrong (a turn it dropped, or it turned us), so the next swing turns regardless.
+async function faceForSwing(session, c, target) {
+  const verdict = swingFacing({ me: c.self, target, force: session.swingViewRefused === c });
+  if (!verdict.turn) return false;
+  if (session.swingViewRefused === c) session.swingViewRefused = null;
+  await session.faceToward(target);
+  return !!c.self;
+}
+
 class Session {
   constructor(name, { communicationStateFile = null, neverAttackOrdered = null } = {}) {
     this.name = name;
@@ -5032,43 +5074,6 @@ class Session {
     }
   }
 
-  // HAS THE SERVER SPOKEN SINCE OUR LAST SWING LEFT? The stream is ordered and health is pushed on every change
-  // (player.kod:5823 NewHealth -> user.kod:6631 DrawHealth), so ANYTHING received after the swing means the
-  // health in memory is no older than that swing. `lastGameMsgAt` is stamped by the client on every game message
-  // it parses; the exchange's own wait marks the swing answered when it hands back an event.
-  swingAnswered(c) {
-    const last = this.lastSwing;
-    if (!last || last.client !== c || last.answered) return true;
-    if ((c.lastGameMsgAt ?? 0) > last.at) { last.answered = true; return true; }
-    return false;
-  }
-
-  // ASK FOR HEALTH OUTRIGHT, because nothing has arrived since the last swing left. One paced read and a bounded
-  // wait for anything the server says after that swing: the stat reply, or the swing's own late sentence. False
-  // means it answered neither, and the caller must not swing on the number it holds.
-  async askVitals(c) {
-    const last = this.lastSwing?.client === c ? this.lastSwing : null;
-    const asked = await this.pacer.submit('read', () => { if (this.client !== c) return false; c.stats(1); return true; });
-    if (asked === true) {
-      const got = await c.waitFor({ since: last?.seq ?? c.evSeq, kinds: ['stat', 'message', 'vanished'],
-                                    timeoutMs: VITALS_POLL_MS });
-      if (last && got?.events?.length) last.answered = true;
-    }
-    return this.swingAnswered(c);
-  }
-
-  // TURN BEFORE A SWING ONLY WHEN THE SERVER COULD REFUSE THE BLOW FOR IT (swingFacing, m59-fight-cadence.mjs).
-  // True when a turn was sent. `swingViewRefused` is the client the server last refused for view: what we believe
-  // about our own facing is then wrong (a turn it dropped, or it turned us), so the next swing turns regardless.
-  async faceForSwing(target) {
-    const c = this.need();
-    const verdict = swingFacing({ me: c.self, target, force: this.swingViewRefused === c });
-    if (!verdict.turn) return false;
-    if (this.swingViewRefused === c) this.swingViewRefused = null;
-    await this.faceToward(target);
-    return !!c.self;
-  }
-
   async attackRounds(targetId, swings = 4, { abortBelow = null, shouldCancel = null, onMessages = null } = {}) {
     const c = this.need();
     const observers=(this.attackMessageObservers??=new Set());
@@ -5138,9 +5143,9 @@ class Session {
       if (abortBelow != null) {
         // AND AGAINST A NUMBER NO OLDER THAN THAT EXCHANGE. If the server has said nothing since the last swing
         // left, the health in memory may predate everything that swing provoked: ask, and do not swing unanswered.
-        if (!this.swingAnswered(c)) {
+        if (!swingAnswered(this, c)) {
           polls++;
-          const answered = await this.askVitals(c);
+          const answered = await askVitals(this, c);
           if (cancelNow()) { cancelled = { at_swing: i }; break; }
           if (!answered) { stale = { at_swing: i, silent_ms: Date.now() - (this.lastSwing?.at ?? Date.now()) }; break; }
         }
@@ -5150,7 +5155,7 @@ class Session {
       // A player already refused us in this room: the client would not send it anyway.
       if (vetoAttack(this, c, targetId)) break;
       heardViewRefusal();
-      if (await this.faceForSwing(o)) turns++;
+      if (await faceForSwing(this, c, o)) turns++;
       let sent = false, sentSeq = c.evSeq;
       await this.pacer.submit('attack', () => {
         if (this.client !== c || shouldCancel?.()) {
@@ -5222,8 +5227,13 @@ class Session {
       if (!over && until > Date.now())
         await c.waitFor({ since: last.seq, kinds: ['vanished'], match: e => e.id === targetId,
                           timeoutMs: until - Date.now() });
-      // A swing the server said nothing about at all: ask now, so the vitals handed back below are an answer.
-      if (this.client === c && c.room.objects.has(targetId) && !this.swingAnswered(c)) { polls++; await this.askVitals(c); }
+      // A swing the server said nothing about at all: ask now, so the vitals handed back below are an answer. And
+      // if it answers that neither, say so here rather than leaving the next call to find out the same way.
+      if (this.client === c && c.room.objects.has(targetId) && !swingAnswered(this, c)) {
+        polls++;
+        const answered = await askVitals(this, c);
+        if (!answered && this.client === c) stale = { at_swing: swingAt.length, silent_ms: Date.now() - last.at };
+      }
     }
     // The trailing sweep. `said` is still excluded by `keep` — another player quoting hit
     // prose must never become evidence — and ordering by seq puts the resistance band back

@@ -413,6 +413,13 @@ console.log('\nattackRounds: a silent server is asked, and a deaf one is not swu
   ok('and when the server answers again the fight goes on', again.swings === 1 && !again.stale && again.polls === 1, again);
 }
 {
+  const w = world({ foeHp: 99 });
+  w.mute = true;
+  const r = await drive(w.s.attackRounds(w.foe.id, 1, { abortBelow: 0.4 }));
+  ok('a single swing into a deaf server says so itself, after one read and no second swing',
+     r.swings === 1 && r.stale?.at_swing === 1 && w.count(BP.SEND_STATS) === 1 && w.attacks().length === 1, { swings: r.swings, stale: r.stale });
+}
+{
   const w = world({ foeHp: 99, outcome: () => 'silent' });
   const r = await drive(w.s.attackRounds(w.foe.id, 3, {}));
   ok('with no health line to hold, a silent exchange is still asked about once it ends, and swings are not gated on it',
@@ -629,6 +636,10 @@ console.log('\nthe farm pass');
   ok('the farm fight is called with the press and its gate', /rounds: alternate \? 1 : training\.rounds,\s*\n\s*\.\.\.press,/.test(farm), 'pass-farm.mjs fight() options');
   const combat = readToolSource(new URL('./autopilot/pass-combat.mjs', import.meta.url));
   ok('a fight-back kill row carries the pace as well', /fought_back: true \}\), \.\.\.paceFields\(f\)/.test(combat));
+  const process_ = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url));
+  ok('the keeper process\'s fight verb stops on a stale exchange and reports the whole fight, not its last burst',
+     /if \(lastR\?\.stale\) break;/.test(process_) &&
+     /\.\.\.\(lastR \?\? \{\}\),[\s\S]{0,400}\.\.\.swingPace\(swingAt\), swing_at: undefined, turns, polls \}\);/.test(process_));
 }
 
 mock.timers.reset();

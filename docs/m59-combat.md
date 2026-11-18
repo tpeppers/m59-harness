@@ -277,6 +277,97 @@ from the trench to r35c58 goes the long way round.
 
 No step mask, no position, a floorless goal or holding a wall: every helper answers `known: false` and nothing changes.
 
+## The swing clock — a swing a second, and a fight that is landing runs to the kill
+
+```bash
+node tools/m59-fight-cadence-test.mjs      # 106, offline: the real Session, Pacer and client on a virtual clock
+```
+
+**The server takes one melee swing a second and the farm loop was spending 1.7.** `Player.TryAttack` asks
+`IsOkayAttackTime` with no argument (`player.kod:3974`) and its default is `time = 1000` (`player.kod:5305`); no weapon or
+skill passes another value, and the only other callers share the same timer (a spell's post-cast time `spell.kod:760`, a
+user action `user.kod:4873`, the staff of jolting). A swing sent sooner is refused **in silence**. Measured on prod
+2026-11-18, four Castle Victoria farmers (143–149 max health) over six minutes of keeper journal:
+
+| | n | p25 | median | p75 |
+|---|---|---|---|---|
+| seconds per round (gap between two fight outcomes / rounds) | 32 | 1.60 | **1.71** | 1.91 |
+| rounds per kill | 33 | 5 | **7** | 10 |
+| one 3-round `fight()` call | 37 | 3.39 s | 3.62 s | 4.71 s |
+| the pass between two calls on one quarry | 14 | 1.40 s | 1.56 s | 1.72 s |
+
+The swings inside one call were already about a second apart. The time went into **handing the fight back every three
+rounds** (the farm pass never passed a round budget, so it inherited `fight()`'s parameter default; each hand-back cost
+the pass plus the next call's room read, weapon check and two health reads) and into **three or four packets a swing**
+(an unpaced turn in `fight()`, a paced turn in `attackRounds`, the attack, and a health read with a 1.5 s wait behind it)
+against a server that drops everything past five packets in one second (`user.kod:50`, `:883`). On the model server the
+suite runs, one ten-round kill was 4 calls, 15.4 s and 56 packets (10 attacks, 24 turns, 18 health reads, 4 room reads);
+it is now 1 call, 10.3 s and 14 packets.
+
+**What a swing costs now** (`Session.attackRounds`, `tools/m59-fight-cadence.mjs`): one packet when nothing has moved.
+
+- **A turn only when the server could refuse the blow for it.** `TargetWithinSightAndRange` (`player.kod:4115`) skips the
+  view test at squared distance ≤ 1 and otherwise refuses only a target *behind* the line perpendicular to our facing's
+  own octant (`:4188`–`:4205`), on whole squares. So anything within 67.5° of our facing is always accepted, and
+  `faceForSwing` turns when the bearing has left our facing by more than half an octant (`SWING_REFACE_DEG`, 22.5°), when
+  we do not know where we face, or when the server has just said *"You can't see your selected target."*
+- **Health is the pushed number, and it is asked for only when the server has gone quiet.** `LoseHealth` and
+  `GainHealth` both end in `NewHealth` → `DrawHealth`, which sends `BP_STAT` on every change (`player.kod:5823`,
+  `user.kod:6631`), on an ordered stream. So the health line (`abortBelow`, the fight's `disengageAt`) is still checked
+  before every swing, when it is queued and again at the moment it is sent, against a number no older than the last
+  thing the server said; and the question that gates the swing is *has the server spoken since my last swing left?* It
+  nearly always has, because a hit and a miss both send a sentence. When it has not for `SWING_REPLY_MS` (1 s), one
+  health read is sent and waited for (`VITALS_POLL_MS`), and **a swing whose health line cannot be read against an answer
+  is not sent**: the exchange returns `stale`, `fight()` returns `stale_vitals`. The old loop swung blind into a silent
+  connection for as long as its budget lasted.
+- **The rest of the exchange is waited for, not paid for.** The resistance band follows the hit sentence a fraction
+  later, and it is the only prod-safe read of whether a weapon is enchanted. After the last swing of a call the sweep
+  waits until `SWING_SETTLE_MS` (250 ms) after the swing left; the next swing is not due for 1050. A target that
+  vanishes ends the call at once.
+
+Nothing else moved: `PACKETS_PER_SECOND` is 5, `ATTACK_INTERVAL_MS` is 1050, the cancel checks, body authority and the
+healing-wand tick are where they were.
+
+**A fight that is landing is pressed** (`fight()`'s `pressRounds` and `pressWhile`, decided by `pressVerdict`).
+`rounds` (3 by default) is what a fight gets with no proof it is getting anywhere, and for every caller that passes
+nothing else it is the whole budget, as before. With `pressRounds`, another round is granted past those while
+
+- a blow has landed on this foe inside the last `rounds` rounds (so *"too far away"* and *"the geometry moved you"*
+  still end it after three);
+- the last swing was not refused as out of reach (it stepped away: one refused swing, then the next call walks up to it);
+- the caller's gate, asked before each such round, returns nothing;
+- and the cap has not been reached.
+
+Only the farm pass presses (`farmFightPress` in `tools/autopilot/pass-farm.mjs`), to `policy.fightRounds` where an
+operator set one (`fight_rounds`, the key the fight-back and the PvP fight already honour) and otherwise to
+`FARM_PRESS_ROUNDS` = 12, which finishes three kills in four in one call and still returns the body to the pass inside
+thirteen seconds. Its gate re-asks the pass's own questions a fight in progress can cross: health under
+`safety().engageAt` (the line the pass will not *start* a fight below; the fight's own flee line is lower and is checked
+every swing regardless), vigor fallen through the fighting floor the pass measured on the way in, and a wall
+`holdWorthwhile` would now take that it did not want when the fight opened. Each is asked as a *change*, so a fight the
+pass opened below the floor on an inky reserve, or in the open because no wall could be had, is not handed back for
+what the pass already accepted. A training bout (one round), the covered pull's alternate, the needle, the buddy, the
+fight-back, the lever fight and the broker's `fight` tool pass their own rounds and are not pressed.
+
+Everything that ended a fight still ends a pressed one: the kill, the disengage line, `cancelFight` and a control token,
+a held wall's quarry walking out of reach, a refused swing, a shattered weapon.
+
+**Reading it after a deploy.** Every `fight()` result carries `swings` (attack packets that left), `swing_ms` (the mean
+gap between two of them: about 1050; `null` with fewer than two), `fight_ms` (the call, first line to outcome, loot
+excluded), `started_at`, and `handed_back.why` when the round budget and nothing else ended it (`rounds`, `cap`,
+`quiet`, `out_of_reach`, `gate`). The farm pass writes them on the journal's `killed` / `broke off` lines, on
+`farm_combat` in `autopilot status`, and on the ledger's `killed` row, which also carries the whole quarry however many
+calls it took: `kill_calls`, `kill_rounds`, `kill_swings`, `kill_ms`. So, from `killed` rows:
+
+| question | read |
+|---|---|
+| is the swing interval the server's? | `swing_ms` ≈ 1050 |
+| seconds per round, hand-backs included (1.71 before) | `kill_ms / kill_rounds` |
+| rounds per kill (median 7 before) | `kill_rounds` |
+| how often is a kill still handed back? | `kill_calls` > 1 |
+
+A field that was not measured is absent, never zero (an older keeper behind a newer broker reports no `swings`).
+
 ## Which quarry first — `hunt_priority`
 
 `hunt` is a SET; `hunt_priority` is an ORDER over it, opt-in and null by default
