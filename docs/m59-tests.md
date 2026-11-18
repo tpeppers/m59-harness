@@ -3151,7 +3151,7 @@ dropped only when a fresh look at its own id says it is broken, un-condemned whe
 sound, kept when no reply (or a reply under another id) came. The last case checks that
 `makeWeapon` passes the keeper's `heldBackIds` and protected names.
 
-## m59-fight-cadence-test.mjs (112) — a swing every 1.05 s, and a landing fight is not handed back every three rounds
+## m59-fight-cadence-test.mjs (113) — a swing every 1.05 s, and a landing fight is not handed back every three rounds
 
 Prod 2026-11-18: four healthy 143–149 health farmers in Castle Victoria journaling "broke off - still alive
 after 3 rounds" five times running on one skeleton, at a median 1.71 s a round against a server that takes a

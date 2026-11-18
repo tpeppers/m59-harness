@@ -443,6 +443,14 @@ console.log('\nattackRounds: a silent server is asked, and a deaf one is not swu
      r.swings === 1 && r.stale?.at_swing === 1 && w.count(BP.SEND_STATS) === 1 && w.attacks().length === 1, { swings: r.swings, stale: r.stale });
 }
 {
+  // A cornered fight-back passes a line of 0: no health can be under it, so there is nothing for silence to stale.
+  const w = world({ foeHp: 99 });
+  w.mute = true;
+  const r = await drive(w.s.attackRounds(w.foe.id, 2, { abortBelow: 0 }));
+  ok('with a health line of zero both swings go: silence gates a swing only where there is a line to hold',
+     w.attacks().length === 2 && r.swings === 2 && !r.aborted, { n: w.attacks().length, stale: r.stale });
+}
+{
   const w = world({ foeHp: 99, outcome: () => 'silent' });
   const r = await drive(w.s.attackRounds(w.foe.id, 3, {}));
   ok('with no health line to hold, a silent exchange is still asked about once it ends, and swings are not gated on it',

@@ -5143,7 +5143,8 @@ class Session {
       if (abortBelow != null) {
         // AND AGAINST A NUMBER NO OLDER THAN THAT EXCHANGE. If the server has said nothing since the last swing
         // left, the health in memory may predate everything that swing provoked: ask, and do not swing unanswered.
-        if (!swingAnswered(this, c)) {
+        // Only where there is a line to hold: a cornered fight-back passes 0, which no health can be under.
+        if (abortBelow > 0 && !swingAnswered(this, c)) {
           polls++;
           const answered = await askVitals(this, c);
           if (cancelNow()) { cancelled = { at_swing: i }; break; }

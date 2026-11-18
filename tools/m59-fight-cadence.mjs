@@ -29,7 +29,12 @@
 // (a room read, the weapon check, two health reads: about 1.5 s) for 3.15 s of swinging; and (b) THREE OR FOUR
 // PACKETS A SWING: an unpaced turn in fight(), a paced turn in attackRounds, the attack, and a health read with a
 // wait of up to 1.5 s behind it. Against a server that drops everything past five packets in one second
-// (user.kod:50, :883) that left no room for anything else, and every one of them sat in the same 200 ms pacer gap.
+// (user.kod:50, :883) that left no room for anything else, and each paced one took its own 200 ms pacer gap.
+//
+// ON THE MODEL SERVER the suite runs (the real Session, Pacer and client on a virtual clock, answers 100 ms after
+// each packet, the measured 1.56 s of pass between calls), one ten-round kill asked for the way the farm pass asks
+// was 4 calls, 15.4 s and 56 packets before this (10 attacks, 24 turns, 18 health reads, 4 room reads) and is
+// 1 call, 10.3 s and 14 packets after: 1.54 s a round to 1.03.
 //
 // WHAT THE SERVER ACTUALLY NEEDS FOR A BLOW, which is what decides the rest:
 //

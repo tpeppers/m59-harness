@@ -281,7 +281,7 @@ No step mask, no position, a floorless goal or holding a wall: every helper answ
 
 ```bash
 node tools/m59-fight-cadence.mjs --fleet prod --since 30m   # the pace of that window's kills, off the ledger
-node tools/m59-fight-cadence-test.mjs      # 112, offline: the real Session, Pacer and client on a virtual clock
+node tools/m59-fight-cadence-test.mjs      # 113, offline: the real Session, Pacer and client on a virtual clock
 ```
 
 **The server takes one melee swing a second and the farm loop was spending 1.7.** `Player.TryAttack` asks
