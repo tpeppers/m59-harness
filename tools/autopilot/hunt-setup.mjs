@@ -27,7 +27,7 @@ import { SHORTFALL_TTL_MS, shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { FarmStrategyEngine } from '../m59-strategy-engine.mjs';
 import { touchSpellSpec } from '../m59-touchspell.mjs';
-import { MIN_FIGHT_VIGOR, ORDINARY_VIGOR_FLOOR, reachableFightFloor, reagentTargetFor, REST_VIGOR_CAP, restVigorCapOf, SPAWN_FILE, STARVED_FIGHT_VIGOR, STRATEGIES, VIGOR_CAP } from '../m59-autopilot.mjs';
+import { MIN_FIGHT_VIGOR, ORDINARY_VIGOR_FLOOR, pct, reachableFightFloor, reagentTargetFor, REST_VIGOR_CAP, restVigorCapOf, SPAWN_FILE, STARVED_FIGHT_VIGOR, STRATEGIES, VIGOR_CAP } from '../m59-autopilot.mjs';
 import { OVERMATCH_VIGOR_MARGIN, overmatchVerdict } from '../m59-overmatch.mjs';
 import { secondWindVerdict } from '../m59-second-wind.mjs';
 import { loadSpawns } from '../m59-spawns.mjs';
@@ -134,11 +134,17 @@ export class HuntSetupPart {
   // per process (loadSpawns) and a creature's level once per name, so asking costs one walk over the room's objects.
   //
   // OFF WHILE THE BODY IS NOT THE FARM'S: a journey keeps its own lines (travel_guard, travelHoldBelow), an errand and a
-  // lease are somebody else's pacing, death recovery rests to whole, and a person is not in the spawn table.
+  // lease are somebody else's pacing, death recovery rests to whole, poison shelters in place, and a person is not in
+  // the spawn table.
   overmatch() {
     const s = this.s, c = s?.client, policy = this.policy ?? {};
     const farming = this.mode === 'farm' && !!policy.hunt && policy.neverAttack !== true;
     const input = { policy: policy.overmatch, farming };
+    // BETWEEN CONNECTIONS THERE IS NO ANSWER, AND THAT IS NOT AN EDGE. A play-dead logoff takes the client away for a
+    // dozen seconds; the lines a body had going down are not the news, so nothing is journalled and the edge memory
+    // is left as it was. The verdict itself is still the honest one for the moment: off, for want of a body to read.
+    if (farming && !c) return overmatchVerdict({ ...input, held: 'no connection to the game at this moment' });
+    const room = s?.world?.room?.num ?? null;
     if (farming && c) {
       if (this.stopping) input.held = 'the keeper is stopping';
       else if (this.inert) input.held = this.inert.travelling ? 'travelling: a journey keeps its own lines'
@@ -150,13 +156,23 @@ export class HuntSetupPart {
       }
       input.maxHealth = c.vitals?.()?.health?.max ?? null;
       input.recovering = !!this.recoverUntilWhole;
+      // Poison and disease have their own rule (shelter in place until it ends, then heal): the same enchantments
+      // farmVigorWorkReady and the poison rung read.
+      let ailments = [];
+      try { ailments = c.ailments?.() ?? []; } catch { ailments = []; }
+      input.ailing = ailments.length ? [...new Set(ailments.map(a => String(a?.name ?? a ?? 'ailing').trim().toLowerCase()))].join(' and ') : null;
       input.pvp = this.overmatchPvp();
-      const room = s?.world?.room?.num ?? null;
       let spawns = null;
       try { spawns = loadSpawns(SPAWN_FILE); } catch { spawns = null; }
       const table = room == null ? null : spawns?.rooms?.[String(room)];
-      // EVERY row, huntable or not: what can stand in the room, not what these orders hunt.
-      input.roomLevels = Array.isArray(table) ? table.map(x => x?.level) : null;
+      // EVERY row, huntable or not: what can stand in the room, not what these orders hunt. A row with no level is a
+      // townsperson the room creates (a priestess in the Badlands) unless the table says it is huntable or generated,
+      // and then it is something that can stand here whose strength nobody knows.
+      const levelled = x => Number.isFinite(Number(x?.level)) && Number(x.level) > 0;
+      input.roomLevels = Array.isArray(table) ? table.filter(levelled).map(x => Number(x.level)) : null;
+      input.roomUnknown = Array.isArray(table)
+        ? table.filter(x => !levelled(x) && (x?.huntable || (x?.how && x.how !== 'create'))).map(x => String(x?.creature ?? 'unnamed'))
+        : [];
       if (this._overmatchLevels?.of !== (spawns?.creatures ?? null))
         this._overmatchLevels = { of: spawns?.creatures ?? null, by: new Map() };
       const known = this._overmatchLevels.by;
@@ -185,6 +201,11 @@ export class HuntSetupPart {
         this.note('overmatch off: back to the ordinary lines and walls', { ...verdict, was: was?.why ?? null });
     }
     this._overmatchWas = { active: verdict.active, why: verdict.why };
+    // FOR THE POST-MORTEM (death.mjs): the last moment the verdict was on, and the lines it gave. A death record is
+    // written from the Underworld, where the verdict is off and safety() answers the ordinary flee line.
+    if (verdict.active)
+      this.overmatchLast = { at: Date.now(), room, ratio: verdict.ratio, prey_level: verdict.prey_level,
+                             rest_below: verdict.rest_below, flee_below: verdict.flee_below };
     return verdict;
   }
 
@@ -208,20 +229,74 @@ export class HuntSetupPart {
   //            above the skill's trigger at 25), because the next exertion below 25 refills it and the resting cap is
   //            a number the skill itself forbids while it runs. Anything else: all that resting can give THIS
   //            character (restVigorCeiling -- 80, less a ring of lethargy), so one walk to a wall buys a full bar.
-  //   leave    where a held wall is let go once health is at the resume line (releaseRestedHold).
   //   blocked  sitting down would earn nothing right now: RestTimer awards vigor only below the server's own rest
   //            threshold (player.kod:10037), and Second Wind pins that at 10 while it runs (player.kod:1233-1236).
-  overmatchVigor() {
+  // PURE: reads, and changes nothing. `overmatchVigorRest` is the half that keeps the latch.
+  overmatchVigor(v = this.s?.client?.vitals?.()) {
     const floor = this.policy?.ordinaryVigorFloor ?? ORDINARY_VIGOR_FLOOR;
     const ceiling = Math.round((this.restVigorCeiling?.() ?? REST_VIGOR_CAP) * skills.VIGOR_MAX);
     let secondWind = false;
     try { secondWind = !!this.secondWindFarming?.()?.active; } catch { secondWind = false; }
-    const vigor = this.s?.client?.vitals?.()?.vigor;
-    const raw = vigor?.value == null ? NaN : Number(vigor.value);
-    const threshold = vigor?.rest_threshold == null ? NaN : Number(vigor.rest_threshold);
-    const leave = Math.min(ceiling, floor + OVERMATCH_VIGOR_MARGIN);
-    return { floor, ceiling, leave, rest: secondWind ? leave : ceiling, second_wind: secondWind,
+    const raw = v?.vigor?.value == null ? NaN : Number(v.vigor.value);
+    const threshold = v?.vigor?.rest_threshold == null ? NaN : Number(v.vigor.rest_threshold);
+    return { floor, ceiling, rest: secondWind ? Math.min(ceiling, floor + OVERMATCH_VIGOR_MARGIN) : ceiling,
+             second_wind: secondWind, raw: Number.isFinite(raw) ? raw : null,
              blocked: Number.isFinite(raw) && Number.isFinite(threshold) && threshold > 0 && raw >= threshold };
+  }
+
+  // DOES VIGOR KEEP AN OVERMATCHED FARMER SITTING? Only SPENT sits it down; and a rest begun spent runs to its bar, or the
+  // farmer walks to a wall for ten points and back. `spentRestSince` is that latch: set when the body is found spent,
+  // cleared at the bar -- or as soon as sitting can earn nothing more above the floor, so a ceiling the keeper did not
+  // model can never park a body that is no longer spent. Asked by the rest gate (passFleeAndRest), the survival
+  // dispatcher (continueSurvivalDecisionStep) and the wall release (releaseRestedHold), which is why it lives here:
+  // the dispatcher runs before the ladder and would otherwise never see the latch move.
+  overmatchVigorRest(v = this.s?.client?.vitals?.()) {
+    const bar = this.overmatchVigor(v);
+    const spent = bar.raw != null && bar.raw < bar.floor;
+    if (spent) this.spentRestSince ??= Date.now();
+    else if (this.spentRestSince && (bar.raw == null || bar.raw >= bar.rest || bar.blocked)) this.spentRestSince = null;
+    return { ...bar, spent, needs: spent || !!this.spentRestSince };
+  }
+
+  // IS AN OVERMATCHED FARMER'S REST OVER? Health back at the resume line, and vigor no longer a reason to sit. ONE
+  // answer for the three places that end a rest -- the dispatcher's recovery decision, the rest gate's `hurt`, and the
+  // release of the wall -- which until now were three numbers (full health and 80 vigor; hold_resume_above; the resting
+  // ceiling). False whenever the farmer is not overmatched: then those three keep their own.
+  overmatchRested(v = this.s?.client?.vitals?.()) {
+    let lines = null;
+    try { lines = this.healthLines?.() ?? null; } catch { lines = null; }
+    if (!lines?.overmatch) return false;
+    const hp = pct(v?.health);
+    if (hp == null || hp < lines.resume) return false;
+    return !this.overmatchVigorRest(v).needs;
+  }
+
+  // OVERMATCHED, SPENT, HEALTH ALREADY AT ITS LINE, AND SITTING DOWN CANNOT PAY. Second Wind is still running: the
+  // server holds the rest threshold at 10 until it ends (5 to 10 minutes after it fired, secwind.kod GetDuration) and
+  // refuses food with it, so a rest here earns nothing -- and used to read as "rested and gained nothing, giving the
+  // square up", a reconnect and another wall, once every dozen seconds. The floor still stands (a spent body does not
+  // fight); what changes is that it WAITS where it is, on its feet, and says so once a minute. The moment the skill
+  // ends the threshold returns, `blocked` clears, and an ordinary rest takes the vigor to its bar. True when it is
+  // that moment and the caller should do nothing else with the pass.
+  overmatchSpentWait(v = this.s?.client?.vitals?.(), { behindAWall = !!this.hold } = {}) {
+    let lines = null;
+    try { lines = this.healthLines?.() ?? null; } catch { lines = null; }
+    if (!lines?.overmatch) return false;
+    const hp = pct(v?.health);
+    if (hp == null || hp < lines.resume) return false;      // health still wants this rest: let it run
+    const vigor = this.overmatchVigorRest(v);
+    if (!(vigor.needs && vigor.blocked)) return false;
+    this.doing = 'waiting';
+    if (!this._spentWaitNotedAt || Date.now() - this._spentWaitNotedAt > 60_000) {
+      this._spentWaitNotedAt = Date.now();
+      this.note('spent, and resting cannot pay yet — waiting it out', {
+        vigor: vigor.raw, floor: vigor.floor, rest_threshold: v?.vigor?.rest_threshold ?? null, behind_a_wall: behindAWall,
+        waited_s: this.spentRestSince ? Math.round((Date.now() - this.spentRestSince) / 1000) : 0,
+        why: 'the server awards rest vigor only below its own threshold, and that is at or under what this body ' +
+             'already has (Second Wind pins it at 10 while it runs). Sitting down would earn nothing',
+        then: `when it ends: rest to ${vigor.rest}, then back to the fight` });
+    }
+    return true;
   }
 
   fightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {

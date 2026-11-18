@@ -29,18 +29,25 @@
 //
 // Not "what I hunt": what can hit me while I hunt it. Room 377 is level-30 giant rats and a level-105 lupogg; a
 // 150-health farmer there is not overmatched. An unknown creature in sight is a no, a room with no spawn table is a no,
-// a body recovering from a death is a no, and a player-versus-player episode is a no -- a person is not in the table.
+// a body recovering from a death or carrying poison is a no, and a player-versus-player episode is a no -- a person is
+// not in the table.
 //
 // WHILE IT IS ON (Autopilot.overmatch / healthLines, tools/autopilot/hunt-setup.mjs and senses.mjs):
 //
 //   rest_below    0.34   the one health line: below it the body stops opening fights and goes to a wall to mend
 //   resume_above  0.67   and gets up again here, not at nine tenths
-//   flee_below    0.25   where a fight is broken off and the logoff ladder answers (safety().fleeAt)
+//   flee_below    0.25   where a fight is broken off and the logoff answers (safety().fleeAt; the doomed rung too)
 //   vigor                only SPENT (under ORDINARY_VIGOR_FLOOR, 20) is a reason to sit; under the resting cap is not
 //   walls                no fight opens from a wall and none is taken for a crowd, unless wall_at_attackers says so
 //
+// THE LOGOFF BELONGS TO THE FLEE LINE. A stop above it -- for health under the rest line, or for spent vigor -- takes its
+// wall without the play-dead logoff a recovery performs on arrival: every logoff opens a healing session
+// (m59-healing-session.mjs) that bars a second logoff and every town trip until FULL health, which a farmer that goes
+// back to the fight at two thirds may not see for an hour. And a body that HAS spent its logoff heals as it always did:
+// while that session is open its resume line is hold_resume_above again.
+//
 // Everything that is not farming is untouched: a journey keeps its own lines (travel_guard, travelHoldBelow), death
-// recovery still rests to whole, poison still shelters in place, the doomed rung keeps its own thresholds.
+// recovery still rests to whole, and poison still shelters in place.
 //
 // THE POLICY: `overmatch`, from the broker's `overmatch`:
 //   'auto' (default)   on when the predicate holds
@@ -157,15 +164,18 @@ const levelsOf = list => (Array.isArray(list) ? list : []).map(Number).filter(n 
  *   held            null, or one sentence saying why the body is not the farm's right now (a journey, an errand, a lease)
  *   maxHealth       the character's maximum health
  *   roomLevels      levels of EVERY row of this room's spawn table, huntable or not; null when the table is unknown
+ *   roomUnknown     names of creatures the table can produce whose level is not known (a townsperson is not one)
  *   visibleLevels   levels of the hostile creatures in sight
  *   visibleUnknown  names of hostile creatures in sight whose level is not known
  *   recovering      resting to whole after a death
+ *   ailing          null/false, or the poison or disease on the body: the ordinary ladder shelters and mends it first
  *   pvp             null/false, or what makes this a player-versus-player moment
  * Returns { active, mode, why, ratio, prey_level, prey_ratio_wanted, rest_below, resume_above, flee_below,
  *           wall_at_attackers }. Every inactive verdict says why in one sentence.
  */
 export function overmatchVerdict({ policy, farming = false, held = null, maxHealth = null, roomLevels = null,
-                                   visibleLevels = [], visibleUnknown = [], recovering = false, pvp = null } = {}) {
+                                   roomUnknown = [], visibleLevels = [], visibleUnknown = [], recovering = false,
+                                   ailing = null, pvp = null } = {}) {
   let p;
   try { p = normOvermatch(policy); }
   catch (e) {
@@ -188,13 +198,15 @@ export function overmatchVerdict({ policy, farming = false, held = null, maxHeal
   if (held) return no(String(held));
   if (!knownHealth) return no('own maximum health unknown');
   if (recovering) return no('recovering from a death: resting to whole first');
+  if (ailing)
+    return no(`${typeof ailing === 'string' ? ailing : 'poisoned or diseased'}: the ordinary ladder shelters and mends it first`);
   if (pvp) return no(typeof pvp === 'string' ? pvp : 'a player-versus-player episode: a person is not in the spawn table');
   if (p.mode === 'on')
     return { active: true, why: 'overmatch is on for this character, whatever the prey', ...base };
   if (!room.length) return no('nothing known about what this room spawns');
-  const unknown = (Array.isArray(visibleUnknown) ? visibleUnknown : []).filter(Boolean);
-  if (unknown.length)
-    return no(`a creature of unknown level is in sight (${[...new Set(unknown.map(String))].slice(0, 3).join(', ')})`);
+  const names = list => [...new Set((Array.isArray(list) ? list : []).filter(Boolean).map(String))].slice(0, 3).join(', ');
+  if (names(roomUnknown)) return no(`this room can spawn a creature of unknown level (${names(roomUnknown)})`);
+  if (names(visibleUnknown)) return no(`a creature of unknown level is in sight (${names(visibleUnknown)})`);
   // Compared unrounded: 143 over 75 is 1.9067, and a ratio rounded for the journal must never decide the verdict.
   if (health < p.preyRatio * preyLevel)
     return no(`not overmatched: ${health} health over the strongest thing here (level ${preyLevel}) is ${ratio}, under ${p.preyRatio}`);
