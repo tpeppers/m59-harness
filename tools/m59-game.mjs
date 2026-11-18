@@ -138,6 +138,7 @@ import * as skills from './m59-skills.mjs';
 import { deathRoomOnEntry } from './m59-underworld.mjs';
 import { isEmptyHealingWandObject } from './m59-healing-wands.mjs';
 import { observeRefusal, vetoAttack, isGuildOnlyRefusal } from './m59-refused-targets.mjs';
+import { SWING_REPLY_MS, SWING_SETTLE_MS, SWING_TRAIL_MS, VITALS_POLL_MS, swingFacing, notInViewText } from './m59-fight-cadence.mjs';
 
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
@@ -191,7 +192,10 @@ const PACKETS_PER_SECOND = Number(process.env.M59_RATE || 5);
 // How long a cast with a trance may go unannounced before the automatic hold decides no trance began.
 export const TRANCE_CONFIRM_MS = Number(process.env.M59_TRANCE_CONFIRM_MS || 3000);
 export const LOGIN_READ_STALL_MS = Number(process.env.M59_LOGIN_READ_STALL_MS || 5000);
-const ATTACK_INTERVAL_MS = 1050;     // IsOkayAttackTime, plus a little
+// IsOkayAttackTime, plus a little: TryAttack asks it with no argument (player.kod:3974) and its default is
+// `time = 1000` (player.kod:5305); no weapon or skill changes it. A swing sent sooner is refused in silence, so
+// this is the gap between two ATTACK packets and nothing else may add to it: see m59-fight-cadence.mjs.
+const ATTACK_INTERVAL_MS = 1050;
 
 // WALKING AT ONE SQUARE A SECOND WAS COSTING US CHARACTERS.
 //
@@ -4999,6 +5003,26 @@ class Session {
   // `shouldCancel` is asked between swings, where the health abort already is. A swing is
   // ~2.9s on the wire, so this is the finest grain a cancel can land at without abandoning
   // an attack the server has already accepted.
+  //
+  // 2026-11-18, THE SWING CLOCK (m59-fight-cadence.mjs has the measurement and the kod). Three things used to
+  // happen for every swing that the server never asked for: a turn, whether or not anything had moved; a health
+  // read with a wait of up to 1.5s behind it, for a number that is pushed; and a 2.5s wait on a reply that arrives
+  // in a tenth of a second. A swing now costs ONE packet when nothing has moved, and everything after it fits
+  // inside the 1050 ms the server makes us wait anyway:
+  //
+  //   - TURN only when the bearing has left our facing by more than half an octant, when we do not know where we
+  //     face, or when the server has just said "You can't see your selected target." (faceForSwing).
+  //   - HEALTH is the pushed number, and it is as fresh as the last thing the server sent. So the question asked
+  //     before every swing is "has the server spoken since my last swing left?" (swingAnswered). It nearly always
+  //     has: a hit and a miss both send a sentence. When it has not, health is asked for outright (askVitals), and
+  //     a swing whose health line cannot be read against an answer IS NOT SENT (`stale`). The old loop swung blind
+  //     into a silent connection, once every four seconds, for as long as its budget lasted.
+  //   - THE REST OF THE EXCHANGE is waited for only after the LAST swing of a call, until SWING_SETTLE_MS after it
+  //     left: the band sentence follows the hit sentence, and this call's messages are all its caller will get.
+  //     A target that vanishes ends the call at once.
+  //
+  // Every check that stops a swing is where it was: cancel, body authority and the health line before the swing
+  // is queued and again at the moment it is sent; the healing reflex before each swing and after each exchange.
   observeAttackMessage(ev,c) {
     if(ev.kind!=='message'||!ev.text||!Number.isFinite(ev.seq)||this.client!==c)return;
     for(const observer of this.attackMessageObservers??[]){
@@ -5006,6 +5030,43 @@ class Session {
       try { Promise.resolve(observer.report(ev.text)).catch(e=>this.recorder?.line('note',{what:'combat observer failed',why:e.message})); }
       catch(e) { this.recorder?.line('note',{what:'combat observer failed',why:e.message}); }
     }
+  }
+
+  // HAS THE SERVER SPOKEN SINCE OUR LAST SWING LEFT? The stream is ordered and health is pushed on every change
+  // (player.kod:5823 NewHealth -> user.kod:6631 DrawHealth), so ANYTHING received after the swing means the
+  // health in memory is no older than that swing. `lastGameMsgAt` is stamped by the client on every game message
+  // it parses; the exchange's own wait marks the swing answered when it hands back an event.
+  swingAnswered(c) {
+    const last = this.lastSwing;
+    if (!last || last.client !== c || last.answered) return true;
+    if ((c.lastGameMsgAt ?? 0) > last.at) { last.answered = true; return true; }
+    return false;
+  }
+
+  // ASK FOR HEALTH OUTRIGHT, because nothing has arrived since the last swing left. One paced read and a bounded
+  // wait for anything the server says after that swing: the stat reply, or the swing's own late sentence. False
+  // means it answered neither, and the caller must not swing on the number it holds.
+  async askVitals(c) {
+    const last = this.lastSwing?.client === c ? this.lastSwing : null;
+    const asked = await this.pacer.submit('read', () => { if (this.client !== c) return false; c.stats(1); return true; });
+    if (asked === true) {
+      const got = await c.waitFor({ since: last?.seq ?? c.evSeq, kinds: ['stat', 'message', 'vanished'],
+                                    timeoutMs: VITALS_POLL_MS });
+      if (last && got?.events?.length) last.answered = true;
+    }
+    return this.swingAnswered(c);
+  }
+
+  // TURN BEFORE A SWING ONLY WHEN THE SERVER COULD REFUSE THE BLOW FOR IT (swingFacing, m59-fight-cadence.mjs).
+  // True when a turn was sent. `swingViewRefused` is the client the server last refused for view: what we believe
+  // about our own facing is then wrong (a turn it dropped, or it turned us), so the next swing turns regardless.
+  async faceForSwing(target) {
+    const c = this.need();
+    const verdict = swingFacing({ me: c.self, target, force: this.swingViewRefused === c });
+    if (!verdict.turn) return false;
+    if (this.swingViewRefused === c) this.swingViewRefused = null;
+    await this.faceToward(target);
+    return !!c.self;
   }
 
   async attackRounds(targetId, swings = 4, { abortBelow = null, shouldCancel = null, onMessages = null } = {}) {
@@ -5034,17 +5095,32 @@ class Session {
     // cannot double-count what the rounds already saw, and a sweep that finds its start
     // trimmed out of the 500-event ring still keeps everything the rounds collected.
     const collected = new Map();
-    const keep = ev => { for (const e of ev) if (e.kind === 'message' && e.text) collected.set(e.seq, e.text); };
+    const keep = ev => { for (const e of ev ?? []) if (e.kind === 'message' && e.text) collected.set(e.seq, e.text); };
     const exchangeFrom = c.evSeq;
     let aborted = null;
     let cancelled = null;
+    // No swing was sent because the server has answered neither the last one nor a health read: see askVitals.
+    let stale = null;
+    // What this call put on the wire: when each attack left, and how many turns and health reads it cost.
+    const swingAt = [];
+    let turns = 0, polls = 0;
+    let last = null;          // the swing of THIS call that left most recently
+    let over = false;         // the target is gone or we are: nothing further in this exchange is worth waiting for
     const healthPct = () => {
       const h = c.vitals()?.health;
       return h?.max ? h.value / h.max : null;
     };
+    const cancelNow = () => this.client !== c || (typeof shouldCancel === 'function' && shouldCancel());
+    // "You can't see your selected target." may not be the first sentence after the swing, so it is looked for in
+    // everything heard since that swing rather than in whichever line ended the wait.
+    const heardViewRefusal = () => {
+      const from = this.lastSwing?.client === c ? this.lastSwing.seq : null;
+      if (from == null || typeof c.eventsSince !== 'function') return;
+      if (c.eventsSince(from).some(e => e.kind === 'message' && notInViewText(e.text))) this.swingViewRefused = c;
+    };
     for (let i = 0; i < swings; i++) {
       const o = c.room.objects.get(targetId);
-      if (!o) break;
+      if (!o) { over = true; break; }
       // Before the swing, like the health abort below it: a cancel that arrives mid-round
       // must not buy one more packet.
       if (typeof shouldCancel === 'function' && shouldCancel()) {
@@ -5060,14 +5136,22 @@ class Session {
       // Before the swing as well as after it: the previous exchange's damage has
       // already landed, and one more swing at 15% is how a character dies mid-round.
       if (abortBelow != null) {
+        // AND AGAINST A NUMBER NO OLDER THAN THAT EXCHANGE. If the server has said nothing since the last swing
+        // left, the health in memory may predate everything that swing provoked: ask, and do not swing unanswered.
+        if (!this.swingAnswered(c)) {
+          polls++;
+          const answered = await this.askVitals(c);
+          if (cancelNow()) { cancelled = { at_swing: i }; break; }
+          if (!answered) { stale = { at_swing: i, silent_ms: Date.now() - (this.lastSwing?.at ?? Date.now()) }; break; }
+        }
         const hp = healthPct();
         if (hp != null && hp < abortBelow) { aborted = { at_health: hp, swing: i }; break; }
       }
       // A player already refused us in this room: the client would not send it anyway.
       if (vetoAttack(this, c, targetId)) break;
-      await this.faceToward(o);
-      const before = c.evSeq;
-      let sent = false;
+      heardViewRefusal();
+      if (await this.faceForSwing(o)) turns++;
+      let sent = false, sentSeq = c.evSeq;
       await this.pacer.submit('attack', () => {
         if (this.client !== c || shouldCancel?.()) {
           cancelled = { at_swing: i };
@@ -5079,20 +5163,34 @@ class Session {
           if (hp != null && hp < abortBelow) { aborted = { at_health: hp, swing: i }; return; }
         }
         if (!c.room.objects.has(targetId)) return;
-        sent = true;
         if(observer){observer.after=c.evSeq;observer.armed=true;}
-        return c.attack(targetId);
+        // Taken BEFORE the packet, so everything the server says about this swing is after it.
+        sentSeq = c.evSeq;
+        const at = Date.now();
+        // `false` is the client's own veto (m59-refused-targets, a spared creature, a cooperative fence): logged
+        // there and never sent, so there is no reply to wait for and no swing to count.
+        const result = c.attack(targetId);
+        if (result === false) return result;
+        sent = true;
+        this.lastSwing = last = { client: c, at, seq: sentSeq, answered: false, repliedAt: null };
+        swingAt.push(at);
+        return result;
       }, ATTACK_INTERVAL_MS);
       if (!sent) break;
       // Combat results and disappearance are server messages.  Do not admit chat
       // (`said`) into the evidence window: another player can quote hit prose while
       // this swing is outstanding, and that must not turn a miss into progress.
+      //
+      // Bounded by the reply window and not by 2.5s: the next swing is not due for ATTACK_INTERVAL_MS, so a
+      // reply that takes that long costs nothing, and one that takes longer is a question for askVitals.
       const ev = await c.waitFor({
-        since: before, kinds: ['message', 'vanished'], timeoutMs: 2500,
+        since: sentSeq, kinds: ['message', 'vanished'], timeoutMs: SWING_REPLY_MS,
       });
-      keep(ev.events);
-      if (ev.events.some(e => e.kind === 'vanished' && e.id === targetId)) break;
-      if (!c.room.objects.has(c.selfId)) break;      // we died
+      const heard = ev?.events ?? [];
+      keep(heard);
+      if (heard.length) { last.answered = true; last.repliedAt = Date.now(); }
+      if (heard.some(e => e.kind === 'vanished' && e.id === targetId)) { over = true; break; }
+      if (!c.room.objects.has(c.selfId)) { over = true; break; }      // we died
       await this.healingWandTick?.(() => this.client !== c || shouldCancel?.() === true);
       if (this.client !== c || (typeof shouldCancel === 'function' && shouldCancel())) {
         cancelled = { at_swing: i + 1 }; break;
@@ -5110,11 +5208,22 @@ class Session {
       // here.", room.kod room_guild_combat). Nothing inside a round changes that either.
       if ([...collected.values()].some(isGuildOnlyRefusal)) break;
     }
-    // Health after the exchange, since deciding whether to keep fighting depends on
-    // it and the stat only arrives when it changes.
-    if (!aborted) {
-      await this.pacer.submit('read', () => c.stats(1));
-      await c.waitFor({ kinds: ['stat'], timeoutMs: 1500 });
+    // THE REST OF THE LAST EXCHANGE, WITHOUT A PACKET FOR IT.
+    //
+    // This used to be a health read and a wait of up to 1.5s after every call, "since the stat only arrives when
+    // it changes". It does arrive when it changes, which is why the read was never needed for the number; what
+    // the read did buy, by accident, was one pacer gap and a round trip for the band sentence to land in before
+    // the sweep below. That time is given here on purpose and nothing is sent: until SWING_SETTLE_MS after the
+    // swing left, or SWING_TRAIL_MS after its first sentence when that came late. It is cut short only by the
+    // target vanishing. Not after an abort or a cancel (the caller is leaving), and not when the fight is over.
+    if (last && !aborted && !cancelled && !stale && !over && this.client === c) {
+      if (!c.room.objects.has(targetId)) over = true;
+      const until = Math.max(last.at + SWING_SETTLE_MS, (last.repliedAt ?? 0) + SWING_TRAIL_MS);
+      if (!over && until > Date.now())
+        await c.waitFor({ since: last.seq, kinds: ['vanished'], match: e => e.id === targetId,
+                          timeoutMs: until - Date.now() });
+      // A swing the server said nothing about at all: ask now, so the vitals handed back below are an answer.
+      if (this.client === c && c.room.objects.has(targetId) && !this.swingAnswered(c)) { polls++; await this.askVitals(c); }
     }
     // The trailing sweep. `said` is still excluded by `keep` — another player quoting hit
     // prose must never become evidence — and ordering by seq puts the resistance band back
@@ -5122,7 +5231,9 @@ class Session {
     // Guarded: a session double in a test has no ring to sweep, and the rounds' own
     // collection is already the answer there.
     if (typeof c.eventsSince === 'function') keep(c.eventsSince(exchangeFrom));
+    heardViewRefusal();
     const messages = [...collected.entries()].sort((a, b) => a[0] - b[0]).map(e => e[1]);
+    if (messages.some(notInViewText)) this.swingViewRefused = c;
     // SAY THAT THE SWING WAS REFUSED, on the path that nearly every character in this fleet
     // takes. The broker's own `attack` tool computes `could_not_swing` and prints the cure —
     // stand up and swing again — but only on the in-process branch. Keeper-backed sessions
@@ -5131,6 +5242,12 @@ class Session {
     const couldNotSwing = messages.some(t => skills.cannotSwingText(t));
     const refusedHere = messages.some(isGuildOnlyRefusal) || vetoAttack(this, c, targetId);
     return { messages, vitals: c.vitals(), aborted, cancelled,
+             // The pace of this call, for whoever adds it up (fight(), the keeper's own fight verb): how many
+             // attack packets left and when, and what else it had to send to make them land.
+             swings: swingAt.length, swing_at: swingAt, turns, polls,
+             ...(stale ? { stale, note: 'the server has answered neither the last swing nor a health read, so ' +
+                                        'no further attack was sent: the health line cannot be held against ' +
+                                        'a number that old' } : {}),
              ...(refusedHere ? { refused_here: 'guild_only' } : {}),
              ...(couldNotSwing ? { could_not_swing: true,
                                    note: 'the swings were refused, not missed — the character is ' +
@@ -7251,7 +7368,7 @@ installIntentObservers(Session.prototype);
 // observers above, so `travel`'s body and the tests that read it are untouched; a call with no
 // `origin` inside a live order inherits it, and one with none at all is `unattributed`.
 installMoveOrders(Session.prototype, { methods: { travel: 'travel' } });
-export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode, doorsLandingNear, doorsLandingOnward };
+export { Session, Recorder, Pacer, ATTACK_INTERVAL_MS, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode, doorsLandingNear, doorsLandingOnward };
 
 import {installIntentObservers,setIntentTarget,withIntent} from './m59-intent-observations.mjs';
 

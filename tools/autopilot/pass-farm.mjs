@@ -8,8 +8,8 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 5 methods: recordInterruptedFarmOutcome, cooperativeTargetAllowed, passCooperativeCombat, passFarm,
-//   recordFarmFightOutcome
+// 6 methods: recordInterruptedFarmOutcome, cooperativeTargetAllowed, passCooperativeCombat, passFarm,
+//   farmFightPress, recordFarmFightOutcome
 import {cooperativePass} from '../m59-cooperative-combat.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { tryFarmFoodCache } from '../m59-farm-food-cache.mjs';
@@ -22,6 +22,7 @@ import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import { opensFightFromWall } from '../m59-policydiff.mjs';
 import { notePreySide } from '../m59-preyside.mjs';
+import { FARM_PRESS_ROUNDS, killTotals, paceFields, tallyQuarry } from '../m59-fight-cadence.mjs';
 import { beginPullProgress } from '../m59-pull-progress.mjs';
 import { stalePullReason } from '../m59-quarry-identity.mjs';
 import { relayFarmVigor, tryFarmRelay } from '../m59-relay-farming.mjs';
@@ -1826,6 +1827,8 @@ export class PassFarmPart {
         party.declareTarget(this.s.name, claimedSwing, engageName);
       const groupPosture = guardGroupApproach ? { fight_in_place: true }
         : alternate ? { covered_pull_alternate: true, kept_pull_target_id: alternate.pullId } : {};
+      // A FIGHT THAT IS LANDING IS NOT HANDED BACK EVERY THREE ROUNDS (farmFightPress, below).
+      const press = this.farmFightPress({ training, alternate, safe, worth, holding, vigorNow, vigorFloor, engageName });
       this.farmCombat = {at:Date.now(),pending:true,target:engageName,target_id:claimedSwing,holding:!!holding,...groupPosture};
       const f = await skills.fight(s, { target: engageName,
                                         // The same predicate that chose the quarry. An order naming
@@ -1855,6 +1858,7 @@ export class PassFarmPart {
                                         chase: this.policy.chaseOnFoot === true,
                                         equip: training.equip,
                                         rounds: alternate ? 1 : training.rounds,
+                                        ...press,
                                         weaponPriority: this.weaponPriorityNow(engageName),
                                         bannedWeapons: this.bannedWeaponsNow() });
 
@@ -1864,7 +1868,7 @@ export class PassFarmPart {
         this.recordInterruptedFarmOutcome(f,{room,holding,preempted:error.code??error.message});
         return HANDLED;
       }
-      this.farmCombat = {at:Date.now(),pending:false,target:engageName,target_id:claimedSwing,holding:!!holding,killed:!!f.killed,died:!!f.died,out_of_reach:!!f.out_of_reach,reason:f.reason??f.why??null,rounds:f.rounds??null,combat:(f.combat??[]).slice(-8),...groupPosture};
+      this.farmCombat = {at:Date.now(),pending:false,target:engageName,target_id:claimedSwing,holding:!!holding,killed:!!f.killed,died:!!f.died,out_of_reach:!!f.out_of_reach,reason:f.reason??f.why??null,rounds:f.rounds??null,...paceFields(f),combat:(f.combat??[]).slice(-8),...groupPosture};
       if(this.finishFailedCombatApproach(f))return HANDLED;
       // A piece of a chase on foot (m59-chase.mjs): walked toward the quarry, not yet in reach. Progress, not a stall.
       if(this.finishChasePiece(f))return HANDLED;
@@ -2094,6 +2098,57 @@ export class PassFarmPart {
     return HANDLED;
   }
   /**
+   * HOW LONG ONE FARM FIGHT MAY RUN, AND WHEN THE PASS WANTS THE BODY BACK. The options `fight()` takes for pressing
+   * a fight that is working: `pressRounds` and `pressWhile` (m59-skills.mjs fight(), m59-fight-cadence.mjs).
+   *
+   * THE FARM FIGHT NEVER PASSED A ROUND BUDGET, so it inherited fight()'s parameter default of three, and a healthy
+   * farmer landing two blows in three journaled "broke off - still alive after 3 rounds" five times running on one
+   * skeleton. Measured on prod 2026-11-18: 1.71 s a round against the server's 1.05, with 1.56 s of pass and about
+   * 1.5 s of fight() setup and tail around every 3.15 s of swinging. Now the fight goes on while it lands, to
+   * `policy.fightRounds` (the key the fight-back and the PvP fight already honour: "rounds per engagement before it
+   * re-decides") or FARM_PRESS_ROUNDS, so one call normally finishes the kill.
+   *
+   * WHAT THE PASS STILL DECIDES. Every hand-back used to bring the body past this pass's own gates again, and
+   * pressing must not take those away, so `pressWhile` re-asks the ones a fight in progress can cross, before each
+   * round past the third:
+   *   - health under `safe.engageAt`, the line this pass refuses to START a fight below (the heal-or-rest branch
+   *     above); the fight's own `disengageAt` is the lower flee line and is checked every swing regardless;
+   *   - vigor fallen through the fighting floor the pass measured on the way in (not re-measured: fightFloor()
+   *     counts a starved pass every time it is asked);
+   *   - a wall the pass would now take (holdWorthwhile) that it did not want when it opened the fight.
+   * Each is asked only as a CHANGE: a fight the pass opened below the floor on an inky reserve, or in the open
+   * because no wall could be had, is not handed back for the thing the pass already accepted.
+   *
+   * A bout that chose its own rounds keeps them and is not pressed: a training bout wants exactly one, and so does
+   * the covered pull's alternate.
+   */
+  farmFightPress({ training = null, alternate = null, safe = null, worth = null, holding = false,
+                   vigorNow = null, vigorFloor = null, engageName = null } = {}) {
+    if (alternate || training?.rounds != null) return { pressRounds: null, pressWhile: null };
+    const ordered = Number(this.policy?.fightRounds);
+    const pressRounds = Number.isFinite(ordered) && ordered >= 1 ? Math.floor(ordered) : FARM_PRESS_ROUNDS;
+    const engageAt = Number.isFinite(safe?.engageAt) ? safe.engageAt : null;
+    const floor = Number.isFinite(vigorFloor) && Number.isFinite(vigorNow) && vigorNow >= vigorFloor ? vigorFloor : null;
+    const wallWasWanted = !!worth?.hold;
+    const pressWhile = () => {
+      const now = this.s.client?.vitals?.() ?? {};
+      const hp = pct(now.health);
+      if (engageAt != null && hp != null && hp < engageAt)
+        return `health is ${Math.round(hp * 100)}%, under the ${Math.round(engageAt * 100)}% a fight is started at`;
+      const vigor = vigorOf(now);
+      if (floor != null && vigor != null && vigor < floor)
+        return `vigor is ${vigor}, under the fighting floor of ${floor}`;
+      if (!holding && !wallWasWanted) {
+        const names = [...new Set([engageName, ...(this.threat()?.names ?? [])].filter(Boolean))];
+        const wall = this.holdWorthwhile(names);
+        if (wall?.hold) return `the pass would take a wall now (${wall.why})`;
+      }
+      return null;
+    };
+    return { pressRounds, pressWhile };
+  }
+
+  /**
    * WHAT A FARM FIGHT CAME TO, RECORDED ONE WAY. The kill count, the kill feed, the `killed` ledger row (the only kill
    * count that survives a keeper restart), the strategy's onKill hook, the progress verdict, the loot tally, the looted
    * armour and the journal line. Moved out of passFarm verbatim (2026-11-05) so the needle (tools/autopilot/needle.mjs)
@@ -2102,6 +2157,16 @@ export class PassFarmPart {
    */
   async recordFarmFightOutcome(f, { room = null, v = {}, holding = false, extra = {} } = {}) {
     const looted = (f.looted || []).map(x => x.name + (x.amount ? ` x${x.amount}` : ''));
+    // THE PACE, WRITTEN WHERE IT CAN BE READ AFTER A DEPLOY (m59-fight-cadence.mjs). `swings`, `fight_ms` and
+    // `swing_ms` are this call's: attack packets sent, what the call cost, and the mean gap between two swings,
+    // which should read about 1050. A kill also carries the whole quarry however many calls it took (`kill_calls`,
+    // `kill_rounds`, `kill_swings`, `kill_ms`): `kill_ms / kill_rounds` is the seconds-per-round figure that read
+    // 1.71 on prod before this, and `kill_rounds` is rounds per kill. Only measured fields are written.
+    const pace = paceFields(f);
+    this.quarryTally = tallyQuarry(this.quarryTally ?? null, f, { room: room?.num ?? null });
+    const whole = f.killed && this.quarryTally && this.quarryTally.id === (f.target_id ?? null)
+      ? killTotals(this.quarryTally) : {};
+    if (f.killed || f.died) this.quarryTally = null;
     if (f.killed) {
       releaseQuarry(this.s.name);
       this.tally.kills++;
@@ -2125,7 +2190,7 @@ export class PassFarmPart {
       // instead, and this is the only thing that survives a keeper.
       this.ledgerEvent('killed', {
         creature: f.target, room: room?.name ?? null, room_num: room?.num ?? null,
-        rounds: f.rounds, from_safe_spot: !!holding,
+        rounds: f.rounds, ...pace, ...whole, from_safe_spot: !!holding,
         looted: looted.length ? looted.join(', ') : undefined,
         ...extra,
       });
@@ -2158,7 +2223,7 @@ export class PassFarmPart {
     this.countLoot(looted);
     await this.wearLootedArmour(looted);
     this.note(f.killed ? 'killed' : (f.died ? 'died' : 'broke off'), {
-      target: f.target, rounds: f.rounds, looted,
+      target: f.target, rounds: f.rounds, ...pace, ...whole, looted,
       landed_hits: f.landed_hits ?? 0,
       damage_dealt: f.damage_dealt ?? null,
       health: f.health?.after?.value, why: f.note,
