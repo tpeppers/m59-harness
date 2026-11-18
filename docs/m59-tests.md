@@ -384,7 +384,7 @@ through a nested shelter order.
   ratio; `eat` keeps meals; and on a fake keeper in the cave, `fightFloor()` is 0 and `provision()` eats nothing, while
   an overmatched farmer WITHOUT the skill is not second-wind farming and has the ordinary floor (20).
 
-- `m59-overmatch-test.mjs` (33): the predicate one farmer in three is run on. **The normal form** (auto by default;
+- `m59-overmatch-test.mjs` (34): the predicate one farmer in three is run on. **The normal form** (auto by default;
   either spelling of each key) and its refusals, each with its reason: an unknown key, a ratio under 1,
   `flee_below` not under `rest_below`, `rest_below` not under `resume_above`, a fractional `wall_at_attackers`, both
   spellings of one key disagreeing; a strategy file may say mode, ratio and the crowd wall and is refused the three
@@ -418,7 +418,9 @@ through a nested shelter order.
   spent body do not); a crowd wall asked for by `overmatch.wall_at_attackers` keeps its release hysteresis; a body
   holding a wall its cover no longer proves (room 552) still reads its flee floor -- the `ReferenceError` the baseline
   comparison caught; the broker takes `overmatch`, refuses nonsense whole and posts the whole policy to the keeper (read
-  off its source, since the broker cannot be imported); and a death record carries the last moment the verdict was on.
+  off its source, since the broker cannot be imported); nobody under 54 health can be overmatched in any room of the
+  shipped spawn table, so the under-30 rule of `safetyFor` is never the one overridden; and a death record carries the
+  last moment the verdict was on.
 
 - `m59-chase-test.mjs` (16): OFF by default (`fight()` without `chase` is the old local approach; the keeper orders,
   fights and closes on foot only under `policy.chaseOnFoot === true`, which defaults false). Chase on foot (`m59-chase.mjs`) on the real Icky Cave map. The operator's r35c45 -> r35c58

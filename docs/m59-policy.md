@@ -320,7 +320,7 @@ walking hurt characters straight past the only free healing on the road.
 ## OVERMATCH: A FARMER FAR STRONGER THAN ITS PREY FIGHTS IN THE OPEN AND DOES NOT STOP — `overmatch`
 
 ```bash
-node tools/m59-overmatch-test.mjs       # 33, offline
+node tools/m59-overmatch-test.mjs       # 34, offline
 ```
 
 Operator, 2026-11-17/18: *"Characters seem to rest far more than needed, especially when farming creatures significantly
@@ -356,6 +356,14 @@ minutes of a player's blow. Every inactive verdict says why in one sentence.
 
 1.8 and not 2: the operator counts Kermit (143), Lew (146), Rizzo (148) and Piggy (149) as overmatched against level 75,
 which is 1.91 to 1.99.
+
+**It is a statement about proportion, so it means the same at every size.** A monster's blow is about `level / 12`
+(`Fuzzy(viLevel / Random(10,15))`, monster.kod), so a body at exactly the ratio reaches its flee line with
+0.25 x 1.8 x 12 = 5.4 of the room's hardest blows still in hand, whether it has 54 health or 250. And nobody small is
+ever it: the weakest levelled room in the spawn table is level 30, so the smallest body the predicate can call
+overmatched anywhere has 54 health, and the under-30 rule of `safetyFor` (do not start a fight below nine tenths) is
+never the one overridden. A 60-health character among level-30 rats IS overmatched; a 99-health one in Castle Victoria
+is not.
 
 **While it is on**, every faculty reads the same answer, so none can disagree with another:
 

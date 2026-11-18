@@ -676,6 +676,30 @@ test('plumbing: the broker takes `overmatch`, refuses nonsense whole, and the ke
   assert.match(status, /second_wind: [^\n]+\n[\s\S]{0,700}overmatch: \(\(\) => \{/);
 });
 
+test('nobody small can be overmatched anywhere: the under-30 rule of safetyFor is never the one overridden', async () => {
+  // safetyFor will not start a fight below nine tenths for a body under 30 health ("before 30 it should never be
+  // tested at all"). The weakest levelled room in the spawn table is level 30, so the smallest body the predicate can
+  // ever call overmatched has 54 health: checked against every room of the shipped table, at the default ratio.
+  const { loadSpawns } = await import('./m59-spawns.mjs');
+  const { SPAWN_FILE } = await import('./m59-autopilot.mjs');
+  const rooms = loadSpawns(SPAWN_FILE).rooms;
+  let smallest = Infinity;
+  for (const [, table] of Object.entries(rooms)) {
+    const levels = table.map(x => Number(x.level)).filter(n => Number.isFinite(n) && n > 0);
+    if (!levels.length) continue;
+    const unknown = table.filter(x => !(Number(x.level) > 0) && (x.huntable || (x.how && x.how !== 'create'))).map(x => x.creature);
+    for (const maxHealth of [29, 40, 53]) {
+      const v = overmatchVerdict({ farming: true, maxHealth, roomLevels: levels, roomUnknown: unknown });
+      assert.equal(v.active, false, `${maxHealth} health: ${v.why}`);
+    }
+    if (!unknown.length) smallest = Math.min(smallest, Math.ceil(Math.max(...levels) * OVERMATCH_DEFAULTS.preyRatio));
+  }
+  assert.equal(smallest, 54);
+  // And the margin is the same at every size: damage is about level/12 a blow (monster.kod), so the flee line of a
+  // body at exactly the ratio is 0.25 x 1.8 x 12 = 5.4 of the room's hardest blows, whether it has 54 health or 250.
+  assert.ok(OVERMATCH_DEFAULTS.fleeBelow * OVERMATCH_DEFAULTS.preyRatio * 12 >= 5);
+});
+
 test('a death record says whether the body was fighting on the overmatch lines', () => {
   const k = keeper({ maxHealth: 150, monsters: two });
   k.ap.overmatch();
