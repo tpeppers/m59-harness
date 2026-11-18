@@ -41,6 +41,7 @@ import { normalizeRequires, normalizeFloor } from './m59-strategy-gate.mjs';
 import { normalizeLootEject } from './m59-loot-eject.mjs';
 import { normPatrol } from './m59-patrol-farm.mjs';
 import { normSecondWindFarming } from './m59-second-wind.mjs';
+import { normOvermatchForStrategy } from './m59-overmatch.mjs';
 import { normNeedle } from './m59-needle-farm.mjs';
 import { normalizeGangUp } from './m59-gang-up.mjs';
 import { unrevealedWeaponMode } from './m59-unrevealed-weapons.mjs';
@@ -246,10 +247,16 @@ export const STRATEGY_FIELDS = Object.freeze([
   // CHASE ON FOOT (m59-chase.mjs): true ranks quarry by steps on foot and walks the planner's route to a quarry round a
   // ledge or past local range. Off by default; a strategy turns it on for its own farm. Operator 2026-11-05, Icky Cave first.
   { path: 'chaseOnFoot', keys: ['chaseOnFoot'], faculty: 'work', arg: 'chase_on_foot', normalize: bool('chaseOnFoot') },
-  // SECOND WIND FARMING (m59-second-wind.mjs): 'auto' | 'on' | 'off' | { mode, prey_ratio, eat }. Against weak prey a
-  // farmer with Second Wind keeps no vigor floor and eats nothing. Off by default; the same staged rollout.
+  // SECOND WIND FARMING (m59-second-wind.mjs): 'auto' | 'on' | 'off' | { mode, prey_ratio, eat }. An overmatched farmer
+  // with Second Wind keeps no vigor floor and eats nothing. 'auto' is the keeper's default since 2026-11-18.
   { path: 'secondWind', keys: ['secondWindFarming'], faculty: 'work', arg: 'second_wind_farming',
     normalize: v => { normSecondWindFarming(v); return v; } },
+  // OVERMATCH (m59-overmatch.mjs): 'auto' | 'on' | 'off' | { mode, prey_ratio, wall_at_attackers }. Whether THIS FARM is
+  // one a far stronger character fights in the open and does not stop for: a file may switch it off for a room that is
+  // worse than its levels say, force it on, move the ratio, or keep a crowd wall. It may NOT set rest_below,
+  // resume_above or flee_below: when a character rests and flees is survival (PROTECTED_NAMES below) and those three
+  // are refused here with the reason. WHAT kind of farm it is, so `work`, like secondWind.
+  { path: 'overmatch', keys: ['overmatch'], faculty: 'work', arg: 'overmatch', normalize: v => normOvermatchForStrategy(v) },
   // THE NEEDLE (m59-needle-farm.mjs): { site: '<name>' | {...}, role: 'striker' | 'archer' }. In the site's room the
   // keeper holds its needle slot -- the striker at the tip, archers on their stations -- strikes or shoots the closest
   // valid monster in reach, and the front archer pulls after the tip has been quiet for pull.idleS (15 s). The squares and

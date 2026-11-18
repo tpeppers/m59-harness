@@ -361,8 +361,10 @@ export class PassErrandPart {
     // A BUDDY-SYSTEM TAGGER'S CORNER IS ITS JOB, NOT A REST STOP (live, 2026-10-09: every tagger took its
     // corner, and the next pass released it here as "rested to the ceiling" at full health -- a corner
     // taken and given up every second, and not one tag in four minutes).
+    // The keeper's answer to "does a fight open from a wall" (senses.mjs fightOpensFromWall): the policy's, unless the
+    // farmer is overmatched, for whom a wall is only ever a rest stop and is given back like one.
     if (!onARoad && (this.pendingPull || this.inReachOfUs()?.length
-        || (this.mode === 'farm' && opensFightFromWall(this.policy))
+        || (this.mode === 'farm' && (this.fightOpensFromWall?.() ?? opensFightFromWall(this.policy)))
         || (this.mode === 'farm' && this.buddyRole?.()?.role === 'tag'))) return false;
     // POISONED: THE WALL IS KEPT UNTIL THE POISON ENDS. Operator, 2026-10-27: "lock down in the nearest safe spot until the
     // poison ends and healing occurs afterwards, not to flee through it and risk low-health travel. Shelter in place."
@@ -374,17 +376,37 @@ export class PassErrandPart {
       return false;
     }
     this._poisonHoldSaid = false;
+    // AN OVERMATCHED FARMER'S REST ENDS AT ITS RESUME LINE (m59-overmatch.mjs; Autopilot.healthLines), the same line the
+    // rest gate in passFleeAndRest rests to, so the two cannot disagree about whether a rest is over. Its vigor bar is
+    // overmatchVigor().leave -- clear of the floor it sat down under, or the ceiling if that is lower -- and not "all
+    // that resting can give", which Second Wind makes unreachable for as long as it runs. A road keeps its own floor:
+    // a journey is not a farm.
+    let lines = null;
+    if (!onARoad) { try { lines = this.healthLines?.() ?? null; } catch { lines = null; } }
+    const overmatched = lines?.overmatch === true;
     const floor = onARoad
       ? (this.policy.travelHoldResumeAbove ?? 1)
-      : (this.policy.holdResumeAbove ?? 0.9);
+      : overmatched ? lines.resume : (this.policy.holdResumeAbove ?? 0.9);
     if (hp === null || hp < floor) return false;
-    if (vig !== null && vig < this.restVigorCeiling()) return false;
-    this.note('leaving the wall — full health and all the vigor resting can give', {
+    if (overmatched) {
+      const bar = this.overmatchVigor();
+      const raw = v?.vigor?.value;
+      // Still under the bar, and sitting can still raise it: the rest is not finished. (When it cannot -- the skill is
+      // running -- a body that is no longer spent has nothing left to wait for here.)
+      if (this.spentRestSince && Number.isFinite(raw) && raw < bar.rest && !bar.blocked) return false;
+      if (Number.isFinite(raw) && raw < bar.floor) return false;
+      if (Number.isFinite(raw) && raw < bar.leave && !bar.blocked) return false;
+    } else if (vig !== null && vig < this.restVigorCeiling()) return false;
+    this.note(overmatched ? 'leaving the wall — rested to the overmatch lines'
+                          : 'leaving the wall — full health and all the vigor resting can give', {
       health: `${v?.health?.value}/${v?.health?.max}`,
       vigor: `${v?.vigor?.value}/${v?.vigor?.scale_max ?? 200}`,
       needed: Math.round(floor * 100) + '%', on_a_road: onARoad,
-      why: 'a rest stop is for getting well, and this character is as well as sitting down ' +
-           'can make it. Staying is how a journey times out without ever being in danger.',
+      why: overmatched
+        ? 'everything that can stand in this room is far below us: health is back at the resume line and vigor is ' +
+          'clear of the floor, and every further second on the wall is a kill not made'
+        : 'a rest stop is for getting well, and this character is as well as sitting down ' +
+          'can make it. Staying is how a journey times out without ever being in danger.',
     });
     try {
       const { s, hold } = this;

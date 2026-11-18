@@ -27,9 +27,15 @@ import { SHORTFALL_TTL_MS, shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { FarmStrategyEngine } from '../m59-strategy-engine.mjs';
 import { touchSpellSpec } from '../m59-touchspell.mjs';
-import { MIN_FIGHT_VIGOR, reachableFightFloor, reagentTargetFor, restVigorCapOf, SPAWN_FILE, STARVED_FIGHT_VIGOR, STRATEGIES, VIGOR_CAP } from '../m59-autopilot.mjs';
+import { MIN_FIGHT_VIGOR, ORDINARY_VIGOR_FLOOR, reachableFightFloor, reagentTargetFor, REST_VIGOR_CAP, restVigorCapOf, SPAWN_FILE, STARVED_FIGHT_VIGOR, STRATEGIES, VIGOR_CAP } from '../m59-autopilot.mjs';
+import { OVERMATCH_VIGOR_MARGIN, overmatchVerdict } from '../m59-overmatch.mjs';
 import { secondWindVerdict } from '../m59-second-wind.mjs';
 import { loadSpawns } from '../m59-spawns.mjs';
+
+// The faculties whose lease means the farm is not this keeper's to pace (the same list farmVigorWorkReady asks about).
+const OVERMATCH_FACULTIES = Object.freeze(['work', 'movement', 'survival', 'recovery', 'combat']);
+// How long after a player last hit this character the ordinary lines stay in force. A person is not in the spawn table.
+const OVERMATCH_PVP_QUIET_MS = 5 * 60_000;
 
 export class HuntSetupPart {
   // @part 1
@@ -96,7 +102,12 @@ export class HuntSetupPart {
   secondWindFarming() {
     const c = this.s?.client, room = this.s?.world?.room?.num ?? null, now = Date.now();
     const memo = this._secondWind;
-    if (memo && memo.room === room && memo.policy === this.policy?.secondWindFarming && now - memo.at < 30_000) return memo.verdict;
+    // 'auto' with no ratio of its own asks the overmatch predicate, which is live (a stronger creature walking in turns
+    // it off at once), so the memo is good only while that answer has not moved.
+    let overmatch = null;
+    try { overmatch = this.overmatch?.() ?? null; } catch { overmatch = null; }
+    const om = !!overmatch?.active;
+    if (memo && memo.room === room && memo.policy === this.policy?.secondWindFarming && memo.om === om && now - memo.at < 30_000) return memo.verdict;
     const named = (c?.skills ?? []).some(s => /^second wind$/i.test(String(c?.rsc?.get?.(s?.nameRsc) ?? s?.name ?? '').trim()));
     const ability = c?.abilityOf?.('second wind');
     const knows = Number.isFinite(ability) ? ability > 0 : named;
@@ -106,17 +117,119 @@ export class HuntSetupPart {
       preyLevels = table.filter(x => x?.huntable).map(x => x.level);
     } catch { preyLevels = []; }
     const verdict = { ...secondWindVerdict({ policy: this.policy?.secondWindFarming, farming: this.mode === 'farm',
-      knows, maxHealth: c?.vitals?.()?.health?.max, preyLevels }), ability: Number.isFinite(ability) ? ability : null };
+      knows, maxHealth: c?.vitals?.()?.health?.max, preyLevels, overmatch }), ability: Number.isFinite(ability) ? ability : null };
     if (verdict.active && !memo?.verdict?.active)
       this.note('second wind farming: no meals, no vigor floor', { ...verdict,
         how: 'fights down to the trigger at 25 vigor; the skill refills 40 + stamina/2 + ability and rolls to improve' });
-    this._secondWind = { room, policy: this.policy?.secondWindFarming, at: now, verdict };
+    this._secondWind = { room, policy: this.policy?.secondWindFarming, om, at: now, verdict };
     return verdict;
+  }
+
+  // OVERMATCH (m59-overmatch.mjs): IS THIS FARMER FAR STRONGER THAN EVERYTHING THAT CAN STAND IN ITS ROOM? The one
+  // predicate the combat wall (holdWorthwhile), the health lines (safety, healthLines), the rest gate (passFleeAndRest),
+  // the fight floor and Second Wind farming all ask, so none of them can answer it differently from another.
+  //
+  // LIVE, NOT MEMOISED: a stronger creature walking into view, a player's blow, a journey starting or a lease landing
+  // turns it off on the very next question, and the 1-second ladder asks through safety(). The spawn table is read once
+  // per process (loadSpawns) and a creature's level once per name, so asking costs one walk over the room's objects.
+  //
+  // OFF WHILE THE BODY IS NOT THE FARM'S: a journey keeps its own lines (travel_guard, travelHoldBelow), an errand and a
+  // lease are somebody else's pacing, death recovery rests to whole, and a person is not in the spawn table.
+  overmatch() {
+    const s = this.s, c = s?.client, policy = this.policy ?? {};
+    const farming = this.mode === 'farm' && !!policy.hunt && policy.neverAttack !== true;
+    const input = { policy: policy.overmatch, farming };
+    if (farming && c) {
+      if (this.stopping) input.held = 'the keeper is stopping';
+      else if (this.inert) input.held = this.inert.travelling ? 'travelling: a journey keeps its own lines'
+                                                               : 'on an errand: the keeper is inert';
+      else if (this.suspendedJourney) input.held = 'a suspended journey is waiting to resume';
+      else if (typeof this.facultyHeld === 'function') {
+        const leased = OVERMATCH_FACULTIES.find(f => this.facultyHeld(f));
+        if (leased) input.held = `the ${leased} faculty is held by ${this.facultyOwner?.(leased) ?? 'another owner'}`;
+      }
+      input.maxHealth = c.vitals?.()?.health?.max ?? null;
+      input.recovering = !!this.recoverUntilWhole;
+      input.pvp = this.overmatchPvp();
+      const room = s?.world?.room?.num ?? null;
+      let spawns = null;
+      try { spawns = loadSpawns(SPAWN_FILE); } catch { spawns = null; }
+      const table = room == null ? null : spawns?.rooms?.[String(room)];
+      // EVERY row, huntable or not: what can stand in the room, not what these orders hunt.
+      input.roomLevels = Array.isArray(table) ? table.map(x => x?.level) : null;
+      if (this._overmatchLevels?.of !== (spawns?.creatures ?? null))
+        this._overmatchLevels = { of: spawns?.creatures ?? null, by: new Map() };
+      const known = this._overmatchLevels.by;
+      const visibleLevels = [], visibleUnknown = [];
+      for (const o of c.room?.objects?.values?.() ?? []) {
+        if (o.id === c.selfId || !(o.flags & OF.ATTACKABLE) || (o.flags & OF.PLAYER)) continue;
+        const name = String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+        if (!known.has(name)) known.set(name, name ? this.creatureLevel(name) : null);
+        const level = known.get(name);
+        if (Number.isFinite(level) && level > 0) visibleLevels.push(level);
+        else visibleUnknown.push(name || 'an unnamed creature');
+      }
+      input.visibleLevels = visibleLevels;
+      input.visibleUnknown = visibleUnknown;
+    }
+    const verdict = overmatchVerdict(input);
+    // ONE NOTE ON EACH EDGE, never one a pass: this is asked dozens of times a second.
+    const was = this._overmatchWas;
+    if ((was?.active ?? false) !== verdict.active) {
+      if (verdict.active)
+        this.note('overmatch on: fighting in the open, resting only when badly hurt', { ...verdict,
+          how: `no wall for a fight; rest below ${Math.round(verdict.rest_below * 100)}% and up again at ` +
+               `${Math.round(verdict.resume_above * 100)}%; break off below ${Math.round(verdict.flee_below * 100)}%; ` +
+               'vigor is a reason to sit only when spent' });
+      else
+        this.note('overmatch off: back to the ordinary lines and walls', { ...verdict, was: was?.why ?? null });
+    }
+    this._overmatchWas = { active: verdict.active, why: verdict.why };
+    return verdict;
+  }
+
+  // What makes this a player-versus-player moment, or null. The same three records the PvP paths already keep: an
+  // active PvP combat order, a player's blow on this character (pvp-response's `playerAttacks`), and the return delay
+  // after a death to a player (pvp-return).
+  overmatchPvp() {
+    if (this.s?.combat?.active?.pvp) return 'a player-versus-player combat order is active';
+    const last = this.playerAttacks?.length ? this.playerAttacks[this.playerAttacks.length - 1] : null;
+    const ago = last ? Date.now() - Number(last.at) : NaN;
+    if (ago >= 0 && ago < OVERMATCH_PVP_QUIET_MS)
+      return `${last.name ?? 'a player'} attacked this character ${Math.round(ago / 1000)} s ago`;
+    let hold = null;
+    try { hold = this.pvpReturnHold?.() ?? null; } catch { hold = null; }
+    if (hold) return 'inside the return delay after a death to a player';
+    return null;
+  }
+
+  // THE VIGOR AN OVERMATCHED FARMER RESTS BY (raw, of 200). It sits down only SPENT (under `floor`), and then:
+  //   rest     what that rest reaches for. Second Wind as the vigor supply: just clear of the floor (floor + margin,
+  //            above the skill's trigger at 25), because the next exertion below 25 refills it and the resting cap is
+  //            a number the skill itself forbids while it runs. Anything else: all that resting can give THIS
+  //            character (restVigorCeiling -- 80, less a ring of lethargy), so one walk to a wall buys a full bar.
+  //   leave    where a held wall is let go once health is at the resume line (releaseRestedHold).
+  //   blocked  sitting down would earn nothing right now: RestTimer awards vigor only below the server's own rest
+  //            threshold (player.kod:10037), and Second Wind pins that at 10 while it runs (player.kod:1233-1236).
+  overmatchVigor() {
+    const floor = this.policy?.ordinaryVigorFloor ?? ORDINARY_VIGOR_FLOOR;
+    const ceiling = Math.round((this.restVigorCeiling?.() ?? REST_VIGOR_CAP) * skills.VIGOR_MAX);
+    let secondWind = false;
+    try { secondWind = !!this.secondWindFarming?.()?.active; } catch { secondWind = false; }
+    const vigor = this.s?.client?.vitals?.()?.vigor;
+    const raw = vigor?.value == null ? NaN : Number(vigor.value);
+    const threshold = vigor?.rest_threshold == null ? NaN : Number(vigor.rest_threshold);
+    const leave = Math.min(ceiling, floor + OVERMATCH_VIGOR_MARGIN);
+    return { floor, ceiling, leave, rest: secondWind ? leave : ceiling, second_wind: secondWind,
+             blocked: Number.isFinite(raw) && Number.isFinite(threshold) && threshold > 0 && raw >= threshold };
   }
 
   fightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {
     // Second Wind is the vigor supply: a floor would stop the character above 25, the one place the skill pays.
     if (this.secondWindFarming?.()?.active) return 0;
+    // OVERMATCHED: the only vigor a strong farmer waits for is the floor no ordinary activity crosses. Holding out for
+    // the rested 70 or the fed 140 is what parked the Castle Victoria farmers at 79 of 200 against prey half their size.
+    if (this.overmatch?.()?.active) return this.policy.ordinaryVigorFloor ?? ORDINARY_VIGOR_FLOOR;
     if (this.poorFarmingActive()) return this.poorVigorFloor();
     const want = this.wantedFightFloor(plan);
     // An empty larder puts the floor out of reach — resting stops at 80 — so holding

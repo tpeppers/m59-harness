@@ -2444,11 +2444,18 @@ export class Autopilot {
       // THE NO-COMBAT LOCK (sanctuary.mjs noCombatLockAdopt / noCombatLockShepherd): a lockdown's room is whatever
       // NO_COMBAT room the character stands in, and outside one it walks to the nearest. Off by default; postures turn it on.
       lockNoCombat: false,
-      // SECOND WIND FARMING (m59-second-wind.mjs): 'auto' | 'on' | 'off' | { mode, preyRatio, eat }. Auto: a farmer that
-      // knows Second Wind, against a room whose worst prey is at most 1/preyRatio (2) of its max health, keeps no vigor
-      // floor and eats nothing -- the skill refills it at 25 and rolls to improve. Operator 2026-11-05. OFF until a farm
-      // strategy asks (`secondWind`): rolled out on the Icky Cave first, widened once its kill rate is in.
-      secondWindFarming: 'off',
+      // OVERMATCH (m59-overmatch.mjs): 'auto' | 'on' | 'off' | { mode, preyRatio, restBelow, resumeAbove, fleeBelow,
+      // wallAtAttackers }. Auto: a farmer whose maximum health is at least preyRatio (1.8) times the level of the
+      // strongest thing that can stand in its room -- every spawn-table row and every hostile creature in sight --
+      // opens no fight from a wall, takes none for a crowd, rests for health only below restBelow (0.34) and gets up at
+      // resumeAbove (0.67), breaks off below fleeBelow (0.25), and sits for vigor only when spent. 'off' is the lines
+      // and walls this character had before. Operator 2026-11-17/18: the harness default every farm inherits.
+      overmatch: 'auto',
+      // SECOND WIND FARMING (m59-second-wind.mjs): 'auto' | 'on' | 'off' | { mode, preyRatio, eat }. Auto: an OVERMATCHED
+      // farmer that knows Second Wind keeps no vigor floor and eats nothing -- the skill refills it at 25 and rolls to
+      // improve. A preyRatio written here keeps its older meaning (max health over the worst HUNTABLE spawn). Operator
+      // 2026-11-05; 'off' was the default until 2026-11-18, when "rely on second wind" became the order for the fleet.
+      secondWindFarming: 'auto',
       // Relay-optimized farming uses free recovery before buying the rest of the vigor with food.
       relayBeforeRest: false,
       molluskCoverRecovery: false,

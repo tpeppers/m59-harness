@@ -730,7 +730,12 @@ export class SafeSpotsPart {
     // creatures are casters, and every farmer that took a wall at full health to wait for the next spawn walked out to 545 and back,
     // round and round, passing up the mollusks and trees it was there for). Holding a spot counts only while not at full health.
     const full = hp?.max > 0 && hp.value >= hp.max;
-    const resting = (!!this.hold && !full) || (hp?.max > 0 && hp.value / hp.max < (this.policy?.restBelow ?? 0.6));
+    // "Hurt enough to want a spot" is the rest line the farm is run on: the overmatch verdict's while overmatched
+    // (Autopilot.healthLines), the policy's otherwise. A caster is a hostile in sight, so it is in that verdict already.
+    let lines = null;
+    try { lines = this.healthLines?.() ?? null; } catch { lines = null; }
+    const restLine = lines?.overmatch ? lines.rest : (this.policy?.restBelow ?? 0.6);
+    const resting = (!!this.hold && !full) || (hp?.max > 0 && hp.value / hp.max < restLine);
     if (!resting) return false;
     const here = Number(this.s.world?.room?.num);
     const checkCover = this.oceanRangedRecoveryEnabled();
