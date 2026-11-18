@@ -280,7 +280,8 @@ No step mask, no position, a floorless goal or holding a wall: every helper answ
 ## The swing clock — a swing a second, and a fight that is landing runs to the kill
 
 ```bash
-node tools/m59-fight-cadence-test.mjs      # 106, offline: the real Session, Pacer and client on a virtual clock
+node tools/m59-fight-cadence.mjs --fleet prod --since 30m   # the pace of that window's kills, off the ledger
+node tools/m59-fight-cadence-test.mjs      # 112, offline: the real Session, Pacer and client on a virtual clock
 ```
 
 **The server takes one melee swing a second and the farm loop was spending 1.7.** `Player.TryAttack` asks
@@ -357,16 +358,20 @@ gap between two of them: about 1050; `null` with fewer than two), `fight_ms` (th
 excluded), `started_at`, and `handed_back.why` when the round budget and nothing else ended it (`rounds`, `cap`,
 `quiet`, `out_of_reach`, `gate`). The farm pass writes them on the journal's `killed` / `broke off` lines, on
 `farm_combat` in `autopilot status`, and on the ledger's `killed` row, which also carries the whole quarry however many
-calls it took: `kill_calls`, `kill_rounds`, `kill_swings`, `kill_ms`. So, from `killed` rows:
+calls it took: `kill_calls`, `kill_rounds`, `kill_swings`, `kill_ms`. So, from `killed` rows, which is what
+`node tools/m59-fight-cadence.mjs --fleet <name> --since 30m` prints per character (`--who`, `--json`, `--dir`):
 
-| question | read |
-|---|---|
-| is the swing interval the server's? | `swing_ms` ≈ 1050 |
-| seconds per round, hand-backs included (1.71 before) | `kill_ms / kill_rounds` |
-| rounds per kill (median 7 before) | `kill_rounds` |
-| how often is a kill still handed back? | `kill_calls` > 1 |
+| question | read | the report's column |
+|---|---|---|
+| is the swing interval the server's? | `swing_ms` ≈ 1050 | `swing_ms` (median) |
+| seconds per round, hand-backs included (1.71 before) | `kill_ms / kill_rounds` | `s/round` (sum over sum) |
+| rounds per kill (median 7 before) | `kill_rounds` | `rounds/kill` (median) |
+| how often is a kill still handed back? | `kill_calls` > 1 | `handed back` |
 
-A field that was not measured is absent, never zero (an older keeper behind a newer broker reports no `swings`).
+A field that was not measured is absent, never zero (an older keeper behind a newer broker reports no `swings`), and
+the report counts such a row in `kills` and not in `measured`: a keeper still on the old code shows kills with a dash
+in every pace column, which is also how to see which keepers have not been handed off yet. A fight-back kill carries
+its own call's pace and no kill totals.
 
 ## Which quarry first — `hunt_priority`
 

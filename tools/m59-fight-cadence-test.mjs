@@ -36,7 +36,7 @@ import { readToolSource } from './autopilot/source.mjs';
 import {
   SWING_REFACE_DEG, SWING_REPLY_MS, SWING_SETTLE_MS, VITALS_POLL_MS, FARM_PRESS_ROUNDS,
   bearingDeg, degreesApart, swingFacing, notInViewText, outOfReachText, pressVerdict, handedBackNote,
-  swingPace, paceFields, tallyQuarry, killTotals,
+  swingPace, paceFields, tallyQuarry, killTotals, paceReport,
 } from './m59-fight-cadence.mjs';
 
 let passed = 0, failed = 0;
@@ -169,6 +169,26 @@ console.log('\nthe numbers a fight reports');
      tallyQuarry(a, { fought: false, out_of_reach: true, target_id: 40 }, { room: 38 }) === a);
   ok('swings that were not counted are not reported as counted',
      killTotals(tallyQuarry(a, { fought: true, target_id: 40, rounds: 3, started_at: 15600, fight_ms: 3300 }, { room: 38 })).kill_swings === undefined);
+
+  // Reading it back: what `node tools/m59-fight-cadence.mjs --fleet prod --since 30m` prints.
+  const report = paceReport([
+    { kind: 'killed', character: 'Piggy', swing_ms: 1050, kill_rounds: 7, kill_ms: 7700, kill_calls: 1 },
+    { kind: 'killed', character: 'Piggy', swing_ms: 1052, kill_rounds: 16, kill_ms: 19400, kill_calls: 2 },
+    { kind: 'killed', character: 'Piggy', rounds: 3 },                        // written before the swing clock
+    { kind: 'killed', character: 'Lew', swing_ms: 1049, fought_back: true },  // a fight-back kill: its own call's pace only
+    { kind: 'ate', character: 'Lew' },
+  ]);
+  ok('the report counts every kill and measures only the rows that carry the fields',
+     report.total.kills === 4 && report.total.measured === 2 && report.rows[0].character === 'Piggy' &&
+     report.rows[0].kills === 3 && report.rows[0].measured === 2, report);
+  ok('seconds per round is kill time over kill rounds; rounds per kill and the swing interval are medians',
+     report.rows[0].seconds_per_round === 1.18 && report.rows[0].rounds_per_kill === 11.5 &&
+     report.rows[0].swing_ms === 1051 && report.rows[0].handed_back === 1, report.rows[0]);
+  ok('a character with nothing measured reads null, never zero',
+     (lew => lew.kills === 1 && lew.measured === 0 && lew.seconds_per_round === null && lew.rounds_per_kill === null &&
+             lew.handed_back === null && lew.swing_ms === 1049)(report.rows[1]), report.rows[1]);
+  ok('an empty window is an empty report, with no number in it',
+     paceReport([]).total.kills === 0 && paceReport([]).total.seconds_per_round === null && paceReport([]).rows.length === 0);
 }
 
 // ------------------------------------------------------------------ the virtual clock and the model server

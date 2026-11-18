@@ -3151,7 +3151,7 @@ dropped only when a fresh look at its own id says it is broken, un-condemned whe
 sound, kept when no reply (or a reply under another id) came. The last case checks that
 `makeWeapon` passes the keeper's `heldBackIds` and protected names.
 
-## m59-fight-cadence-test.mjs (108) — a swing every 1.05 s, and a landing fight is not handed back every three rounds
+## m59-fight-cadence-test.mjs (112) — a swing every 1.05 s, and a landing fight is not handed back every three rounds
 
 Prod 2026-11-18: four healthy 143–149 health farmers in Castle Victoria journaling "broke off - still alive
 after 3 rounds" five times running on one skeleton, at a median 1.71 s a round against a server that takes a
@@ -3186,7 +3186,8 @@ is pushed on change only. It pins:
   bout or a covered-pull alternate; its gate hands back for health under `engageAt`, vigor through the floor and
   a wall the pass would now take, each only as a change; the journal's `killed` / `broke off` lines and the
   ledger's `killed` row carry `swings`, `fight_ms`, `swing_ms` and, for a kill, `kill_calls`, `kill_rounds`,
-  `kill_swings`, `kill_ms`.
+  `kill_swings`, `kill_ms`; and `paceReport`, which `node tools/m59-fight-cadence.mjs --fleet <name> --since 30m`
+  prints, measures only the rows that carry them and reads null, never zero, where none does.
 
 Run against the loop before the change, the same model gives 4 calls, 15.4 s and 56 packets for that kill.
 `m59-combat-safety-test.mjs` and `m59-healing-wands-test.mjs` call the shipped `attackRounds` on session

@@ -306,7 +306,9 @@ async function main() {
       if (row.t >= from && row.t <= to && (!a.who || a.who.includes(row.character) || a.who.includes(row.agent))) events.push(row);
     }
   }
-  const report = { ...paceReport(events), source: { dir, files: files.length, since: a.since } };
+  // The same kills the board counts: a person's kill the keeper also wrote is one kill (dedupeKills, m59-ledger.mjs).
+  const { dedupeKills } = await import('./m59-ledger.mjs');
+  const report = { ...paceReport(dedupeKills(events)), source: { dir, files: files.length, since: a.since } };
   if (a.json) { console.log(JSON.stringify(report, null, 1)); return; }
   const cell = (v, w) => String(v ?? '-').padStart(w);
   console.log(`kills in the last ${a.since}, from ${files.length} file(s) in ${dir}`);
