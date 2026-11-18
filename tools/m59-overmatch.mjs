@@ -32,6 +32,12 @@
 // a body recovering from a death or carrying poison is a no, and a player-versus-player episode is a no -- a person is
 // not in the table.
 //
+// A RATIO, SO IT MEANS THE SAME AT EVERY SIZE. A monster's blow is about level / 12 (Fuzzy(viLevel / Random(10,15)),
+// monster.kod), so a body at exactly the ratio reaches its flee line with 0.25 x 1.8 x 12 = 5.4 of the room's hardest
+// blows in hand, whether it has 54 health or 250. And nobody small is ever it: the weakest levelled room in the spawn
+// table is level 30, so the smallest body this can call overmatched anywhere has 54 health, and the under-30 rule of
+// skills.safetyFor (do not start a fight below nine tenths) is never the one overridden.
+//
 // WHILE IT IS ON (Autopilot.overmatch / healthLines, tools/autopilot/hunt-setup.mjs and senses.mjs):
 //
 //   rest_below    0.34   the one health line: below it the body stops opening fights and goes to a wall to mend
@@ -51,7 +57,7 @@
 //
 // THE POLICY: `overmatch`, from the broker's `overmatch`:
 //   'auto' (default)   on when the predicate holds
-//   true / 'on'        on whenever farming, whatever the prey (still off while recovering, in PvP, or held)
+//   true / 'on'        on whenever farming, whatever the prey (still off while held, recovering, poisoned or in PvP)
 //   false / 'off'      never: the lines and walls this character had before
 //   { mode, prey_ratio, rest_below, resume_above, flee_below, wall_at_attackers }
 //
