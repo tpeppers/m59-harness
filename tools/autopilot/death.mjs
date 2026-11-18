@@ -123,6 +123,13 @@ export class DeathPart {
         // under a flat trail mean the keeper was not hearing health; small ones mean it was, and the death was fast.
         health_age_ms: frames.map(f => f.health_age_ms ?? null),
         flee_threshold: this.safety?.().fleeAt ?? null,
+        // WAS IT FIGHTING ON THE OVERMATCH LINES (m59-overmatch.mjs)? `flee_threshold` above is asked NOW, usually from
+        // the Underworld, where the verdict is off and the ordinary line answers. This is the last moment the verdict
+        // was ON in this keeper's life: how long before this record, in which room, and the lines it was reading.
+        // Absent for a body that never was -- so every other record is exactly what it was.
+        ...(this.overmatchLast ? { overmatch: { ms_before: capturedAt - this.overmatchLast.at, room: this.overmatchLast.room,
+          ratio: this.overmatchLast.ratio, prey_level: this.overmatchLast.prey_level,
+          rest_below: this.overmatchLast.rest_below, flee_below: this.overmatchLast.flee_below } } : {}),
       },
       // WAS THE KEEPER LOOKING, AND COULD IT HEAR? (prod 2026-10-26: nine deaths "stalled" with a flat health trail.)
       // last_frame_age_ms large: frames stopped, so the trail is old and the keeper was not looking (see watchdog).

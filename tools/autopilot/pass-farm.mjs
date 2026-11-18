@@ -1154,7 +1154,11 @@ export class PassFarmPart {
       // fight into "holding position", "it moved out of reach" and a pull. Whatever this wall was for -- a crowd, a
       // fight opened from it before the farmer outgrew the room, a rest that has ended (a hurt body never reaches this
       // line: the survival stage owns that pass) -- it is not for this. Dropping the claim moves nobody.
-      if (worth.overmatch && this.hold && !worth.hold && !this.isRoomEnchantPost?.()) {
+      //
+      // UNLESS A CROWD WALL WAS ASKED FOR BY NAME. With overmatch.wall_at_attackers set (worth.bar) a wall IS re-taken
+      // at the bar, so that wall keeps the hysteresis above: let go only with the floor clear.
+      if (worth.overmatch && this.hold && !worth.hold && !this.isRoomEnchantPost?.()
+          && (worth.bar == null || (!this.pendingPull && !(this.inReachOfUs()?.length)))) {
         this.releaseHold('overmatched: no wall is held for a fight against prey this far below us');
       }
       if (!opensFightFromWall(this.policy) && this.hold && !worth.hold

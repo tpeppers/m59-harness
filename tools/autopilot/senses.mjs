@@ -14,6 +14,7 @@
 import { relayFarmPeerEvidence } from '../m59-relay-farming.mjs';
 import { publishCooperativePresence } from '../m59-cooperative-logoff.mjs';
 import { publishFleetHealth } from '../m59-fleet-health.mjs';
+import { readSession } from '../m59-healing-session.mjs';
 import { OF } from '../m59-parse.mjs';
 import { opensFightFromWall } from '../m59-policydiff.mjs';
 import { recordRest } from '../m59-restwatch.mjs';
@@ -53,11 +54,24 @@ export class SensesPart {
   // Not overmatched, `rest`, `resume` and `fleeBelow` are the RAW policy values -- possibly undefined -- so each caller
   // keeps the fallback it always had and nothing changes for a body that is not overmatched. A journey does not ask
   // here: travelHoldBelow, travelStartHealth, travelHoldResumeAbove and travel_guard are its own lines.
+  //
+  // A BODY THAT HAS SPENT ITS LOGOFF HEALS AS IT ALWAYS DID. A play-dead logoff opens a healing session
+  // (m59-healing-session.mjs) that bars a second logoff until the body is back at FULL health. An overmatched farmer
+  // that went back to the fight at two thirds would be doing it with its last resort already used, so while a session is
+  // open the resume line is hold_resume_above again (`healing_session: true` says so). The rest line does not move.
   healthLines() {
     const om = this.overmatch?.();
-    if (om?.active)
-      return { overmatch: true, rest: om.rest_below, resume: om.resume_above, engage: om.rest_below,
-               flee: om.flee_below, fleeBelow: om.flee_below };
+    if (om?.active) {
+      const lines = { overmatch: true, rest: om.rest_below, resume: om.resume_above, engage: om.rest_below,
+                      flee: om.flee_below, fleeBelow: om.flee_below };
+      let session = null;
+      try { session = readSession(String(this.s?.name ?? '')); } catch { session = null; }
+      if (session?.logoffs >= 1) {
+        lines.resume = Math.max(lines.resume, this.policy?.holdResumeAbove ?? 0.9);
+        lines.healing_session = true;
+      }
+      return lines;
+    }
     const p = this.policy ?? {}, safe = this.safety();
     return { overmatch: false, rest: p.restBelow, resume: p.holdResumeAbove, engage: safe.engageAt,
              flee: safe.fleeAt, fleeBelow: p.fleeBelow };

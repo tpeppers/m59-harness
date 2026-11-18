@@ -459,7 +459,14 @@ export class SafeSpotsPart {
       finishSurvivalDecision(s,d.id,'died','entered the Underworld');return false;
     }
     const scriptedReady=scriptedWalkDefersVigorRest(this,v),farmReady=farmVigorWorkReady(this,v);
-    if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80 || scriptedReady || farmReady) {
+    // AN OVERMATCHED FARMER'S RECOVERY IS OVER AT ITS RESUME LINE (m59-overmatch.mjs; Autopilot.overmatchRested). This
+    // dispatcher runs before the ladder and ended a recovery only at FULL health and 80 vigor, so it is the rule that
+    // actually kept a farmer on its wall: whatever the rest gate and the wall release thought, the pass never reached
+    // them. The same answer they read, so the three end a rest together. False for a body that is not overmatched
+    // (and for one that is poisoned, recovering from a death or inside a spent healing session's higher line).
+    const whole=d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80;
+    const overmatchReady=!whole && !scriptedReady && !farmReady && this.overmatchRested?.(v)===true;
+    if (whole || scriptedReady || farmReady || overmatchReady) {
       const hold=this.hold, refuge=d.chosen_refuge;
       if ((d.strategy==='rest_safe' || sameLogoff) && d.status==='recovering' && hp===1 && hold?.proven===true &&
           hold.room===s.world?.room?.num && refuge?.room===hold.room && refuge.row===hold.row && refuge.col===hold.col &&
@@ -469,7 +476,7 @@ export class SafeSpotsPart {
           decision_id:d.id, room:hold.room, row:hold.row, col:hold.col, health:v.health.value });
       }
       this._safeLogoffRecovery=null;
-      finishSurvivalDecision(s,d.id,'recovered',farmReady?'healthy farm ready above its effective fighting vigor floor':scriptedReady?'scripted journey health and road vigor restored':'health and resting vigor restored');return false;
+      finishSurvivalDecision(s,d.id,'recovered',farmReady?'healthy farm ready above its effective fighting vigor floor':scriptedReady?'scripted journey health and road vigor restored':overmatchReady?'overmatched: health back at the resume line and vigor clear of its floor':'health and resting vigor restored');return false;
     }
     // A director leases movement for its entire run, while survival/recovery remain
     // with this keeper. Busy announces the holder's errand; it does not lease
@@ -548,6 +555,9 @@ export class SafeSpotsPart {
         }
         return true;
       }
+      // Overmatched, spent, health already at its line, and sitting cannot pay (Second Wind still running): wait on the
+      // wall without sitting, healing or giving the square up (Autopilot.overmatchSpentWait).
+      if(this.overmatchSpentWait?.(v,{behindAWall:true})) return true;
       // The active recovery path used to bypass healUp and wait on vigor alone.
       // Keep the same wall, movement generation and decision while casting one heal.
       if(hp!=null&&hp<0.99&&Date.now()-(this._recoveryHealAt??0)>=3000&&affordableHeal(client,{allow:healAllowOf(this)})){

@@ -162,9 +162,17 @@ export class PassSurvivalPart {
     // and not killing anything, and it pre-empts every rung that would have done something
     // useful. Measured over 26 minutes of commuting: fifteen journeys taken back, every one
     // of them "two hits from death", six refuges, fourteen deaths.
-    const doomedAt = Math.round((v.health?.max ?? 0) * (this.hold
-      ? (this.policy.doomedInSpotBelow ?? 0.3)
-      : (this.policy.doomedInOpenBelow ?? 0.3)));
+    // THE FARMING HEALTH LINES FOR THIS PASS (Autopilot.healthLines): the overmatch verdict's while it is on, the
+    // policy's own otherwise. Read once, here, so every rung below is deciding on the same numbers.
+    const lines = healthLinesOf(this);
+    // OVERMATCHED, "ABOUT TO DIE" IS THE VERDICT'S FLEE LINE AND NO HIGHER (m59-overmatch.mjs). These two thresholds are
+    // policy keys the roster carries (0.3, and 0.35 on a spot for several farmers), and left alone they sit ABOVE the
+    // line an overmatched farmer rests at: a body resting on its wall at 34.7% with a skeleton beside it read as doomed
+    // and logged off, and the verdict's flee line was never the line that fired. Capped, never raised: a policy that
+    // says doomed below 0.2 still means 0.2.
+    const doomedBelow = this.hold ? (this.policy.doomedInSpotBelow ?? 0.3) : (this.policy.doomedInOpenBelow ?? 0.3);
+    const doomedLine = lines.overmatch ? Math.min(doomedBelow, lines.flee) : doomedBelow;
+    const doomedAt = Math.round((v.health?.max ?? 0) * doomedLine);
     const doomed = hp !== null && near.length && v.health?.value != null &&
                    v.health.value <= doomedAt;
     // PLAY DEAD ONLY WHERE STANDING STILL IS ALREADY SAFE. FLEE EVERYWHERE ELSE.
@@ -251,7 +259,7 @@ export class PassSurvivalPart {
                                : 'no wall to run to — freezing is all that is left', {
           health: v.health.value, adjacent: near.length,
           took: !!rushed?.took, why: rushed?.why ?? null,
-          doomed_below: this.policy.doomedInOpenBelow ?? 0.3,
+          doomed_below: doomedLine,
         });
       }
       const wall = this.wallHere();
@@ -405,7 +413,7 @@ export class PassSurvivalPart {
     // against level-75 skeletons stopped fighting at three quarters of its bar and sat until nine tenths. The "never
     // leave a gap" rule above still holds: safety().engageAt IS the rest line while overmatched, so "too hurt to start"
     // and "hurt enough to rest" are one number. Not overmatched, this is the expression it always was.
-    const lines = healthLinesOf(this);
+    // (`lines` was read at the doomed rung above: one reading for the whole pass.)
     const restAt = lines.overmatch
       ? Math.max(sheltered ? lines.resume : lines.rest, recovering ? 1 : 0)
       : Math.max(
@@ -449,23 +457,24 @@ export class PassSurvivalPart {
     // regain a point there until the skill wore off. Against prey this far below us vigor is spent capital: fight down
     // to the floor no ordinary activity crosses, and sit only then.
     //
-    // AND A REST BEGUN SPENT RUNS TO ITS BAR (overmatchVigor: the resting ceiling, or just clear of the floor when
-    // Second Wind is the supply), or the farmer walks to a wall for ten points and back. `spentRestSince` is that latch:
-    // set when the body sits down spent, cleared at the bar -- or as soon as sitting can earn nothing more above the
-    // floor, so a ceiling the keeper did not model can never park a body that is no longer spent.
-    const vigorBar = lines.overmatch ? this.overmatchVigor() : null;
+    // AND A REST BEGUN SPENT RUNS TO ITS BAR -- the resting ceiling, or just clear of the floor when Second Wind is the
+    // supply -- or the farmer walks to a wall for ten points and back. Autopilot.overmatchVigorRest keeps that latch
+    // (`spentRestSince`) and is the same answer the survival dispatcher and the wall release read.
+    const vigorBar = lines.overmatch ? this.overmatchVigorRest(this.s.client?.vitals?.()) : null;
     if (!vigorBar) this.spentRestSince = null;
-    else if (spent) this.spentRestSince ??= Date.now();
-    else if (this.spentRestSince && (!Number.isFinite(rawVigor) || rawVigor >= vigorBar.rest || vigorBar.blocked))
-      this.spentRestSince = null;
-    const vigorNeedsRest = vigorBar ? (spent || !!this.spentRestSince) : ((vig !== null && vig < vigorRestAt) || spent);
+    const vigorNeedsRest = vigorBar ? vigorBar.needs : ((vig !== null && vig < vigorRestAt) || spent);
     // farmVigorWorkReady is the not-overmatched farmer's excuse for the last few points under the cap; an overmatched
     // one has no such trigger to be excused from, and letting it lift a spent rest early is the ten-point walk again.
     const hurt = healthNeedsRest || vigorNeedsRest&&!scriptedWalkDefersVigorRest(this,v)&&!(vigorBar ? false : farmVigorWorkReady(this,v));
-    // A healthy overmatched farmer sitting down SPENT is making a voluntary vigor stop, exactly as a Relay farmer is:
-    // it takes the same cover without the emergency logoff a health recovery performs on arrival.
-    const overmatchVigorOnly = lines.overmatch && hp !== null && !healthNeedsRest;
-    const relayVigorOnly = (relayRest || overmatchVigorOnly) && hp !== null && !healthNeedsRest;
+    const relayVigorOnly = relayRest && hp !== null && !healthNeedsRest;
+    // THE LOGOFF BELONGS TO THE FLEE LINE. An overmatched farmer above its flee line is making a VOLUNTARY stop -- for
+    // spent vigor, or for health under its rest line -- exactly as a Relay farmer is: it takes the same cover without
+    // the play-dead logoff a recovery performs on arrival (takeRecoverySpot). The doomed and flee rungs above still log
+    // off below the line, and a wall that fails still answers with a reconnect (restBroken; the dispatcher's
+    // replacement). What this stops is one logoff per rest: each opens a healing session that bars a second logoff and
+    // every town trip until FULL health (m59-healing-session.mjs), and a farmer that goes back to the fight at two
+    // thirds may not see full health for an hour.
+    const voluntaryStop = relayVigorOnly || (lines.overmatch && hp !== null && hp >= lines.flee);
     // A healthy, positive-karma Ocean support post can recover vigor in place.
     // Do not turn a two-point vigor deficit into emergency wall or logoff work.
     const openSupportRest = hurt && !healthNeedsRest && oceanSupportCanRestOpen(this, s, c);
@@ -483,7 +492,7 @@ export class PassSurvivalPart {
     // In a NO_COMBAT room nothing can swing, so recovery needs no wall: rest where we stand (see continueSurvivalDecision).
     const noCombatHere = roomIsNoCombat(s);
     if((hurt || relayRest) && !openSupportRest && !noCombatHere && this.currentRecoveryWall()) {
-      if (relayVigorOnly) this.adoptRecoveryWall();
+      if (voluntaryStop) this.adoptRecoveryWall();
       else await this.takeRecoverySpot('recovery needed while already at a safe wall');
       // TAKE THE SPOT AS A SIDE EFFECT AND LET THE PASS CARRY ON — the same correction the
       // branch below already carries, in its own words: "returned as soon as takeSafeSpot()
@@ -694,9 +703,11 @@ export class PassSurvivalPart {
         && (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000)) {
       this.wallTriedAt = Date.now();
       // A voluntary vigor stop can use the same cover without the emergency
-      // reconnect that takeRecoverySpot may perform at arrival.
-      const got = await (relayVigorOnly
-        ? this.takeSafeSpot('low vigor — a wall before a rest', null,
+      // reconnect that takeRecoverySpot may perform at arrival. So can an overmatched farmer's stop above its flee line,
+      // which may be for health: it says which.
+      const got = await (voluntaryStop
+        ? this.takeSafeSpot(healthNeedsRest ? 'hurt, and far stronger than this room — a wall before a rest'
+                                            : 'low vigor — a wall before a rest', null,
                             { source: 'recovery', recovery: true, nearestOnly: true })
         : this.takeRecoverySpot('hurt in a room that spawns monsters — a wall before a rest'))
         .catch(() => false);
@@ -1042,25 +1053,11 @@ export class PassSurvivalPart {
       // falls straight through to rest. Probing an unproved wall stays a rest.
       if (relayRest && (sheltered || !combatZone) && await tryFarmRelay(this, ctx, relayProfile).catch(() => false))
         return HANDLED;
-      // OVERMATCHED, SPENT, AND SITTING DOWN CANNOT PAY. Second Wind is still running: the server holds the rest
-      // threshold at 10 until it ends (5 to 10 minutes after it fired, secwind.kod GetDuration) and refuses food with it,
-      // so a rest here earns nothing and reads to the code below as "rested and gained nothing -- giving the square up",
-      // a reconnect and another wall, once every dozen seconds. The floor still stands (a spent body does not fight);
-      // what changes is that it WAITS where it is, on its feet, and says so. The moment the skill ends the threshold
-      // returns, `blocked` clears, and the ordinary rest below takes the vigor to its bar.
-      if (vigorBar && vigorNeedsRest && vigorBar.blocked && !healthNeedsRest && !relayRest && !openSupportRest) {
-        this.doing = 'waiting';
-        if (!this._spentWaitNotedAt || Date.now() - this._spentWaitNotedAt > 60_000) {
-          this._spentWaitNotedAt = Date.now();
-          this.note('spent, and resting cannot pay yet — waiting it out', {
-            vigor: rawVigor, floor: vigorBar.floor, rest_threshold: v?.vigor?.rest_threshold ?? null,
-            behind_a_wall: sheltered, waited_s: this.spentRestSince ? Math.round((Date.now() - this.spentRestSince) / 1000) : 0,
-            why: 'the server awards rest vigor only below its own threshold, and that is at or under what this body ' +
-                 'already has (Second Wind pins it at 10 while it runs). Sitting down would earn nothing',
-            then: `when it ends: rest to ${vigorBar.rest}, then back to the fight` });
-        }
-        return HANDLED;
-      }
+      // OVERMATCHED, SPENT, HEALTH AT ITS LINE, AND SITTING DOWN CANNOT PAY (Second Wind is still running): wait on its
+      // feet rather than rest, gain nothing and have the code below give the square up. Autopilot.overmatchSpentWait has
+      // the argument, and is the same answer the survival dispatcher gives when the recovery is its to run.
+      if (vigorBar && !healthNeedsRest && !relayRest && !openSupportRest &&
+          this.overmatchSpentWait(this.s.client?.vitals?.(), { behindAWall: sheltered })) return HANDLED;
       if (testing && near.length)
         this.note('testing this spot the only way there is', {
           where: { col: this.hold.col, row: this.hold.row }, crowd: near.length,
@@ -1249,8 +1246,8 @@ export class PassSurvivalPart {
       // AN OVERMATCHED BODY ALREADY AT ITS RESUME LINE SAT DOWN FOR VIGOR, and flat health in a vigor rest is no reading
       // of the square: there was no health it was waiting for. Without this, a full-health spent rest that timed out
       // was "the square failing quietly", answered with a reconnect.
-      const overmatchVigorRest = lines.overmatch && hp !== null && hp >= lines.resume;
-      if (sheltered && !relayRestProgress && !overmatchVigorRest && r.reached_target !== true && afterHp != null && hp != null && afterHp <= hp) {
+      const satForVigorOnly = lines.overmatch && hp !== null && hp >= lines.resume;
+      if (sheltered && !relayRestProgress && !satForVigorOnly && r.reached_target !== true && afterHp != null && hp != null && afterHp <= hp) {
         // A healthy vigor stall in a quiet sanctuary is no evidence of aggro.
         // Recheck the same native body, room and recent combat after the rest.
         const before = r.from?.health, native = c.vitals?.()?.health;

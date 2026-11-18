@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // OVERMATCH (m59-overmatch.mjs), offline: the policy's normal form and its refusals, the verdict table, and then the
 // wiring -- the one predicate asked by the combat wall (holdWorthwhile), the health lines (safety / healthLines), the
-// rest gate (passFleeAndRest's `hurt`), the fight floor and the wall release -- on fake keepers standing in Castle
-// Victoria (38: level-75 skeletons, level-55 zombies). No broker, keeper process, server or roster.
+// rest gate (passFleeAndRest's `hurt`), the survival dispatcher, the fight floor and the wall release -- on fake
+// keepers standing in Castle Victoria (38: level-75 skeletons, level-55 zombies). No broker, keeper process, server or
+// roster.
 //
 //   node tools/m59-overmatch-test.mjs
 import './m59-test-ledger.mjs';        // FIRST: the keeper records events; see that file
@@ -113,6 +114,9 @@ test('verdict: every inactive answer says why in one sentence', () => {
     [{ maxHealth: null }, /own maximum health unknown/],
     [{ maxHealth: 0 }, /own maximum health unknown/],
     [{ recovering: true }, /recovering from a death/],
+    [{ ailing: 'poison' }, /^poison: the ordinary ladder shelters and mends it first$/],
+    [{ ailing: true }, /^poisoned or diseased: /],
+    [{ roomUnknown: ['shadow mummy'] }, /this room can spawn a creature of unknown level \(shadow mummy\)/],
     [{ pvp: true }, /player-versus-player/],
     [{ pvp: 'a player attacked this character 12 s ago' }, /a player attacked this character 12 s ago/],
     [{ roomLevels: [] }, /nothing known about what this room spawns/],
@@ -136,6 +140,7 @@ test("verdict: 'on' needs only farming, a known bar, no recovery and no PvP; 'of
   assert.equal(on({ farming: false }).active, false);
   assert.equal(on({ maxHealth: undefined }).active, false);
   assert.equal(on({ recovering: true }).active, false);
+  assert.equal(on({ ailing: 'poison' }).active, false);
   assert.equal(on({ pvp: true }).active, false);
   assert.equal(on({ held: 'on an errand' }).active, false);
   assert.equal(overmatchVerdict({ policy: 'off', farming: true, maxHealth: 500, roomLevels: [10] }).active, false);
@@ -250,8 +255,15 @@ test('keeper: the verdict is gathered from the room it stands in, and says why i
   why({ arrange: k => { k.ap.stopping = true; } }, /stopping/);
   why({ arrange: k => { k.ap.claims.set('work', { owner: 'dum', until: Date.now() + 60_000 }); } }, /the work faculty is held by dum/);
   why({ arrange: k => { k.ap.recoverUntilWhole = true; } }, /recovering from a death/);
+  why({ arrange: k => { k.c.ailments = () => [{ name: 'Poison' }]; } }, /^poison: the ordinary ladder shelters/);
+  // The Mausoleum can spawn a shadow mummy whose level nobody wrote down: that is not a room to be confident in.
+  why({ maxHealth: 400, room: 1006, policy: { hunt: 'mummy', assignedRoom: 1006 }, monsters: [] }, /this room can spawn a creature of unknown level/);
   why({ arrange: k => { k.ap.playerAttacks = [{ at: Date.now() - 20_000, name: 'Morpheus' }]; } }, /Morpheus attacked this character 20 s ago/);
   why({ arrange: k => { k.s.combat = { active: { id: 'k1', pvp: true } }; } }, /faculty is held by combat:k1|player-versus-player/);
+  // A townsperson the room creates is not a creature of unknown level: the Badlands' priestess does not veto the
+  // verdict, and its level-100 groundworm decides it.
+  assert.equal(keeper({ maxHealth: 200, room: 45, policy: { hunt: 'ant', assignedRoom: 45 } }).ap.overmatch().active, true);
+  assert.match(keeper({ maxHealth: 150, room: 45, policy: { hunt: 'ant', assignedRoom: 45 } }).ap.overmatch().why, /level 100/);
   // A player's blow long ago is not an episode any more.
   const calm = keeper({ monsters: two }); calm.ap.playerAttacks = [{ at: Date.now() - 6 * 60_000, name: 'Morpheus' }];
   assert.equal(calm.ap.overmatch().active, true);
@@ -272,6 +284,12 @@ test('keeper: one journal note on each edge, never one a question', () => {
   k.objects.delete(300);
   k.ap.overmatch();
   assert.equal(said(k, ON).length, 2);
+  // Between connections there is no body to read: off, and NOT an edge (a play-dead logoff is not news about the lines).
+  const client = k.s.client; k.s.client = null;
+  assert.equal(k.ap.overmatch().active, false); assert.match(k.ap.overmatch().why, /no connection/);
+  k.s.client = client; k.ap.overmatch();
+  assert.equal(said(k, ON).length, 2);
+  assert.equal(said(k, 'overmatch off: back to the ordinary lines and walls').length, 1);
   // A keeper that was never overmatched says nothing at all.
   const weak = keeper({ maxHealth: 80, monsters: two });
   for (let i = 0; i < 5; i++) weak.ap.overmatch();
@@ -404,10 +422,10 @@ test('vigor: under the resting cap is not hurt; only spent is, and that is a vol
   assert.ok(spent.ap.spentRestSince > 0);
 });
 
-test('health: below a third is hurt, and that is the recovery wall', async () => {
+test('health: below a third is hurt and goes for a wall; a hair above it is not', async () => {
   const k = keeper({ maxHealth: 150, health: 50, vigor: 120, monsters: [{ rsc: 1, dcol: 6 }] });      // 33%, nothing adjacent
   assert.equal(await k.pass(), HANDLED);
-  assert.equal(k.walls[0][0], 'recovery');
+  assert.deepEqual(k.walls[0], ['voluntary', 'hurt, and far stronger than this room — a wall before a rest']);
   // No wall to be had in this fixture, so the room-retreat rung speaks -- on the overmatch rest line, not the policy's 60%.
   assert.equal(said(k, 'leaving the room to recover safely')[0].detail.retreat_below, '34%');
   const fine = keeper({ maxHealth: 150, health: 52, vigor: 120, monsters: [{ rsc: 1, dcol: 6 }] });   // 34.7%
@@ -416,7 +434,7 @@ test('health: below a third is hurt, and that is the recovery wall', async () =>
 
 test('a rest begun spent runs to its bar: the resting cap, or just clear of the floor when Second Wind is the supply', async () => {
   const plain = keeper({ maxHealth: 150, health: 150, vigor: 15, monsters: two });
-  assert.deepEqual(plain.ap.overmatchVigor(), { floor: 20, ceiling: 80, leave: 30, rest: 80, second_wind: false, blocked: false });
+  assert.deepEqual(plain.ap.overmatchVigor(), { floor: 20, ceiling: 80, rest: 80, second_wind: false, raw: 15, blocked: false });
   await plain.pass();                                   // sits down spent
   plain.state.vigor = 45; plain.walls.length = 0; plain.ap.wallTriedAt = 0;
   await plain.pass();                                   // 45: no longer spent, still resting to the cap
@@ -468,16 +486,21 @@ test('a health rest ends just above the resume line, and the wall is given back 
 });
 
 test('releaseRestedHold: the resume line and the vigor bar while overmatched; nine tenths and the cap otherwise', async () => {
-  const held = over => {
+  const held = (over, arrange = null) => {
     const k = keeper({ monsters: [{ rsc: 1, dcol: 6 }], ...over });
     k.ap.hold = { room: 38, col: 20, row: 20, takenAt: Date.now(), proven: true };
+    arrange?.(k);
     return k.ap.releaseRestedHold();
   };
+  const satDownSpent = k => { k.ap.spentRestSince = Date.now() - 30_000; };
   assert.equal(await held({ health: 105, vigor: 70 }), true);                                    // 70%
   assert.equal(await held({ health: 96, vigor: 70 }), false);                                    // 64%: under the line
   assert.equal(await held({ health: 105, vigor: 15 }), false);                                   // spent
-  assert.equal(await held({ health: 105, vigor: 25 }), false);                                   // under floor + margin
-  assert.equal(await held({ health: 105, vigor: 25, restThreshold: 10 }), true);                 // ...which sitting cannot raise
+  assert.equal(await held({ health: 105, vigor: 25 }), true);                                    // a health rest: vigor is no reason to stay
+  assert.equal(await held({ health: 105, vigor: 25 }, satDownSpent), false);                     // a rest begun spent runs to its bar (80)
+  assert.equal(await held({ health: 105, vigor: 80 }, satDownSpent), true);
+  assert.equal(await held({ health: 105, vigor: 31, secondWind: true }, satDownSpent), true);    // ...which is 30 on Second Wind
+  assert.equal(await held({ health: 105, vigor: 25, restThreshold: 10 }, satDownSpent), true);   // ...or wherever sitting stops paying
   // The pull posture does not hold an overmatched farmer on its wall.
   assert.equal(await held({ health: 105, vigor: 70, policy: { pullToSafeWall: true } }), true);
   // Something in reach: the wall is still doing its job for this pass (the farm stage gives it back).
@@ -528,4 +551,110 @@ test('plumbing: the strategy-file key validates, refuses the health lines, and y
   assert.equal(KEY_FACULTY.overmatch, 'work');
   assert.deepEqual(ARG_KEYS.overmatch, ['overmatch']);
   assert.ok(PROTECTED_NAMES.restBelow && PROTECTED_NAMES.fleeBelow, 'the survival names are still refused at the top of a file');
+});
+
+// ------------------------------------------------------------------ the logoff, the session and the dispatcher
+
+test('the logoff belongs to the flee line: above it a hurt overmatched farmer takes its wall the voluntary way', async () => {
+  // 30%: under the rest line, over the flee line, two things adjacent, and a roster that says doomed_in_spot_below 0.35.
+  // The wall is there to be taken (this fixture's default has none, and with none the open-floor rungs below are the
+  // ones the ladder always had).
+  const k = keeper({ maxHealth: 150, health: 45, vigor: 120, monsters: two, policy: { doomedInSpotBelow: 0.35 } });
+  k.ap.takeSafeSpot = async function (why) {
+    k.walls.push(['voluntary', why]);
+    this.hold = { room: 38, col: 20, row: 20, takenAt: Date.now(), proven: true };
+    return { took: true };
+  };
+  k.state.onRead = st => { st.health = 105; };            // the rest it then takes is over at the first read
+  assert.equal(await k.pass(), HANDLED);
+  assert.deepEqual(k.walls[0], ['voluntary', 'hurt, and far stronger than this room — a wall before a rest']);
+  assert.ok(!k.walls.some(w => w[0] === 'logoff' || w[0] === 'recovery'), JSON.stringify(k.walls));
+  assert.equal(said(k, 'took a wall before resting').length, 1);
+  // 24%: under the flee line with something adjacent. The doomed rung's wall rush, and the logoff, as ever.
+  const low = keeper({ maxHealth: 150, health: 36, vigor: 120, monsters: two });
+  await low.pass();
+  assert.match(low.walls[0][1], /^doomed at 36\/150 with 2 adjacent/);
+  assert.ok(low.walls.some(w => w[0] === 'logoff'), JSON.stringify(low.walls));
+  // With overmatch off the same 30% body IS doomed, on the policy's own threshold (0.3): nothing moved for it.
+  const today = keeper({ maxHealth: 150, health: 45, vigor: 120, monsters: two, policy: { overmatch: 'off' } });
+  await today.pass();
+  assert.match(today.walls[0][1], /^doomed at 45\/150/);
+  assert.ok(today.walls.some(w => w[0] === 'logoff'));
+  // And on a held wall the roster's 0.35 does not outrank the verdict's rest line: 34.7% with something adjacent is a
+  // farmer resting, not a farmer about to die.
+  const onWall = keeper({ maxHealth: 150, health: 52, vigor: 120, monsters: two, policy: { doomedInSpotBelow: 0.35 } });
+  onWall.ap.hold = { room: 38, col: 20, row: 20, takenAt: Date.now(), proven: true };
+  onWall.state.onRead = st => { st.health = 105; };
+  await onWall.pass();
+  assert.ok(!onWall.walls.some(w => w[0] === 'logoff'), JSON.stringify(onWall.walls));
+});
+
+test('a body that has spent its logoff heals as it always did: the old resume line until the healing session closes', async () => {
+  const { noteLogoff } = await import('./m59-healing-session.mjs');
+  const k = keeper({ maxHealth: 150, health: 105, vigor: 70, monsters: [{ rsc: 1, dcol: 6 }] });
+  assert.equal(k.ap.healthLines().resume, 0.67);
+  assert.equal(k.ap.overmatchRested(), true);
+  noteLogoff('omtest', { why: 'fixture', room: 38 });
+  try {
+    const lines = k.ap.healthLines();
+    assert.equal(lines.resume, 0.9, 'hold_resume_above, as before');
+    assert.equal(lines.rest, 0.34, 'the rest line does not move');
+    assert.equal(lines.healing_session, true);
+    assert.equal(k.ap.overmatchRested(), false, '70% is not rested inside a spent session');
+    k.ap.hold = { room: 38, col: 20, row: 20, takenAt: Date.now(), proven: true };
+    assert.equal(await k.ap.releaseRestedHold(), false);
+    k.state.health = 136;
+    assert.equal(await k.ap.releaseRestedHold(), true, '91% is');
+  } finally { rmSync(join(HEALING, 'omtest.json'), { force: true }); }
+  assert.equal(k.ap.healthLines().resume, 0.67);
+});
+
+test('the survival dispatcher ends an overmatched recovery at the same lines, and never one that is poisoned', async () => {
+  const { chooseSurvivalDecision, currentSurvivalDecision } = await import('./m59-survival-decision.mjs');
+  const resting = over => {
+    const k = keeper({ monsters: [{ rsc: 1, dcol: 6 }], ...over });
+    k.ap.hold = { room: 38, col: 20, row: 20, takenAt: Date.now(), proven: true };
+    chooseSurvivalDecision(k.s, { strategy: 'rest_safe', status: 'recovering', reason: 'fixture', chosen_refuge: { room: 38, row: 20, col: 20 } });
+    return k;
+  };
+  // 70% and 60 vigor: over the resume line, not spent. The recovery is over; the ladder gets the pass.
+  const done = resting({ health: 105, vigor: 60 });
+  assert.equal(await done.ap.continueSurvivalDecisionStep(), false);
+  assert.equal(currentSurvivalDecision(done.s), null);
+  // The same reading with overmatch off is a recovery still running: it rests to FULL health and the resting cap.
+  const today = resting({ health: 105, vigor: 60, policy: { overmatch: 'off' } });
+  assert.equal(today.ap.overmatchRested(), false);
+  assert.ok(currentSurvivalDecision(today.s));
+  // 60%: under the resume line. Still recovering, overmatched or not.
+  assert.equal(resting({ health: 90, vigor: 60 }).ap.overmatchRested(), false);
+  // Spent: still recovering, whatever the health.
+  assert.equal(resting({ health: 150, vigor: 15 }).ap.overmatchRested(), false);
+  // POISONED: the verdict is off, so the old rule holds the wall until the poison ends.
+  const sick = resting({ health: 140, vigor: 80 });
+  sick.c.ailments = () => [{ name: 'poison' }];
+  assert.equal(sick.ap.overmatch().active, false);
+  assert.match(sick.ap.overmatch().why, /poison/);
+  assert.equal(sick.ap.overmatchRested(), false);
+  assert.equal(sick.ap.safety().engageAt, 0.75);
+});
+
+test('a crowd wall asked for by name keeps its hysteresis; the default gives a wall back at once', () => {
+  const src = Autopilot.prototype.passFarm.toString();
+  // The release an overmatched farmer makes: at once when no crowd wall is configured, and with the floor clear when
+  // overmatch.wall_at_attackers put one back (or the wall would be re-taken on the next pass, the thrash the bar is for).
+  assert.match(src, /worth\.overmatch && this\.hold && !worth\.hold/);
+  assert.match(src, /worth\.bar == null \|\| \(!this\.pendingPull && !\(this\.inReachOfUs\(\)\?\.length\)\)/);
+  // And the release every other farmer makes is untouched (m59-safespot-test pins its shape too).
+  assert.match(src, /!opensFightFromWall\(this\.policy\) && this\.hold && !worth\.hold\s*\n\s*&& !this\.pendingPull && !\(this\.inReachOfUs\(\)\?\.length\)/);
+  assert.match(src, /this\.fightOpensFromWall\(\) && !this\.hold && room\?\.num != null/);
+});
+
+test('a death record says whether the body was fighting on the overmatch lines', () => {
+  const k = keeper({ maxHealth: 150, monsters: two });
+  k.ap.overmatch();
+  assert.ok(k.ap.overmatchLast.at > 0);
+  assert.deepEqual({ ...k.ap.overmatchLast, at: 0 }, { at: 0, room: 38, ratio: 2, prey_level: 75, rest_below: 0.34, flee_below: 0.25 });
+  const never = keeper({ maxHealth: 80, monsters: two });
+  never.ap.overmatch();
+  assert.equal(never.ap.overmatchLast, undefined);
 });

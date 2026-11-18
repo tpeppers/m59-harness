@@ -376,11 +376,11 @@ export class PassErrandPart {
       return false;
     }
     this._poisonHoldSaid = false;
-    // AN OVERMATCHED FARMER'S REST ENDS AT ITS RESUME LINE (m59-overmatch.mjs; Autopilot.healthLines), the same line the
-    // rest gate in passFleeAndRest rests to, so the two cannot disagree about whether a rest is over. Its vigor bar is
-    // overmatchVigor().leave -- clear of the floor it sat down under, or the ceiling if that is lower -- and not "all
-    // that resting can give", which Second Wind makes unreachable for as long as it runs. A road keeps its own floor:
-    // a journey is not a farm.
+    // AN OVERMATCHED FARMER'S REST ENDS AT ITS RESUME LINE (m59-overmatch.mjs; Autopilot.healthLines), and its vigor is a
+    // reason to stay only while a rest begun SPENT is still running to its bar -- not "all that resting can give", which
+    // Second Wind makes unreachable for as long as it runs. Autopilot.overmatchRested is that answer, and it is the same
+    // one the rest gate in passFleeAndRest and the survival dispatcher read, so the three cannot disagree about whether
+    // a rest is over. A road keeps its own floor: a journey is not a farm.
     let lines = null;
     if (!onARoad) { try { lines = this.healthLines?.() ?? null; } catch { lines = null; } }
     const overmatched = lines?.overmatch === true;
@@ -388,15 +388,8 @@ export class PassErrandPart {
       ? (this.policy.travelHoldResumeAbove ?? 1)
       : overmatched ? lines.resume : (this.policy.holdResumeAbove ?? 0.9);
     if (hp === null || hp < floor) return false;
-    if (overmatched) {
-      const bar = this.overmatchVigor();
-      const raw = v?.vigor?.value;
-      // Still under the bar, and sitting can still raise it: the rest is not finished. (When it cannot -- the skill is
-      // running -- a body that is no longer spent has nothing left to wait for here.)
-      if (this.spentRestSince && Number.isFinite(raw) && raw < bar.rest && !bar.blocked) return false;
-      if (Number.isFinite(raw) && raw < bar.floor) return false;
-      if (Number.isFinite(raw) && raw < bar.leave && !bar.blocked) return false;
-    } else if (vig !== null && vig < this.restVigorCeiling()) return false;
+    if (overmatched) { if (!this.overmatchRested(v)) return false; }
+    else if (vig !== null && vig < this.restVigorCeiling()) return false;
     this.note(overmatched ? 'leaving the wall — rested to the overmatch lines'
                           : 'leaving the wall — full health and all the vigor resting can give', {
       health: `${v?.health?.value}/${v?.health?.max}`,
