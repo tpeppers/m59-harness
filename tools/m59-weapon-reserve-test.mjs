@@ -349,7 +349,8 @@ console.log('\nB. THE ORDER: SALE PLAN, THEN USELESS GEAR, THEN THE CHEAPEST PRO
   ok('fixture: 51 bulk free', f.free().bulk === 51, J(f.free()));
   await f.ap.unarmedMakeSpace(f.c, 2_000_000_000);
   ok('what was going to be sold goes first, and covers it: no protected stock is dropped',
-     f.has('orc tooth') === 791 && f.has('fairy wing') < 12 && f.free().bulk >= 90 + 0 && !f.ledger.some(l => l.beyond_plan), J(f.floorDrops));
+     f.has('orc tooth') === 791 && f.onFloor('fairy wing') === 10 && f.floorDrops.length === 1 && !f.ledger.some(l => l.beyond_plan) &&
+     f.ap.weaponReserveNow().unarmed === false, J(f.floorDrops));
 }
 {
   // A banned scimitar nothing protects (70 bulk) is dead weight: it goes before any tooth.
@@ -391,11 +392,10 @@ console.log('\nB. WHAT IS NEVER DROPPED');
 }
 {
   // Food goes last and never the last of it; working stock above its floor goes only by the overage.
-  const f = body({ pack: [['spider eye', 180], ['shilling', 10], ['leather armor', 0]], worn: ['leather armor'], might: 0 });
-  // 180 x 9 = 1620 + 150 -> 0 free... trim to leave some room
-  f.c.inventory.find(o => o.nameRsc === 'spider eye').amount = 170;                 // 1530 + 150 = 1680: 20 free
+  const f = body({ pack: [['spider eye', 170], ['shilling', 10], ['leather armor', 0]], worn: ['leather armor'], might: 0 });   // 1530 + 150: 20 free
   await f.ap.unarmedMakeSpace(f.c, 2_000_000_000);
-  ok('with nothing but food it drops only what the shortfall needs (8 of 170)', f.has('spider eye') === 162 && f.free().bulk === 92, J(f.floorDrops));
+  ok('with nothing but food it drops only what the shortfall needs (8 of 170: 72 bulk onto 20)', f.has('spider eye') === 162 &&
+     f.onFloor('spider eye') === 8 && f.ap.weaponReserveNow().unarmed === false, J(f.floorDrops));
   const g = body({ pack: [['spider eye', 1], ['mushroom', 400], ['shilling', 10]], might: 0, protect: ['mushroom'] });
   await g.ap.unarmedMakeSpace(g.c, 2_000_000_000);
   ok('the last of a food is never dropped', g.has('spider eye') === 1, J(g.floorDrops));

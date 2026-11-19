@@ -37,6 +37,7 @@
 import { weighItem } from './m59-items.mjs';
 import { estimateItemSellValue } from './m59-item-value.mjs';
 import { dropSpec } from './m59-parse.mjs';
+import { isQuestItem } from './m59-quest-items.mjs';
 
 export const MAKE_SPACE_MAX = 400;
 // Never dropped whatever the plan says. Food is the larder's to decide; bows and arrows are the
@@ -68,6 +69,9 @@ export function annotateRow(row, { heldBack = new Set() } = {}) {
   let block = null;
   if (row.equipped) block = 'equipped';
   else if (NEVER.test(row.name)) block = 'never dropped (money, bow, arrows or the chalice)';
+  // The client withholds a quest item from every drop packet (m59-client.mjs withoutQuestItems), so choosing one
+  // would only spend the turn on a drop that is never sent.
+  else if (isQuestItem(row.name)) block = 'a quest item: never dropped';
   else if (row.role === 'food') block = 'food: the larder decides';
   else if (heldBack.has(Number(row.id))) block = 'held back by the keeper (enchanted or just delivered)';
   else if (row.recommended !== true) block = 'not recommended for sale';

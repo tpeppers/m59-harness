@@ -722,7 +722,7 @@ export class PassCombatPart {
     if (short) {
       const held = made?.refused ?? beyond?.refused ?? null;
       record({ outcome: held ? 'held' : 'blocked', short_by: short, dropped: dropped.map(d => `${d.amount} ${d.name}`),
-        kept: (beyond?.kept?.length ? beyond.kept : made?.kept ?? []).slice(0, 6),
+        kept: (beyond?.kept?.length ? beyond.kept : made?.kept ?? []).slice(0, 8),
         why: held ? `${held}: ${made?.refused ? made?.why : beyond?.why}` : 'nothing more in the pack may be dropped' });
       if (!held) this.unarmedNoRoomSaid(short);
     } else record({ outcome: 'room', dropped: dropped.map(d => `${d.amount} ${d.name}`) });
