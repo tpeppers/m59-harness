@@ -888,14 +888,15 @@ export class HallPart {
              ? { ok: true } : { ok: false, why: `graded ${g} in the chest, asked for ${w.grade}` })
           : drawGradeAllows(row, w, { gear: isGearName(row.name) });
         if (!allow.ok) { out.refused_ids.push({ id: row.id, name: row.name, grade: g, why: allow.why }); continue; }
+        const before = await readPack();
+        const had = new Set(before.map(x => Number(x.id)));
+        // The last moment before the get: a save that has begun since this chest was read voids the id.
         if (!idsStillCurrent(c, stamp)) {
           out.chest_ids_stale = true;
           out.stopped = 'a server save began between the chest read and the get: nothing more is drawn by id this visit';
           out.short_ids.push({ id: row.id, why: out.stopped });
           break;
         }
-        const before = await readPack();
-        const had = new Set(before.map(x => Number(x.id)));
         const n = Number(o.amount) >= 1 ? Math.min(Number(o.amount), Number(w.amount) > 0 ? Number(w.amount) : Number(o.amount)) : null;
         await s.pacer.submit('trade', () => (typeof c.getFromContainer === 'function'
           ? c.getFromContainer(dropSpecFor(o, n)) : c.get(o.id))).catch(() => {});
