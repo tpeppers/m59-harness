@@ -26,6 +26,14 @@
 //
 // `sale_plan` (the broker tool) shows these same rows, with `droppable` and `drop_block`, so what
 // it shows is exactly what make_space would choose from.
+//
+// AND IT SAYS WHY IT DROPPED NOTHING. A pack that is all product has an empty sale plan, and
+// make_space used to answer that with `dropped: []` and one sentence. Prod 2026-11-18: four farmers
+// unarmed for hours on exactly that reply, every ten minutes. A result that is short now carries
+// `kept`: the biggest stacks left in the pack and what protects each (`drop_block`), so the reader
+// knows whether the answer is a sale, a hall trip or a different order. The unarmed remedy
+// (Autopilot.unarmedMakeSpace, tools/m59-weapon-reserve.mjs) goes further than this function ever
+// does; `dropPicks` below is the one drop-and-verify loop both use.
 import { weighItem } from './m59-items.mjs';
 import { estimateItemSellValue } from './m59-item-value.mjs';
 import { dropSpec } from './m59-parse.mjs';
@@ -34,6 +42,8 @@ export const MAKE_SPACE_MAX = 400;
 // Never dropped whatever the plan says. Food is the larder's to decide; bows and arrows are the
 // archers' kit (sold only on Ko'catan, never bought back on the mainland); the chalice is a duty.
 const NEVER = /shilling|coin|\bbow\b|\barrows?\b|chalice/i;
+/** Money, a bow, arrows or the chalice: never dropped by any make-space path, plan or no plan. */
+export const neverDropped = name => NEVER.test(String(name ?? ''));
 
 function unitValue(name) {
   try { return estimateItemSellValue(name, { quantity: 1 }).sell_value; } catch { return null; }
@@ -189,6 +199,50 @@ export async function makeSpace(s, { bulk = null, weight = null, planOf, capacit
     freed: { bulk: 0, weight: 0 }, dropped: [], short_by: { bulk: Math.max(0, needed.bulk - free0.bulk),
                                                            weight: Math.max(0, needed.weight - free0.weight) } });
   const { picks } = chooseDrops(summary.rows, { free: free0, need: needed });
+  const { dropped, refused, freed } = await dropPicks(s, picks, { maxDrops,
+    whyOf: p => `${p.row.reason || 'on the sale plan'}` + (p.row.unit_value == null ? '; value unknown' : `; ~${p.row.unit_value} each`) });
+  const after = freeOf(capacityOf()) ?? { bulk: free0.bulk + freed.bulk, weight: free0.weight + freed.weight };
+  const short_by = { bulk: Math.max(0, needed.bulk - after.bulk), weight: Math.max(0, needed.weight - after.weight) };
+  const met = !short_by.bulk && !short_by.weight;
+  // WHAT STAYED, AND WHAT PROTECTS IT -- only when short, read from the pack as it is now.
+  const kept = met ? [] : keptStacks(salePlanSummary(planOf(), { heldBack: heldBack() }).rows);
+  const notes = [
+    ...(met ? [] : ['the sale plan could not cover it; nothing outside the plan is ever dropped' +
+      (kept.length ? `. Kept: ${kept.slice(0, 4).map(k => `${k.amount} ${k.name} (${k.why})`).join('; ')}` : '')]),
+    ...(exact ? [] : ['the load is a lower bound (something is unweighed), so the free space is an upper bound and ok stays false']),
+  ];
+  return out({
+    ok: met && exact, before, after: { free: after }, freed, dropped, short_by,
+    ...(refused.length ? { refused_items: refused } : {}),
+    ...(kept.length ? { kept } : {}),
+    ...(notes.length ? { note: notes.join('; ') } : {}),
+    why,
+  });
+}
+
+/**
+ * The stacks a plan does NOT let go of, biggest first, each with what protects it: [{ name, amount, bulk, weight,
+ * why }]. `rows` are salePlanSummary rows. A row the plan sells only part of is listed for the part it keeps.
+ */
+export function keptStacks(rows = [], { top = 8 } = {}) {
+  const out = [];
+  for (const r of rows) {
+    const keepN = r.droppable ? r.amount - r.sale_amount : r.amount;
+    if (!(keepN > 0)) continue;
+    out.push({ name: r.name, amount: keepN, bulk: r.unit ? r.unit.bulk * keepN : null, weight: r.unit ? r.unit.weight * keepN : null,
+               why: r.droppable ? 'working stock reserved by the loadout' : (r.drop_block ?? 'kept') });
+  }
+  return out.sort((a, b) => (b.bulk ?? -1) - (a.bulk ?? -1)).slice(0, top);
+}
+
+/**
+ * DROP THESE PICKS, EACH VERIFIED BY A RE-READ OF THE PACK. `picks` are chooseDrops' ({ row, amount }); `whyOf(pick)`
+ * is the reason recorded with each drop. The id must still be in the pack and still be the same thing; a drop the
+ * server did not take frees nothing and comes back under `refused`. The one loop make_space and the unarmed remedy
+ * (Autopilot.unarmedMakeSpace) both drop through.
+ */
+export async function dropPicks(s, picks = [], { maxDrops = 40, whyOf = () => 'make_space' } = {}) {
+  const c = s.need ? s.need() : s.client;
   const dropped = [], refused = [];
   const freed = { bulk: 0, weight: 0 };
   for (const p of picks.slice(0, maxDrops)) {
@@ -204,20 +258,7 @@ export async function makeSpace(s, { bulk = null, weight = null, planOf, capacit
     if (!gone) { refused.push({ name: p.row.name, why: 'the server did not take the drop' }); continue; }
     freed.bulk += p.row.unit.bulk * gone;
     freed.weight += p.row.unit.weight * gone;
-    dropped.push({ id: p.row.id, name: p.row.name, amount: gone, why: `${p.row.reason || 'on the sale plan'}` +
-      (p.row.unit_value == null ? '; value unknown' : `; ~${p.row.unit_value} each`) });
+    dropped.push({ id: p.row.id, name: p.row.name, amount: gone, why: whyOf(p), ...(p.row.tier ? { tier: p.row.tier } : {}) });
   }
-  const after = freeOf(capacityOf()) ?? { bulk: free0.bulk + freed.bulk, weight: free0.weight + freed.weight };
-  const short_by = { bulk: Math.max(0, needed.bulk - after.bulk), weight: Math.max(0, needed.weight - after.weight) };
-  const met = !short_by.bulk && !short_by.weight;
-  const notes = [
-    ...(met ? [] : ['the sale plan could not cover it; nothing outside the plan is ever dropped']),
-    ...(exact ? [] : ['the load is a lower bound (something is unweighed), so the free space is an upper bound and ok stays false']),
-  ];
-  return out({
-    ok: met && exact, before, after: { free: after }, freed, dropped, short_by,
-    ...(refused.length ? { refused_items: refused } : {}),
-    ...(notes.length ? { note: notes.join('; ') } : {}),
-    why,
-  });
+  return { dropped, refused, freed };
 }
