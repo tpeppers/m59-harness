@@ -3888,12 +3888,27 @@ async function runStep(ctx, agent, rawStep, state) {
       if (!step.seller || !Array.isArray(step.lines) || !step.lines.length)
         return { ok: false, outcome: 'nothing_to_buy',
                  why: !step.seller ? 'shop step has no seller' : 'shop step has no lines to buy' };
-      const list = await call('shop', { agent, seller: step.seller }, 60_000).catch(() => null);
-      const items = list?.items || [];
+      let list = await call('shop', { agent, seller: step.seller }, 60_000).catch(() => null);
+      let items = list?.items || [];
+      // SOME GOODS ARE LISTED ONLY AFTER THEIR NAME IS SAID. Tova lists entroot berries only once a
+      // customer says "entroot berries" (mrbart.kod), and Frisconar his solagh the same way; asked
+      // straight, the shelf has no such row and this step used to fail with "has no row matching",
+      // which reads as a merchant who does not sell it. 2026-11-19: a buy of entroot from Tova had to
+      // be hand-written for exactly this. So when a line has no row and the step carries `say`, the
+      // phrase is said to the room, the shelf is read again, and only then is the missing row a
+      // refusal. A listing is good for ONE purchase (merchants restock instantly; the listed amount
+      // is per request), which is why every lot is its own step and reads the shelf afresh.
+      if (step.say && step.lines.some(line => !items.some(i => line.match.test(i.name || '')))) {
+        await call('say', { agent, text: String(step.say) }, 60_000).catch(() => null);
+        await sleep(1500);
+        list = await call('shop', { agent, seller: step.seller }, 60_000).catch(() => null);
+        items = list?.items || [];
+      }
       const buy = [];
       for (const line of step.lines) {
         const row = items.find(i => line.match.test(i.name || ''));
-        if (!row) return { ok: false, why: `${step.seller} has no row matching ${line.match}` };
+        if (!row) return { ok: false, why: `${step.seller} has no row matching ${line.match}` +
+          (step.say ? ` (even after saying "${step.say}")` : '') };
         // THE RUNTIME NET, for what the plan-time check could not see. `abilitiesTargetedBy`
         // reads a built artefact a fresh clone may not have, and a teacher can list an
         // ability under a name the table does not carry. Caught here the errand still stops

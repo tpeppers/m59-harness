@@ -743,6 +743,53 @@ console.log('\npurchases are read back from the pack');
   ok('a purchase that landed is a success', bought && r.results.a1.ok === true);
 }
 
+console.log('\ngoods listed only after their name is said (Tova, entroot berries, 2026-11-19)');
+{
+  // Tova lists entroot berries only once a customer SAYS "entroot berries" (mrbart.kod). Asked straight, the
+  // shelf has no such row and the step failed "has no row matching", which reads as a merchant who does not
+  // sell it -- so a buy of entroot had to be hand-written. With `say`, the phrase is said, the shelf is read
+  // again, and the lot is bought.
+  const shelf = [{ id: 7, name: 'mug' }];
+  const inv = { a1: [] };
+  const said = [];
+  fakeBroker({ rooms: { a1: 202 }, inventory: inv, shopItems: shelf });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o) => {
+    if (!o || o.method !== 'POST') return realFetch(u, o);
+    const b = JSON.parse(o.body);
+    if (b.params.name === 'say') {
+      said.push(b.params.arguments.text);
+      if (/entroot berries/i.test(b.params.arguments.text) && !shelf.some(i => i.id === 9)) shelf.push({ id: 9, name: 'entroot berry' });
+    }
+    if (b.params.name === 'shop' && b.params.arguments.buy_ids) {
+      const got = b.params.arguments.buy_ids.find(x => x.id === 9);
+      if (got) inv.a1 = [{ name: 'entroot berry', amount: (inv.a1[0]?.amount ?? 0) + got.amount }];
+    }
+    return realFetch(u, o);
+  };
+  const r = await fleetScript({ name: 'say to list', fleet: 'testfleet', agents: ['a1'],
+    steps: [shop('Tova', [{ match: /^entroot berr(y|ies)$/i, amount: 50 }], { say: 'entroot berries' })], onLog: quiet });
+  globalThis.fetch = realFetch;
+  ok('the phrase was said to the seller', said.includes('entroot berries'), JSON.stringify(said));
+  ok('and the lot was bought once the shelf listed it', r.results.a1.ok === true && inv.a1[0]?.amount === 50, r.results.a1.why);
+}
+{
+  // Without `say` nothing is said, and a missing row is still the refusal it always was.
+  const shelf = [{ id: 7, name: 'mug' }];
+  const said = [];
+  fakeBroker({ rooms: { a1: 202 }, inventory: { a1: [] }, shopItems: shelf });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o) => {
+    if (o && o.method === 'POST') { const b = JSON.parse(o.body); if (b.params.name === 'say') said.push(b.params.arguments.text); }
+    return realFetch(u, o);
+  };
+  const r = await fleetScript({ name: 'no say', fleet: 'testfleet', agents: ['a1'],
+    steps: [shop('Tova', [{ match: /^entroot berr(y|ies)$/i, amount: 50 }])], onLog: quiet });
+  globalThis.fetch = realFetch;
+  ok('without say, nothing is said', said.length === 0, JSON.stringify(said));
+  ok('and the missing row is still a refusal that names it', r.results.a1.ok === false && /no row matching/.test(r.results.a1.why ?? ''), r.results.a1.why);
+}
+
 console.log('\none agent failing does not fail the others');
 {
   fakeBroker({ rooms: { a1: 39, a2: 39 }, health: { a1: { value: 1, max: 44 } } });

@@ -14,6 +14,12 @@
 // (in counters of 50, as buy-purple did), or LEARN the ability when the item is "learn:<name>" ->
 // verify by count (goods) or by the ability list (learn) -> walk to `back`.
 //
+// GOODS LISTED ONLY AFTER THEIR NAME IS SAID (2026-11-19). Tova lists entroot berries only once a customer says
+// "entroot berries" (mrbart.kod); asked straight, her shelf has no such row and this errand failed "has no row
+// matching". Each lot now says the item name (or `say=<phrase>`; `say=none` never) when the row is missing, reads
+// the shelf again, and only then refuses. Every lot is its own shop step, so each reads a fresh listing: a
+// listing is good for ONE purchase (merchants restock instantly; the listed amount is per request).
+//
 // A WANDERER IS FOUND FIRST (Maleval, Parrin Aragone, Miriana, Tendrath, Izzio). Each has a fixed
 // list of 4-5 rooms and jumps to a random other one every 30-90 min; a player in his room holds him
 // for up to six of those ticks (m59-research/reports/wandering-npcs.md, tools/m59-wanderers.mjs).
@@ -68,6 +74,7 @@ export const script = {
     camp: { type: 'room', default: 0, describe: 'camp: which of his rooms to wait in (0: the first in the search order)' },
     waitMin: { type: 'number', default: 120, min: 5, max: 1440, describe: 'how long to look for a wanderer before giving up' },
     back: { type: 'room', default: 0, describe: 'where to walk afterwards (0: stay at the counter)' },
+    say: { type: 'string', default: '', describe: 'said to the seller when the item is not on the shelf, then the shelf is read again (some goods are listed only after their name is said, like the entroot berries Tova sells). Empty: the item name; none: never' },
   },
 
   async steps(p) {
@@ -106,7 +113,9 @@ export const script = {
       const rx = itemMatch(item);
       let before = null;
       steps.push(verify(async ({ call }) => { before = countIn(await call('inventory', { agent }, 60_000), rx); return true; }, 'count before'));
-      for (let left = n; left > 0; left -= 50) steps.push(shop(seller, [{ match: rx, amount: Math.min(50, left) }], { optional: true }));
+      // Said only when a lot finds no row: entroot at Tova's is listed only after "entroot berries" is said (2026-11-19).
+      const say = String(p.say ?? '').trim().toLowerCase() === 'none' ? null : (String(p.say ?? '').trim() || String(item));
+      for (let left = n; left > 0; left -= 50) steps.push(shop(seller, [{ match: rx, amount: Math.min(50, left) }], { optional: true, ...(say ? { say } : {}) }));
       steps.push(verify(async ({ call }) => {
         const after = countIn(await call('inventory', { agent }, 60_000), rx);
         console.log(`  ${agent}: ${item} ${before} -> ${after} (asked ${n})`);
