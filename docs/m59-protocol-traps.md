@@ -33,6 +33,15 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Things the wire, the server or the sou
   down by the very keeper it left recovery with, and a sat-down character can neither cast
   nor step. Send `stand` before every attempt, not once at the top.
 
+- **A CONTAINER'S CONTENTS CARRY EACH OBJECT'S GRADE; READING ONLY THE NAME IS HOW A CURSED WEAPON GETS DRAWN.**
+  BP_OBJECT_CONTENTS sends every object through the same `extractObject` as the pack (icon, name, flags, rarity), and
+  every reader of a chest used to keep `{id, name, amount}`. On 2026-11-19 hall-sell asked hall 714 for "short sword" by
+  name; the chest handed over the UNIDENTIFIED one (grade 100) beside a plain one, and it wielded itself in Animal's hand
+  (`item.kod:508-514`: a cursed item entering a user's pack posts `TryUseItem`). Grade 100 is "something is still hidden",
+  and the curse can be the hidden thing. Read the grade (`gradedRow`, `gradeOf` in `m59-items.mjs`: a missing grade is
+  UNKNOWN, never normal), and draw a specific piece by id from a reading taken in the same visit, never across a save. See
+  [`m59-economy.md`](m59-economy.md#a-chest-reading-carries-each-objects-grade-and-a-draw-listens-to-it-hall_withdraw-by-name-by-id).
+
 - **A `send` REPLY NAMES ITS RECEIVER BEFORE IT NAMES ITS ANSWER, so a bare
   `/OBJECT (\d+)/` reads the wrong number.** The maintenance socket answers
 

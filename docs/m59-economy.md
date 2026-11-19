@@ -687,11 +687,20 @@ node tools/m59-fleet-repl.mjs  ->  hall-sell-mundane agents=t10 hall=714
 - **The buyer is the hall's town smith** (`HALL_BUYERS`: 714 Fehr'loi Qan @113, 703 Quintor @374, 713 Ixla cha'Totlak
   @2003) or `sell_at=Name@room`; another hall without `sell_at` is refused. What the smith refuses by its kod rule
   (`m59-buyers` `willBuy`: Quintor and nerudite) is planned as a drop, never walked to a counter.
-- **Magic is decided in the pack, never from the cache.** The chest cache stores names, so a drawn piece is classified by
-  its rarity grade (unidentified 100, cursed 200, attribute grades 1/2/4) AND its look text, re-checking the id the look
-  answered for: a timed attribute (dedicated, glowing, holy, fiery, shrouded) grades `normal` and only the look shows it.
-  Anything that cannot be proved mundane (no grade, no look) is `unknown` and goes back with the magic. Pieces put back are
-  counted per name, so the next lap asks hall_withdraw (which takes by NAME) for that many more instead of re-planning them.
+- **Only a NORMAL grade is ever drawn, and it is drawn BY ID.** 2026-11-19 05:34Z, hall 714: the first version asked the
+  chests for "short sword" by name, the chest handed over an UNIDENTIFIED one (grade 100) lying beside the plain one, and it
+  wielded itself in Animal's hand in place of his hammer, cursed; 12 of the other 14 pieces drawn were graded unidentified or
+  uncommon. The chest had sent every object's grade (see "A chest reading carries each object's grade" below). Now each lap
+  reads the chests fresh (`hall_withdraw wants: []`, whose reply carries `contents` with ids and grades and a
+  `chest_ids_as_of` stamp), plans from that reading with every uncommon / rare / legendary / unidentified / cursed and
+  UNGRADED piece left in the chest and counted per name and grade in the plan (`excluded.graded`, "graded unidentified:
+  left in the chest"), picks the ids of normal-graded pieces (`selectIds`), and draws those ids with the stamp. A save since
+  the read voids the ids (`chest_ids_stale`): the lap re-reads and re-selects by name and grade, once. A fresh reading with
+  no grades at all (a keeper older than graded chest reads) refuses the lap: nothing is ever drawn by name.
+- **And magic is decided again in the pack.** A drawn piece is classified by its rarity grade AND its look text, re-checking
+  the id the look answered for: a timed attribute (dedicated, glowing, holy, fiery, shrouded) grades `normal` and only the
+  look shows it. Anything that cannot be proved mundane (no grade, no look) is `unknown` and goes back with the magic, by id;
+  a normal-graded piece put back is counted aside and its id skipped while it stands.
 - **Every sale is judged by the pack and the purse** (the id left, the shillings rose), one piece per call; a piece that
   left with no money is reported as given away. Refused pieces are dropped at the buyer (or `drop_room`), never in the hall.
 - **The runner's own kit is a floor**: its carried count of every name at the first draw is never dipped under, and only
@@ -700,6 +709,35 @@ node tools/m59-fleet-repl.mjs  ->  hall-sell-mundane agents=t10 hall=714
   pattern); `proceeds=keep` leaves them with the runner.
 
 `node tools/m59-hall-sell-test.mjs` is the guard.
+
+### A chest reading carries each object's grade, and a draw listens to it (`hall_withdraw` by name, by id)
+
+BP_OBJECT_CONTENTS sends every object in a container through the same ExtractObject as the pack (`m59-parse.mjs`
+`extractObject`: icon, name, flags, **rarity**). Until 2026-11-19 the client's `container` event, the broker's `container`
+tool, the keeper's `contents` op, `refreshChestCache` and the chest cache all kept `{id, name, amount}` and dropped the rest,
+which is how hall-sell drew a cursed short sword by name (above). Now:
+
+- **One row shape**, `gradedRow` (`m59-items.mjs`): `id, name, amount` as before, plus `rarity`, `rarity_name`, `icon_rsc`,
+  `flags` (and `identified_as` from the broker tool). The `container` tool shows it; `node tools/m59-hall-sell.mjs plan
+  --hall 714` shows what a reading excluded by grade.
+- **The cache keeps one row per object with its grade, and no object ids** (`chestCacheRow`, `m59-storage.mjs`): a pile of
+  eight long swords of mixed grades is eight rows, and a row written before 2026-11-19 has no grade and reads as UNKNOWN
+  (`gradeOf`), never normal. Ids are handles every save renumbers; the only place to pick one is a `hall_withdraw` reply's
+  `contents`, stamped `chest_ids_as_of` (the client's save count and whether a save was running, taken before the read).
+- **By name, gear takes its class's plain grade only** (`drawGradeAllows`): a weapon or wearable (the kod buying categories,
+  rings included) is taken only at grade normal -- or rare for the nine classes that are rare by themselves (nerudite bow,
+  magic bow, gold sword, magic spirit helmet, the five school charms: `CLASS_GRADE`). Unidentified, attribute grades and
+  ungraded rows stay in the chest (`diag[item].left_by_grade` says how many). `magic: true` on a want (a courier fetching a
+  known magic weapon) or `grades: [...]` lifts it; **cursed is never drawn**. Reagents, shillings and wands by name are as
+  before. The keeper's own stockpile draw follows the same rule.
+- **By id: `wants: [{id, item, grade}]` with `chest_ids_as_of`** (`Autopilot.hallDrawIds`). Three refusals, never guesses:
+  (1) a save that has begun since the stamp, or between this call's own chest read and the get, voids the ids
+  (`chest_ids_stale`, `stopped`): re-read and re-select by name and grade; no stamp is refused too. (2) The object under that
+  id in the chest must still carry the name and grade asked for, or it is `refused_ids`. (3) What arrives in the pack is judged
+  by id, name AND grade; anything else (a recycled handle, a stray) is put straight back into the same chest (`returned_ids`)
+  and the draw stops. `took_ids` lists what came. `"id:N"` strings are id wants as well, never names.
+
+`node tools/m59-chest-grade-test.mjs` is the guard.
 
 ## Per-creature loot: `loot_only`
 

@@ -2057,13 +2057,24 @@ the records it describes.
   against a hundred million banked and a three-digit roster without waiting months for
   them, and the staleness line is pinned both ways — present when a balance is dated, and
   ABSENT when none is, because a warning that always fires is one nobody reads. Offline) and
-  `node tools/m59-hall-sell-test.mjs` (87 — **the `hall-sell-mundane` errand's pure half**: the operator's keep list
+  `node tools/m59-hall-sell-test.mjs` (113 — **the `hall-sell-mundane` errand's pure half**: the operator's keep list
   (bows, plate armour, helms) and the not-rebuyable filter, a buyer that refuses a class by rule planning a drop and an
-  unknown rule offering, a drawn piece proved mundane ONLY by a normal grade plus a look text for the same id (unidentified,
-  attribute grades, timed attributes in the look, a missing grade, a missing look and a look for another id all stay out
-  of the sale), lap sizing that keeps the weapon reserve free and asks for extra pieces of a name known to hide magic ones,
-  the runner's own kit as a count floor through a mid-lap renumbering, and the errand compiled against a fixture cache.
-  Offline) and
+  unknown rule offering, ONLY A NORMAL CHEST GRADE IS A CANDIDATE (eight long swords of mixed grades plan one; every
+  non-normal grade and an ungraded row are excluded per name and grade, "graded unidentified: left in the chest"; a cache
+  from before graded rows plans nothing), the ids picked from a fresh reading (`selectIds`: normal only, put-back ids
+  skipped) and read back by name (`idDrawnRows`), a drawn piece proved mundane ONLY by a normal grade plus a look text for
+  the same id, lap sizing that keeps the weapon reserve free, the runner's own kit as a count floor, the errand compiled
+  against a fixture cache, and THE 2026-11-19 INCIDENT DRIVEN through the lap against a fake broker: a chest with a plain
+  and an unidentified short sword asks hall_withdraw for the plain one by id and never by name, a save between the read
+  and the draw re-reads and re-selects, and a reading with no grades refuses the lap. Offline) and
+  `node tools/m59-chest-grade-test.mjs` (67 — **a guild chest's reading carries each object's grade, and a draw listens
+  to it**: the client's BP_OBJECT_CONTENTS event keeps rarity/icon/flags (a built packet), `gradedRow`/`gradeOf` (null and
+  absent are UNKNOWN, never normal), `drawGradeAllows` (gear by name takes its class's plain grade only -- a nerudite bow
+  is rare by class -- `magic: true`/`grades` lift it, cursed never), the cache keeping one row per object with its grade
+  and no object ids, and the REAL `hallWithdraw`/`hallDrawIds` on a fake session: by name the unidentified short sword is
+  left, by id exactly that object is taken, and the three handle rules -- a save since the read (or during this call's read
+  or get) voids the ids, an id naming another object now is refused, and a wrong-graded or stray arrival is put straight
+  back and stops the draw -- plus the source shape of the broker `container` tool and the keeper `contents` op. Offline) and
   `node tools/m59-buyers-test.mjs` (38 — **what a merchant will actually buy**: that a gem
   is also a reagent and the apothecaries' exclusion turns on it, that Marion's smith takes
   no body armour, that an exclusive rule excludes a sibling of the same family, and above
