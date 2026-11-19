@@ -1045,7 +1045,10 @@ export function unarmedBlocker({ vigor = null, mana = null, bulkFree = null,
                 : (mana != null && mana < manaNeeded) ? 'mana'
                 : (bulkFree != null && bulkFree < bulkNeeded) ? 'room'
                 : 'neither';
-  const code = blocker === 'neither' ? 'UNARMED_CANNOT_CAST' : 'UNARMED_NO_DONOR';
+  // AND 'room' IS NOT A WAIT FOR MANA EITHER (2026-11-18). It carried UNARMED_NO_DONOR, the code the supervisor steps
+  // over as "waiting for casting mana", so four farmers with full packs were left alone for up to 5.3 hours by the one
+  // layer that reads refusals as data. Pack space is made, never awaited: UNARMED_NO_ROOM (m59-weapon-reserve.mjs).
+  const code = blocker === 'neither' ? 'UNARMED_CANNOT_CAST' : blocker === 'room' ? 'UNARMED_NO_ROOM' : 'UNARMED_NO_DONOR';
   // Only the two that come back on their own are a WAIT. Pack space does not regenerate and
   // a policy refusal does not pass, so promising a wait for either is a promise nothing keeps.
   const wait = blocker === 'vigor' ? 'VIGOR_FOR_CREATE_WEAPON'
@@ -1591,7 +1594,17 @@ const STUCK_IN_PLACE = /could not reach|cannot reach|no route|refused|no floor|s
 // with a code, on the channel the supervisor and the board already read. Declaring is not
 // a cure. It is the difference between a character nobody can help and a character nobody
 // can SEE, and only one of those is fixable by whoever is on shift.
-export const STALL_LEVERS = Object.freeze({ blink: STUCK_IN_PLACE });
+//
+// UNARMED WITH NO ROOM FOR A WEAPON HAS TWO (2026-11-18, m59-weapon-reserve.mjs). It recited
+// `unarmed -- 60 bulk free, needs 70 to hold one` 17,710 times with `lever: null`, while the thing that acts on it
+// was sitting in the same pass. `make_room` is the keeper's own ordered remedy (Autopilot.unarmedMakeSpace: the sale
+// plan, gear it may not use, then the fewest units of the cheapest protected stack), on its ten-minute clock.
+// `hand_over` is what is left when that remedy says nothing more may be dropped: a town trip where the strategy has
+// a town, or somebody else's hands. Neither is a spell this file casts from noProgress; both are an ANSWER to "what
+// could act on this", which is the question `stuck.lever` exists for.
+const UNARMED_ROOM_BLOCKED = /^unarmed -- \d+ bulk free, needs \d+ to hold one; nothing more may be dropped/;
+const UNARMED_ROOM_SHORT = /^unarmed -- \d+ bulk free, needs \d+ to hold one$/;
+export const STALL_LEVERS = Object.freeze({ blink: STUCK_IN_PLACE, hand_over: UNARMED_ROOM_BLOCKED, make_room: UNARMED_ROOM_SHORT });
 export const stallLever = (why) => {
   const s = String(why ?? '');
   for (const [name, test] of Object.entries(STALL_LEVERS)) if (test.test(s)) return name;
@@ -2419,6 +2432,12 @@ export class Autopilot {
       lootOnly: null,
       // How far the loot list reaches (m59-loot-filter.mjs lootFloorSpec). null = the default { scope: 'floor', armor: true }.
       lootOnlyFloor: null,
+      // THE WEAPON RESERVE (m59-weapon-reserve.mjs; autopilot `weapon_reserve`, a strategy's `weaponReserve`). true: a
+      // body that fights and carries no usable spare leaves on the floor whatever would take free pack space under a
+      // replacement weapon's 90 bulk and 90 weight, an unarmed body picks up no weapon it may not wield, and one that
+      // is unarmed and short of that room makes it (sale-plan rows, gear it may not use, then the fewest units of the
+      // cheapest protected stack). false: loot to the brim and drop only sale-plan rows, as before 2026-11-18.
+      weaponReserve: true,
       // CREATURES NEVER SWUNG AT, even when they attack (m59-spare.mjs): ['spider'] keeps the Icky
       // Cave's spiders alive so they fill its spawn cap and no orc can spawn (operator, 2026-10-02).
       // A filter on targets and on the attack packet; survival (rest, flee, recover) is unchanged.
@@ -3588,6 +3607,8 @@ export class Autopilot {
     await this.applyCurseCycle();
     this.applyUnrevealedWeaponLoot();
     s.setLootOnly?.(this.policy.lootOnly ?? null, { matcherFor: k => this.huntMatch(k), floor: this.policy.lootOnlyFloor ?? null });
+    // THE WEAPON RESERVE, ASKED AT THE MOMENT OF EVERY SWEEP (m59-weapon-reserve.mjs): a weapon breaks between passes.
+    s.setWeaponReserve?.(() => this.weaponReserveNow());
     if (!s.live) { this.note('not in game'); return; }
     // THE NO-COMBAT LOCK ADOPTS THE ROOM IT STANDS IN before anything below can move the body (policy lockNoCombat).
     this.noCombatLockAdopt();

@@ -10,15 +10,20 @@
 //
 // 18 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
 //   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, townSaleOptions, townHeldBackIds, townReceivedOnTop, ownSalePlan, salePlanView,
-//   makeSpaceNow, postShoppingPlan,
+//   makeSpaceNow, reserveDropRules, makeRoomBeyondPlan, reserveDroppedStock, postShoppingPlan,
 //   ensurePurchaseFunds, bankRun, walkingFloat, bankAboveNow, purseLeaseStatus
 import { readBankerLine } from '../m59-bank.mjs';
 import { readSession } from '../m59-healing-session.mjs';
 import { guildPlan } from '../m59-guildwants.mjs';
-import { MARKET_KEEP, isFood, weighPack } from '../m59-items.mjs';
-import { makeSpace, salePlanSummary } from '../m59-make-space.mjs';
+import { addStashClaim, dibsFile } from '../m59-dibs.mjs';
+import { stashClaim } from '../m59-floor-cache.mjs';
+import { intentForSession } from '../m59-inventory-intent.mjs';
+import { MARKET_KEEP, isFood, itemNameKey, weighPack } from '../m59-items.mjs';
+import { chooseDrops, dropPicks, freeOf, makeSpace, neverDropped, salePlanSummary } from '../m59-make-space.mjs';
+import { isQuestItem } from '../m59-quest-items.mjs';
+import { beyondThePlan, isShort, shortOf, unwieldableWhy } from '../m59-weapon-reserve.mjs';
 import { bankAboveOf, leaseCarry, walkingFloatOf } from '../m59-purse-lease.mjs';
-import { norm } from '../m59-loadout.mjs';
+import { keepTest, norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
 import { farmTownKeep, farmTownMenu, farmTownSaleLoadout, usesOceanCourier } from '../m59-farm-town.mjs';
@@ -28,6 +33,10 @@ import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
 import { countsOf, overlayRequests } from '../m59-reagent-autobalance.mjs';
 import * as skills from '../m59-skills.mjs';
 import { BANKS, FOOD_SHOP, ITEM_VALUE, MARKET_STOPS, REST_VIGOR_CAP, TITHE_FLEET, VIGOR_CAP, hungerNeedsTown, purchaseEnabled, reagentTargetFor, splitBySourcing, townDestinations , townTable } from '../m59-autopilot.mjs';
+
+// How far around the square it stood on a stack dropped by the unarmed remedy is reserved (dibs `near`). The drop lands
+// on the dropper's own square; one square of slack covers a position the client had only predicted.
+const RESERVE_DROP_RADIUS = 1;
 
 export class ShoppingPart {
   // @part 1

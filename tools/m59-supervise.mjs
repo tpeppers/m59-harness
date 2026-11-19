@@ -871,6 +871,14 @@ async function round(n) {
       console.log(`   ${r.character} is unarmed with NOTHING short — not a wait: ` +
                   reason.slice(0, 80));
       // Falls through deliberately: this one is a candidate for the bounded restart below.
+    } else if (refused('UNARMED_NO_ROOM')) {
+      // UNARMED WITH NO ROOM FOR A WEAPON IS NOT A WAIT AND NOT A RESTART EITHER. A fresh keeper has the same pack; the
+      // keeper makes the room itself on a ten-minute clock (Autopilot.unarmedMakeSpace, m59-weapon-reserve.mjs) and a
+      // restart only resets that clock. When it says nothing more may be dropped, the refusal names what is in the
+      // way, and that needs a town trip or a hand-over, which is not this loop's to give.
+      console.log(`   leaving ${r.character} alone: ${reason.slice(0, 70)} ` +
+                  '(unarmed with no room for a weapon — the keeper makes room itself; a restart makes none)');
+      continue;
     } else if (refused('UNARMED_NO_DONOR') || r.waiting_on?.code === 'MANA_FOR_CREATE_WEAPON' ||
         /needs \d+ to make one|resting for the mana|regain mana|unarmed —/i.test(reason)) {
       console.log(`   leaving ${r.character} alone: ${reason.slice(0, 70)} ` +

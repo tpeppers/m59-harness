@@ -151,6 +151,10 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'neverEat', keys: ['neverEat'], faculty: 'economy', arg: 'never_eat',
     normalize: normItems('neverEat'), merge: 'union' },
   { path: 'overfarm', keys: ['overfarm'], faculty: 'economy', arg: 'overfarm', normalize: normOverfarm },
+  // THE WEAPON RESERVE (m59-weapon-reserve.mjs): true (the keeper's default) keeps a replacement weapon's room free of
+  // loot and lets an unarmed body short of it make it; false is loot to the brim and sale-plan drops only. What to pick
+  // up and what to drop, so `economy`, like lootOnly and overfarm.
+  { path: 'weaponReserve', keys: ['weaponReserve'], faculty: 'economy', arg: 'weapon_reserve', normalize: bool('weaponReserve') },
   // WHEN A FULL PACK GOES TO TOWN (sellAtLoad, 0..1): 1.0 is "sell only when the pack is full". Where it goes is the town
   // table for where the character stands (m59-autopilot.mjs townTable: the island sells at Ko'catan, never the mainland).
   { path: 'sellAtLoad', keys: ['sellAtLoad'], faculty: 'economy', arg: 'sell_at_load',
