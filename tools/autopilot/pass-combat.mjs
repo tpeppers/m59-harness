@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 14 methods: damageRate, timeToDeath, passArm, unarmedRoomShort, unarmedMakeSpace, unarmedNoRoomSaid, unarmedNoRoomLever,
+// 15 methods: damageRate, timeToDeath, passArm, roomShortOfReserve, unarmedRoomShort, unarmedMakeSpace, unarmedNoRoomSaid, unarmedNoRoomLever,
 //   declareUnarmedNoRoom, unarmedNoRoomDetail, engagePlayerTarget, respondToConflict, passPlaybook, fightNow, passFightBack
 import * as grudge from '../m59-grudge.mjs';
 import { tryFarmGearCache } from '../m59-farm-gear-cache.mjs';
@@ -665,16 +665,25 @@ export class PassCombatPart {
   }
 
   /**
-   * How far an unarmed body is short of the room its next weapon needs (the weapon reserve, both dimensions):
-   * { bulk, weight }, or null when it has the room, when `weapon_reserve` is off, or when might has not been read.
-   * Free space is the load as weighed, an upper bound when something is unweighed: certainty in one direction only.
+   * How far the pack is short of the room a weapon needs (the weapon reserve, both dimensions): { bulk, weight }, or
+   * null when it has the room or might has not been read. Free space is the load as weighed, an upper bound when
+   * something is unweighed: certainty in one direction only.
    */
-  unarmedRoomShort(c = this.s?.client) {
+  roomShortOfReserve(c = this.s?.client) {
     try {
-      if (!c || this.policy?.weaponReserve === false) return null;
-      const short = shortOf(this.packFreeNow(skills.carryCapacity(c)), weaponReserveSize());
+      const short = c ? shortOf(this.packFreeNow(skills.carryCapacity(c)), weaponReserveSize()) : null;
       return isShort(short) ? short : null;
     } catch { return null; }
+  }
+
+  /**
+   * The same, for a body the reserve is IN FORCE for (weaponReserveNow: `weapon_reserve` on, a body that fights, the
+   * use list read, no usable weapon to spare). null otherwise: a posted caster, a bare-handed trainee, a body in PvP
+   * gear or one switched off is never made room for a weapon it is not going to hold.
+   */
+  unarmedRoomShort(c = this.s?.client) {
+    try { return c && this.weaponReserveNow(c)?.in_force === true ? this.roomShortOfReserve(c) : null; }
+    catch { return null; }
   }
 
   // UNARMED AND NO ROOM FOR A WEAPON: THE ORDERED REMEDY (tools/m59-weapon-reserve.mjs). True only when it ended armed.
@@ -711,14 +720,25 @@ export class PassCombatPart {
     // recovery is clearing the pack, leave room for that result too, and a margin.
     const made = await this.makeSpaceNow({ bulk: reserve.bulk + UNARMED_MAKE_SPACE_MARGIN, weight: reserve.weight + UNARMED_MAKE_SPACE_MARGIN,
       why: 'unarmed: room for a conjured weapon' }).catch(e => ({ ok: false, refused: 'error', why: e?.message }));
+    // THE HOOK AS IT WAS, for a body the reserve is not in force for (`weapon_reserve: false`, or exempt): the sale
+    // plan and nothing beyond it, and no arm retry when that dropped nothing.
+    let inForce = false;
+    try { inForce = this.weaponReserveNow(c)?.in_force === true; } catch { inForce = false; }
+    if (!inForce) {
+      this._unarmedRoom = null;
+      if (!made?.dropped?.length && !made?.ok) return false;
+      const rearmed = await this.armSelf().catch(() => false);
+      if (rearmed && skills.isArmed(c)) { this.progress?.('made space and armed itself'); return true; }
+      return false;
+    }
     let beyond = null;
     if (made?.refused) retrySoon();
-    else if (this.policy?.weaponReserve !== false && this.unarmedRoomShort(c))
+    else if (this.roomShortOfReserve(c))
       beyond = await this.makeRoomBeyondPlan({ need: reserve, why: 'unarmed: room for a weapon' })
         .catch(e => ({ ok: false, refused: 'error', why: e?.message, dropped: [], kept: [] }));
     if (beyond?.refused) retrySoon();
     const dropped = [...(made?.dropped ?? []), ...(beyond?.dropped ?? [])];
-    const short = this.unarmedRoomShort(c);
+    const short = this.roomShortOfReserve(c);
     if (short) {
       const held = made?.refused ?? beyond?.refused ?? null;
       record({ outcome: held ? 'held' : 'blocked', short_by: short, dropped: dropped.map(d => `${d.amount} ${d.name}`),

@@ -1417,7 +1417,7 @@ all hold back from sale, so the sale plan was empty and `make_space` dropped not
 then re-looted the same teeth to 8 bulk free.
 
 Nothing kept room for the next weapon and nothing could make it. `tools/m59-weapon-reserve.mjs` is one definition
-with four readers; `m59-weapon-reserve-test.mjs` (108) pins it.
+with four readers; `m59-weapon-reserve-test.mjs` (109) pins it.
 
 **The size is the largest thing `create weapon` can hand over: an axe, 90 bulk and 90 weight** (`weaponReserveSize`,
 measured off the weight table over the spell's seven results: mace 60/60, short sword 50/50, hammer 80/75, axe 90/90,

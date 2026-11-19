@@ -600,7 +600,7 @@ through a nested shelter order.
   equipment and an open trade drop nothing; `sale_plan` sends no packet and changes nothing; the unarmed hook drops,
   re-arms, is bounded to once per 10 minutes and steps aside for a bot holding economy; the keeper ops, broker tools and
   the `make-space` fleetscript are wired.
-- `m59-weapon-reserve-test.mjs` (108): the weapon reserve (tools/m59-weapon-reserve.mjs; prod 2026-11-18, four farmers
+- `m59-weapon-reserve-test.mjs` (109): the weapon reserve (tools/m59-weapon-reserve.mjs; prod 2026-11-18, four farmers
   unarmed for one to five hours at 50-62 bulk free with packs of protected product, `stuck.lever: null`). Pure, then the
   REAL `Session.lootFloor`, `inventorySalePlan`, `passArm` and `checkIfShouldSell` against a fake client. **The size:**
   90 bulk and 90 weight, measured over the keeper's own `CONJURABLE_WEAPONS`; a weight table with a hole in it cannot

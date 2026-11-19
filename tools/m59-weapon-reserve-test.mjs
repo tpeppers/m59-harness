@@ -412,6 +412,11 @@ console.log('\nB. WHAT IS NEVER DROPPED');
   ok('weapon_reserve: false leaves the old hook: the early remedy does not even ask', f.ap.unarmedRoomShort(f.c) === null);
   await f.ap.unarmedMakeSpace(f.c, 2_000_000_000);
   ok('and the hook itself stops at the sale plan', f.floorDrops.length === 0 && f.has('orc tooth') === 811);
+  const caster = prodBody({ policy: { roomEnchant: { enabled: true } } });
+  const brawler = prodBody(); brawler.ap.bareHandedByTraining = () => true;
+  ok('a posted room caster and a bare-handed trainee are never made room for a weapon they will not hold',
+     caster.ap.unarmedRoomShort(caster.c) === null && brawler.ap.unarmedRoomShort(brawler.c) === null &&
+     (await brawler.ap.unarmedMakeSpace(brawler.c, 2_000_000_000)) === false && brawler.floorDrops.length === 0);
   const g = prodBody();
   g.ap.facultyHeld = fac => fac === 'economy';
   const t0 = 2_000_000_000;
