@@ -242,7 +242,26 @@ export const script = {
       return true;
     }, 'drop what the buyer will not take, outside the hall');
 
-    const steps = [];
+    // THE RUNNER'S OWN ORDERS ARE LIFTED FOR THE ERRAND AND PUT BACK AFTER IT. A keeper confined to its farm (Bunsen to
+    // 377) or to a practice room (Animal to 48) refuses every journey to the hall and the smith, and each refused walk is an
+    // optional skip: the first run on prod, 2026-11-19 05:31Z, skipped forty-one walks on both runners and reported "1/1
+    // completed" having drawn nothing. So the posture is read first, the errand runs unconfined in survive mode (no farming
+    // pass to pull the body back to its room between legs), and the saved posture is restored at the end whatever happened.
+    const posture = async call => {
+      const st = await call('autopilot', { action: 'status', agent }, 30_000).catch(() => null);
+      const pol = st?.policy ?? {};
+      return { mode: st?.mode ?? null, farm_strategy: pol.farmStrategy ?? null, assigned_room: pol.assignedRoom ?? null,
+               confine_rooms: Array.isArray(pol.confineRooms) ? pol.confineRooms : [], town_trips: pol.townTrips ?? null };
+    };
+    const steps = [verify(async ({ call }) => {
+      S.posture = await posture(call);
+      log(`orders saved for the errand: ${JSON.stringify(S.posture)}`);
+      const r = await call('autopilot', { action: 'start', agent, mode: 'survive', confine_rooms: [], assigned_room: hall,
+        town_trips: false, why: 'hall-sell-mundane: selling hall gear' }, 60_000).catch(e => ({ error: e.message }));
+      const now = await posture(call);
+      if (now.confine_rooms.length) return { ok: false, why: `could not lift the confinement (${JSON.stringify(now.confine_rooms)}): ${r?.error ?? r?.reason ?? 'no reason given'}` };
+      return true;
+    }, 'lift the runner\'s confinement for the errand')];
     for (let i = 0; i < laps; i++) {
       // A LAP WHOSE DRAW NEVER RAN had its walk to the hall fail (an optional walk skips the steps that needed the room).
       // Counted here, idempotently (a retried walk resolves its destination again), and three of them end the run.
@@ -291,9 +310,26 @@ export const script = {
         (proceeds === 'keep' ? `\n  proceeds kept by ${agent}` : '') +
         (S.tally.notes.length ? `\n  ${S.tally.notes.join('\n  ')}` : '') +
         (left ? `\n  LEFT IN THE CHESTS (last reading):\n${formatPlan(left).split('\n').slice(1).map(l => `  ${l}`).join('\n')}` : ''));
+      // A RUN THAT NEVER DREW, WITH PIECES PLANNED, FAILED, and says so rather than "completed".
+      if (!S.drawn.size && plan0.sell.length + plan0.drop.length > 0)
+        return { ok: false, why: `no lap drew anything (${S.done}); nothing was sold` };
       return true;
     }, 'the report'), always: true });
     if (Number(p.home) > 0) steps.push({ ...walk(Number(p.home), { why: 'home' }), always: true });
+    // AND THE RUNNER'S ORDERS GO BACK. A farm strategy re-applies its own confinement and station, so it is the one thing
+    // restored when there was one; otherwise the mode, room and confinement as they were.
+    steps.push({ ...verify(async ({ call }) => {
+      const o = S.posture;
+      if (!o) return true;
+      const back = o.farm_strategy
+        ? { mode: o.mode ?? 'farm', farm_strategy: o.farm_strategy }
+        : { mode: o.mode ?? 'survive', assigned_room: o.assigned_room, confine_rooms: o.confine_rooms };
+      if (o.town_trips != null) back.town_trips = o.town_trips;
+      const r = await call('autopilot', { action: 'start', agent, ...back, why: 'hall-sell-mundane: orders restored' }, 60_000)
+        .catch(e => ({ error: e.message }));
+      log(`orders restored: ${JSON.stringify(back)}${r?.error ? ` (refused: ${r.error})` : ''}`);
+      return true;
+    }, 'restore the runner\'s orders'), always: true });
     return steps;
   },
 };
