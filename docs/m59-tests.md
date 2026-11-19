@@ -600,6 +600,29 @@ through a nested shelter order.
   equipment and an open trade drop nothing; `sale_plan` sends no packet and changes nothing; the unarmed hook drops,
   re-arms, is bounded to once per 10 minutes and steps aside for a bot holding economy; the keeper ops, broker tools and
   the `make-space` fleetscript are wired.
+- `m59-weapon-reserve-test.mjs` (108): the weapon reserve (tools/m59-weapon-reserve.mjs; prod 2026-11-18, four farmers
+  unarmed for one to five hours at 50-62 bulk free with packs of protected product, `stuck.lever: null`). Pure, then the
+  REAL `Session.lootFloor`, `inventorySalePlan`, `passArm` and `checkIfShouldSell` against a fake client. **The size:**
+  90 bulk and 90 weight, measured over the keeper's own `CONJURABLE_WEAPONS`; a weight table with a hole in it cannot
+  shrink it. **The loot path:** a body that fights and carries no usable spare leaves a pickup that would take free
+  space under the reserve, with `WEAPON RESERVE` on the refusal (and so on the `kill_drop` row); a weapon it may wield
+  is taken anyway and waives the rest of the sweep; a spare aboard, `weapon_reserve: false`, `never_attack`, an
+  unweighed item and an explicit id all loot as before; overfarm's plan is full at the reserve line and trades up
+  there. **Unwieldable weapons:** an unarmed body leaves a banned weapon and anything outside its "only" weapon
+  (Raphael's long swords) unless a loot list, a guild want or hall cargo collects it; the one it may wield is not a
+  spare against `max_weapons`; an armed body takes them as before. **The remedy, on the exact prod pack** (811 orc
+  teeth, 6 purple mushrooms, worn armour and shield, 1000 shillings, 51 bulk free, empty sale plan): `make_space` says
+  what protects each stack, the remedy drops 13 teeth and nothing else, writes the `make_space` row and the dibs claim,
+  arms, and the next sweep does not re-loot them (Zoot's repeat). The order: sale-plan rows cover it alone when they
+  can; a banned unprotected scimitar goes before any tooth; a protected one does not. Never money, the last of a food,
+  the chalice, a quest item, a held-back weapon, stock at its loadout floor or a stack of unknown value. Rate-bounded;
+  a leased economy faculty is retried in 30 s; a drop the server refuses frees nothing. **Through `passArm`:** the farm
+  pass, a journey the travel guard paused for the empty hand, and a body that cannot conjure all make the room; an
+  armed body never drops product. **Step 5:** nothing droppable raises `UNARMED_NO_ROOM` (not the code the supervisor
+  reads as waiting for mana) naming what is in the way, the stall sentence maps to `hand_over` instead of null, forty
+  more passes declare no `STALL_NO_LEVER` and write one `unarmed_no_room` row. **The sell trigger:** a pack stopped at
+  the reserve line fires a `sell_at_load` of 0.97 it can no longer reach; below the line nothing changes. And the key
+  is plumbed: default policy, broker `weapon_reserve`, strategy `weaponReserve`, `autopilot status`.
 - `m59-island-sale-test.mjs` (54): a sell trip on Ko'catan sells the island reagents (prod 2026-10-27: packs full of
   dragonfly eyes, ferns and seraphym, worth 15-17k at Zala, carried home by every trip). Rainbow fern and five other
   real items with a weapon word in their name are not weapons, real weapons still are; on the island the sale plan

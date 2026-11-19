@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 17 methods: carryFloors, protectedItemNames, inheritedProtectedNames, stockpileKeptNames,
+// 18 methods: carryFloors, protectedItemNames, inheritedProtectedNames, dutyBoundNames, stockpileKeptNames,
 //   chestSourcedNames, saleProtectedNames, islandSaleRelease, saleLoadout, guildWantedNames, notOursToEat,
 //   reagentFoodNames, neverEatNames, optionalMealExclude, optionalLarder, larder, giveableLarder, uneatableReserve
 import { CHALICE } from '../m59-chalice.mjs';

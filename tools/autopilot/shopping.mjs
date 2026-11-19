@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 18 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
+// 21 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
 //   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, townSaleOptions, townHeldBackIds, townReceivedOnTop, ownSalePlan, salePlanView,
 //   makeSpaceNow, reserveDropRules, makeRoomBeyondPlan, reserveDroppedStock, postShoppingPlan,
 //   ensurePurchaseFunds, bankRun, walkingFloat, bankAboveNow, purseLeaseStatus

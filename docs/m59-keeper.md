@@ -843,6 +843,41 @@ with `since` surviving, and cleared by `progress()`. `lever` and `repeats` also 
 the first is a real experiment, the second covers one that raced something — and then stops
 and says why, leaving the refusal standing.
 
+### Unarmed with no room has two levers, and its own code
+
+Prod, 2026-11-18: `stuck: { seconds: 19045, why: "unarmed -- 60 bulk free, needs 70 to hold one", lever: null,
+repeats: 17710 }`. Gonzo, 5.3 hours, with three more beside him. Three things were wrong with that row and none of
+them was the detector.
+
+**The thing that acts on it was in the same pass and was never asked properly.** The unarmed hook dropped only
+sale-plan rows, and a pack of protected product has none. It now runs the ordered remedy in
+[docs/m59-economy.md](m59-economy.md#unarmed-and-short-of-room-the-ordered-remedy), for every unarmed body short of
+the weapon reserve, including one whose journey the travel guard paused for the empty hand.
+
+**The stall names it.** `STALL_LEVERS` gained two entries beside `blink`:
+
+| lever | the sentence | what acts |
+|---|---|---|
+| `make_room` | `unarmed -- N bulk free, needs 70 to hold one` | The keeper's own remedy (`Autopilot.unarmedMakeSpace`), every ten minutes, or 30 s after a trade or a leased economy faculty got in its way. |
+| `hand_over` | the same, ending `; nothing more may be dropped: needs a town trip or a hand-over` | Outside the pass: the town trip `passArm` asks `bankRun` for where the strategy has a town, or somebody taking something off the character. The remedy has said every stack left is worn, money, bound, at its floor, unweighed or unvalued. |
+
+Neither is a spell cast from `noProgress`. Both are an answer to "what could act on this", so the run is never
+declared `STALL_NO_LEVER`. Mana and vigor stalls are untouched: they are waits.
+
+**The refusal has its own code, `UNARMED_NO_ROOM`.** `unarmedBlocker` filed `room` under `UNARMED_NO_DONOR`, and
+`m59-supervise.mjs` steps over that code as "waiting for casting mana — churning the keeper restarts the decision,
+not the wait". True of mana, false of pack space, and the reason the one layer that reads refusals as data looked
+away for five hours. The supervisor now leaves `UNARMED_NO_ROOM` alone under its own sentence (a restart makes no
+pack space and only resets the remedy's clock), and anything else reading `status.refusals` can tell "needs mana"
+from "needs room". The refusal's `why` names the biggest stacks left and what protects each; its `remedy` names the
+town trip or the hand-over. It is cleared the moment the room is there or a weapon is in the hand.
+
+**Reading it live.** `autopilot status` → `weapon_reserve.remedy`: `{ at, outcome: armed | room | blocked | held,
+dropped, kept, short_by, why }` is what the last attempt did. The journal lines are `made space` (the sale plan),
+`made space beyond the sale plan` (gear and protected stock, with each drop's reason) and `unarmed and no room for a
+weapon: nothing more may be dropped`. The ledger kinds are `make_space` (`beyond_plan: true` for steps 3 and 4) and
+`unarmed_no_room`.
+
 ### What this is not
 
 It is not a cure. There is no verb in this file that fixes an unknown loop, and inventing one
