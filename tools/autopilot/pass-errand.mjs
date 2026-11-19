@@ -412,7 +412,7 @@ export class PassErrandPart {
       const oceanApproach = room === 544 || (room === 534 && journey?.to === 552);
       const preserveRecoveryLogoff = this.mode === 'farm' && this.policy.farmStrategy === 'great-ocean-marion' &&
         this.policy.assignedRoom === 552 && oceanApproach && hp === 1 &&
-        hold.room === room && hold.proven === true && !!me && !me.predicted && me.row === hold.row && me.col === hold.col &&
+        hold.room === room && !!me && !me.predicted && me.row === hold.row && me.col === hold.col &&
         !s.combat?.active && !this.playerThreatPresent() &&
         Date.now() - Math.max(s.damagedAt ?? 0, s.lastCombatLine?.at ?? 0) >= 6000;
       const left = await this.leaveHold('rested to the ceiling — back on the road', { force: true, preserveRecoveryLogoff });

@@ -19,7 +19,12 @@ import { relayFarmVigor, tryFarmRelay } from '../m59-relay-farming.mjs';
 import * as skills from '../m59-skills.mjs';
 import { AILING_SHELTER_BELOW, belowRoomRetreatHealth, CONTINUE, farmVigorWorkReady, HANDLED, healAllowOf, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, SPAWN_FILE, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorOf, vigorPct } from '../m59-autopilot.mjs';
 import { roomIsNoCombat } from '../m59-hazards.mjs';
+import { SURVIVAL_EDGE_REVISIT } from '../m59-survival-edge.mjs';
 import { loadSpawns } from '../m59-spawns.mjs';
+
+// How long a failed safe-spot approach in this room excuses the leave-to-recover rung from asking for one again before it
+// walks for the door. Short: the spot is the first answer, and a room whose occupancy moved may offer one it did not.
+const LEAVE_SPOT_RETRY_MS = 10_000;
 
 // The farming health lines (Autopilot.healthLines in senses.mjs), or the policy's own numbers when the pilot cannot
 // answer: a fixture that carries only the methods it tests reads exactly what this stage read before overmatch existed.
@@ -137,10 +142,9 @@ export class PassSurvivalPart {
     // UNLESS WE ARE IN A SPOT THAT WORKS, in which case none of that applies: we are
     // not about to die at all, we are merely hurt somewhere nothing can reach us. The
     // correct move is to stop swinging and sit down, which the rest branch below
-    // does. Note the test is holdWorks() and not "we are standing in a corner" —
-    // spending this on an unproven square is exactly the mistake it exists to
-    // prevent, and an unproven square gets us the logoff, which is also how we
-    // survive long enough to prove it.
+    // does. Note the test is holdWorks() -- "am I on a square the geometry says nothing
+    // can reach" -- and not a record of the square having held before: there is no such
+    // record any more (operator, 2026-11-19: safe spots are not "provable").
     const worstHit = Math.min(30, Math.floor(((v.health?.max ?? 0) + 2) / 3));
     // `let`, NOT `const`: two rungs below take a wall as a side effect and let the pass carry on to the rest gate, and a
     // value read before the wall was taken sends that gate the wrong answer. See the "a wall before a rest" rung.
@@ -521,24 +525,18 @@ export class PassSurvivalPart {
       sheltered = this.holdWorks();   // asked with the wall it now holds, not the one it held at the top of the pass
     }
 
-    // RUN THE EXPERIMENT ON PURPOSE. A spot is only proved by standing in it without
-    // swinging while something tries to kill us — and every other branch here is
-    // gated on already having that proof, so without this the keeper can fight from
-    // an untested corner forever and never find out whether it works.
+    // THERE IS NO EXPERIMENT ANY MORE, AND NO SUCH THING AS A PROVEN SPOT. Operator, 2026-11-19: "there are certainly
+    // safe spots in the room, all room have safe spots, but a 'proven' safe spot sounds like a bug we're trying to remove
+    // - safe spots shouldn't be 'provable' in our code that's a bug", and "the 'held under fire' discriminator should be
+    // removed". A `testing` flag stood here: a body holding a square it had not yet "proved" (stood on, not swinging,
+    // while something tried to kill it) could rest on it only as an experiment, with flee margin in hand, one pass at a
+    // time. A square the geometry says nothing can reach (`can_reach_you === 0`, safeWalls/exposureAt) IS a safe spot;
+    // standing on one is `sheltered`, and that is the whole question. Beaker (t6), Barloque sewers 111, 2026-11-19
+    // 18:12Z, died reading "there is no proven wall here" in a room the refuge search had counted forty eligible walls in.
     //
-    // The window it needs is the same window resting needs, so testing costs nothing
-    // beyond the pause. Bounded twice, because being wrong here means sitting still
-    // while something eats us: only while we still have flee margin in hand, and for
-    // one pass at a time, so observe() gets to adjudicate quickly either way.
-    // The margin is the policy's own flee number, or the verdict's while overmatched (healthLines): the same line the
-    // flee rung above reads, either way.
-    const fleeFloor = lines.overmatch ? lines.fleeBelow : this.policy.fleeBelow;
-    let testing = !sheltered && !!this.hold && !this.hold.failures &&
-                    hp !== null && hp >= fleeFloor;
-    // RESTING IN A COMBAT ZONE IS SOMETHING YOU DO BEHIND A WALL OR NOT AT ALL.
-    // Sheltered means the square is proven; testing means we are deliberately proving
-    // it with margin in hand. Anything else, with anything hostile in the room, and the
-    // answer is to go and get a wall first — not to sit down and find out.
+    // RESTING IN A COMBAT ZONE IS SOMETHING YOU DO BEHIND A WALL OR NOT AT ALL. Sheltered means we stand on a
+    // geometric safe spot. Anything else, with anything hostile in the room, and the answer is to go and get a wall
+    // first — not to sit down and find out.
     const combatZone = hostiles.length > 0;
     // Go and get a wall — but DO NOT CONSUME THE PASS DOING IT. The first version
     // returned as soon as takeSafeSpot() succeeded, and that deadlocked characters
@@ -703,7 +701,10 @@ export class PassSurvivalPart {
     }
 
     const spawnsHere = !this.sanctuary();
-    if ((hurt || relayRest) && !openSupportRest && !noCombatHere && (combatZone || spawnsHere) && !sheltered && !testing && !this.hold
+    // Whether this pass has already walked for a safe spot in this room: the leave-to-recover rung below asks for one
+    // first, and need not ask twice in one pass.
+    let spotTriedThisPass = false;
+    if ((hurt || relayRest) && !openSupportRest && !noCombatHere && (combatZone || spawnsHere) && !sheltered && !this.hold
         && (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000)) {
       this.wallTriedAt = Date.now();
       // A voluntary vigor stop can use the same cover without the emergency
@@ -716,16 +717,14 @@ export class PassSurvivalPart {
         : this.takeRecoverySpot('hurt in a room that spawns monsters — a wall before a rest'))
         .catch(() => false);
       if (this.travelInterrupted() || got?.cancelled) return HANDLED;
-      // A WALL TAKEN HERE IS A WALL TO REST AT ON THIS PASS. `sheltered` and `testing` were read before it was taken, so
+      // A WALL TAKEN HERE IS A WALL TO REST AT ON THIS PASS. `sheltered` was read before it was taken, so
       // the rest gate below answered "the open, in a combat zone" for a body standing on its new wall, the stage
       // returned CONTINUE, and passFarm got the pass. Scooter (t21), Ko'catan 2115, 2026-10-27 13:10:36Z: wall r17c11
       // taken at 74/94 inside an open one-logoff healing session (rest_safe, "heal here to full"), then pulled from by
       // passFarm in the same pass -- out to r11c18 among nine avar warriors, "could not get back after a failed pull",
       // the hold released, and the body never reached a spot again. Read again, the gate rests here instead.
-      if (got?.took) {
-        sheltered = this.holdWorks();
-        testing = !sheltered && !!this.hold && !this.hold.failures && hp !== null && hp >= fleeFloor;
-      }
+      if (got?.took) sheltered = this.holdWorks();
+      spotTriedThisPass = true;
       this.note(got?.took ? 'took a wall before resting' : 'will not rest in the open here', {
         health: hp === null ? null : Math.round(hp * 100) + '%',
         monsters_in_room: hostiles.length, adjacent: near.length, got_a_wall: !!got?.took,
@@ -760,7 +759,7 @@ export class PassSurvivalPart {
     // exhausted characters walking instead of resting.
     const vigorNow2 = vigorOf(v);
     const restCeiling = REST_VIGOR_CAP * skills.VIGOR_MAX;      // 0.4 * 200 = 80
-    if (hurt && !openSupportRest && combatZone && !sheltered && !testing && !this.hold &&
+    if (hurt && !openSupportRest && combatZone && !sheltered && !this.hold &&
         vigorNow2 != null && vigorNow2 > restCeiling) {
       this.note('not waiting this out — moving to somewhere I can heal', {
         health: hp === null ? null : Math.round(hp * 100) + '%',
@@ -870,7 +869,37 @@ export class PassSurvivalPart {
     // The rest line the farm is being run on: the verdict's while overmatched, the policy's otherwise (healthLines).
     const retreatBelow = lines.overmatch ? lines.rest : this.policy.restBelow;
     const mustLeaveForHealth = belowRoomRetreatHealth(hp, retreatBelow);
-    if (mustLeaveForHealth && combatZone && !sheltered && !testing && !this.hold) {
+    let leaveForHealth = mustLeaveForHealth && combatZone && !sheltered && !this.hold;
+    // THE NEAREST SAFE SPOT IN THIS ROOM FIRST; THE DOOR ONLY WHEN THE ROOM HAS NONE WE CAN REACH. Operator, 2026-11-19:
+    // "there are certainly safe spots in the room, all room have safe spots". This rung used to fire on "no proven wall
+    // here" and go straight for an exit -- and the wall rung above asks for a spot only once every thirty seconds, so on
+    // most passes nothing between "hurt" and "leave" looked for one at all. A spot in THIS room needs no door, so no
+    // confinement question arises. Beaker (t6), Barloque sewers 111, 2026-11-19: confined to [108,111], the exit to 112
+    // refused, the one to 108 object_blocked, and every pass from 20% to 3% decided to leave.
+    if (leaveForHealth && !noCombatHere && !spotTriedThisPass && !this.walkBlockedRecently?.('spot', LEAVE_SPOT_RETRY_MS)) {
+      spotTriedThisPass = true;
+      const spotWhy = 'below the recovery line in a monster room — the nearest safe spot in this room before any exit';
+      // A voluntary stop (overmatched, above its flee line) takes the same cover without the logoff a recovery performs
+      // on arrival -- the wall rung above makes the same choice, for the same reason.
+      const got = await (voluntaryStop
+        ? this.takeSafeSpot(spotWhy, null, { source: 'recovery', recovery: true, nearestOnly: true })
+        : this.takeRecoverySpot(spotWhy))
+        .catch(err => ({ took: false, why: err?.message ?? 'take_recovery_spot threw' }));
+      if (this.travelInterrupted() || got?.cancelled) return HANDLED;
+      if (this.hold) {
+        sheltered = this.holdWorks() && recoveryWallStillHolds();
+        leaveForHealth = false;
+        this.note('took the nearest safe spot in this room instead of leaving', {
+          health: hp === null ? null : Math.round(hp * 100) + '%', spot: { col: this.hold.col, row: this.hold.row },
+          monsters_in_room: hostiles.length,
+          why: 'a square the geometry says nothing can reach is a safe spot, and it needs no door' });
+      } else {
+        this.note('no safe spot reachable in this room: the way out is the fallback', {
+          health: hp === null ? null : Math.round(hp * 100) + '%', why: got?.why ?? null,
+          monsters_in_room: hostiles.length });
+      }
+    }
+    if (leaveForHealth) {
       this.doing = 'travelling';
       let ways = (s.world?.exits() || []).filter(e => e.to != null && e.reachable !== false);
 
@@ -883,15 +912,34 @@ export class PassSurvivalPart {
       // policy still reading confine [38,39].
       //
       // The trigger is worth reading before changing it: it fires when health is below the
-      // recovery line AND there is no reachable proven wall. Rizzo's room had TEN monsters
+      // recovery line AND the nearest safe spot in this room could not be reached. Rizzo's room had TEN monsters
       // and his safe spot was unreachable, so the honest state is "this room cannot be
       // rested in" — and the confinement's answer is still no. That is the operator's
       // instruction and it is not free: it trades a walk-out for a fight in place.
+      //
+      // EXCEPT AT CRITICAL HEALTH, WHERE THE PROBATIONARY SURVIVAL EDGE PASS APPLIES (m59-survival-edge.mjs, since
+      // 2026-10-30): below the flee line an exit out of the confinement into one room that is neither banned nor a recent
+      // PvP death room is a way out like any other (criticalEdgeExits). It never applied here, because this branch filters
+      // its exits itself and walks them with leaveViaAny, and the pass was only ever asked inside Autopilot.travel.
       const confineOut = Array.isArray(this.policy?.confineRooms) ? this.policy.confineRooms : null;
+      let edgeRooms = new Set();
       if (confineOut?.length) {
         const allowedOut = confineOut.map(Number);
-        const blocked = ways.filter(e => !allowedOut.includes(Number(e.to)));
+        let blocked = ways.filter(e => !allowedOut.includes(Number(e.to)));
         ways = ways.filter(e => allowedOut.includes(Number(e.to)));
+        const edge = this.criticalEdgeExits?.(blocked) ?? [];
+        if (edge.length) {
+          edgeRooms = new Set(edge.map(x => Number(x.to)));
+          ways = [...ways, ...edge];
+          blocked = blocked.filter(x => !edgeRooms.has(Number(x.to)));
+          this.note('survival exit leaves the confinement', {
+            wanted: [...edgeRooms], confined_to: allowedOut, origin: 'leave_to_recover',
+            health: hp === null ? null : Math.round(hp * 100) + '%',
+            why: 'below the flee line: surviving the next second outranks staying on the farm map, one room out',
+            revisit: SURVIVAL_EDGE_REVISIT });
+          recordEvent(this.who(), 'survival_edge_pass', { wanted: [...edgeRooms], allowed: true,
+            why: 'leave-to-recover below the flee line', room: s.world?.room?.num ?? null });
+        }
         if (blocked.length)
           this.note('exits refused by the confinement', {
             confined_to: allowedOut, refused: blocked.map(e => ({ to: e.to, name: e.to_name })),
@@ -911,7 +959,7 @@ export class PassSurvivalPart {
         health: hp === null ? null : Math.round(hp * 100) + '%', vigor: vigorNow2,
         monsters_in_room: hostiles.length, leaving_via: out?.to_name ?? 'nothing reachable',
         retreat_below: Math.round(retreatBelow * 100) + '%',
-        why: 'health is below the configured recovery line and there is no proven wall here. ' +
+        why: 'health is below the configured recovery line and no safe spot in this room could be reached. ' +
              'Resting where a monster can reach us is unsafe; vigor alone never triggers this trip',
         then: 'recover health outside the monster room, then return' });
       // TRY EVERY WAY OUT, AND THEN STOP BEING SURROUNDED.
@@ -952,6 +1000,7 @@ export class PassSurvivalPart {
         const took = await this.takeRecoverySpot(
           'confined to this room and hurt — a wall is the way to rest here',
           { source: 'confinement' }).catch(() => null);
+        if (!took?.took && !this.hold) this.noteWalkBlocked?.('exit', 'no exit the confinement permits');
         this.note(took?.took ? 'took a wall instead of leaving' : 'confined, hurt, and no wall yet', {
           confined_to: confineOut.map(Number), spot: took?.spot ?? null,
           why_not: took?.took ? undefined : (took?.why ?? 'no reason given'),
@@ -965,11 +1014,21 @@ export class PassSurvivalPart {
 
       const tryOut = async () => {
         let cands = ways.length ? ways : (s.world?.exits() || []).filter(e => e.to != null);
-        // The fallback above is the whole-room exit list, so re-apply the confinement to it.
+        // The fallback above is the whole-room exit list, so re-apply the confinement to it -- with the critical-health
+        // edge rooms, and only those, let through.
         if (confineOut?.length)
-          cands = cands.filter(e => confineOut.map(Number).includes(Number(e.to)));
+          cands = cands.filter(e => confineOut.map(Number).includes(Number(e.to)) || edgeRooms.has(Number(e.to)));
         if (!cands.length) return { left: false, reason: 'no exit from this room at all' };
-        return await s.leaveViaAny(cands).catch(e => ({ left: false, reason: e.message }));
+        // THE STEP GUARD HAS TO BE TOLD TOO (Session.edgeCrossingBlock refuses an edge out of the confinement whichever
+        // faculty chose it): a pass naming exactly the edge rooms, for this movement generation, ended when we are done.
+        const pass = edgeRooms.size ? { to: [...edgeRooms][0], rooms: [...edgeRooms], generation: s.movementGeneration,
+          until: Date.now() + 120_000, why: 'survival exit at critical health (leave-to-recover)' } : null;
+        if (pass) s.edgePass = pass;
+        try {
+          return await s.leaveViaAny(cands).catch(e => ({ left: false, reason: e.message }));
+        } finally {
+          if (pass && s.edgePass === pass) s.edgePass = null;
+        }
       };
       const gotOut = async (r) => {
         this.tally.fled_rooms = (this.tally.fled_rooms || 0) + 1;
@@ -1001,13 +1060,32 @@ export class PassSurvivalPart {
 
       let r = await tryOut();
       if (r.left) { await gotOut(r); return HANDLED; }
+      this.noteWalkBlocked?.('exit', r.reason ?? 'could not leave');
+      // WALK-BLOCKED AT CRITICAL HEALTH IS WHAT THE LOGOFF IS FOR. The reconnect below used to be gated on the
+      // `breakOutViaLogoff` policy and on an unspent healing session, so for Beaker it never happened: "reconnecting to
+      // shed the crowd" was written three times in his last four seconds and no reconnect was ever made. Below the flee
+      // line, with the spot and the way out both refused, breakOut takes it anyway -- the session's own logoff, or its
+      // one override (walkBlockedOverrideReason, m59-healing-session.mjs walkBlockedVerdict).
+      const critical = this.belowFleeLine?.()?.below === true;
       this.note('could not leave', { why: r.reason, tried: r.tried?.length ?? 1,
-        next: 'reconnecting to shed the crowd, then trying again' });
+        next: critical ? 'walk-blocked below the flee line: a reconnect, then the nearest safe spot, then the way out'
+                       : 'reconnecting to shed the crowd, then trying again' });
 
       // Being unable to walk out IS the crowd. Reset it and try once more.
-      const broke = await this.breakOut('cannot walk out of a room that is killing us')
+      const broke = await this.breakOut('cannot walk out of a room that is killing us', { critical })
                               .catch(() => ({ did: false }));
       if (broke.did) {
+        // AFTER THE RECONNECT, THE SPOT FIRST AGAIN: with the grace period in hand the approach that was blocked may not
+        // be, and a spot in this room needs no door.
+        if (!this.hold && !noCombatHere) {
+          const got = await this.takeRecoverySpot('reconnected after a blocked walk — the nearest safe spot in this room')
+            .catch(() => null);
+          if (this.travelInterrupted() || got?.cancelled) return HANDLED;
+          if (this.hold) {
+            this.progress('reached a safe spot after reconnecting');
+            return HANDLED;
+          }
+        }
         r = await tryOut();
         if (r.left) {
           this.note('got out after reconnecting', { crowd_before: broke.crowd,
@@ -1050,8 +1128,8 @@ export class PassSurvivalPart {
       return HANDLED;
     }
 
-    const canRelayRest = noCombatHere || sheltered || testing || (!combatZone && !spawnsHere);
-    if ((((!combatZone || sheltered || testing || openSupportRest) && hurt) || (relayRest && canRelayRest)) &&
+    const canRelayRest = noCombatHere || sheltered || (!combatZone && !spawnsHere);
+    if ((((!combatZone || sheltered || openSupportRest) && hurt) || (relayRest && canRelayRest)) &&
         (openSupportRest || recoveryWallStillHolds())) {
       // After a packet, reobserve before resting. A failed or unavailable cast
       // falls straight through to rest. Probing an unproved wall stays a rest.
@@ -1062,13 +1140,6 @@ export class PassSurvivalPart {
       // the argument, and is the same answer the survival dispatcher gives when the recovery is its to run.
       if (vigorBar && !healthNeedsRest && !relayRest && !openSupportRest &&
           this.overmatchSpentWait(this.s.client?.vitals?.(), { behindAWall: sheltered })) return HANDLED;
-      if (testing && near.length)
-        this.note('testing this spot the only way there is', {
-          where: { col: this.hold.col, row: this.hold.row }, crowd: near.length,
-          health: Math.round(hp * 100) + '%',
-          why: 'sitting still without swinging is the experiment. If nothing lands we can rest to ' +
-               'full here from now on; if something does, we find out in one pass and with two ' +
-               'hits of margin still in hand' });
       // HEALTH AND VIGOR COME BACK BY COMPLETELY DIFFERENT MEANS, and only one of
       // them comes back by resting. RestTimer restores vigor and never touches
       // health (player.kod:10033). Having a high vigor then enhances your health regeneration.
@@ -1122,8 +1193,8 @@ export class PassSurvivalPart {
           if (back.arrived) {
             this.note('drifted off the safe square and walked back', {
               where: { col: this.hold.col, row: this.hold.row }, off_by: back.off_by ?? null,
-              proven: this.hold.proven, health: hp,
-              why: 'the square is known to hold and we are too hurt to fight in the open; ' +
+              health: hp,
+              why: 'the geometry says nothing can reach this square and we are too hurt to fight in the open; ' +
                    'returning is cheaper than finding another one' });
           } else {
             this.releaseHold(`moved off the square and could not get back: ${back.why || 'unknown'}`);
@@ -1187,24 +1258,13 @@ export class PassSurvivalPart {
         // personal cap, while ordinary recovery keeps its existing target.
         vigor: overmatchVigorTarget
           ?? (openSupportRest ? vigorRestAt : (relayRest ? relayProfile.cap / skills.VIGOR_MAX : REST_VIGOR_CAP)),
-        // A short leash while the spot is only a hypothesis: resting does not look at
-        // anything, so a two-minute rest in a corner that does not work is two minutes
-        // of being hit with nobody watching.
-        //
-        // AND A PROOF IS ABOUT THE ROOM IT WAS TAKEN IN. The long leash is earned by
-        // evidence — this square held while N things stood next to it — and it stops
-        // meaning anything once more than N are there. Twenty-one of our own characters
-        // moved into the Mausoleum and the mummy cap is twenty; squares proven against
-        // one or two attackers were suddenly being approached by four, from angles the
-        // proof never covered. Zoot took the full sheltered leash on such a square and
-        // spent it going from 17 health to 3.
-        //
-        // So the leash is the SHORT one whenever the present crowd is bigger than the
-        // one the square was proven against. Not a demotion — the square may well still
-        // work — just a refusal to bet two minutes of not looking on it.
-        maxSeconds: openSupportRest ? 9 : testing ? 15
-                  : (sheltered ? (near.length > (this.hold?.mostAttackers ?? 0) ? 20 : 150)
-                               : 90) });
+        // ONE LEASH FOR A SAFE SPOT, WHATEVER IT HAS OR HAS NOT "HELD AGAINST". A shorter leash stood here whenever the
+        // present crowd was bigger than the one the square had been "proven against" (`hold.mostAttackers`) -- the
+        // held-under-fire discriminator, retired 2026-11-19 by the operator: a square the geometry says nothing can
+        // reach is a safe spot, and what it held against before is not a property of it. What stays is a fact about NOW:
+        // with something in swing range the rest comes back to the ladder every twenty seconds (restUntil's damage abort
+        // polls on a three-second clock, and Zoot spent a long leash going 17 -> 3), and with nothing near, the long one.
+        maxSeconds: openSupportRest ? 9 : (sheltered ? (near.length > 0 ? 20 : 150) : 90) });
       this.note('rested', { seconds: r.seconds, to: r.vitals?.health, reached: r.reached_target, why: r.note,
                             in_safe_spot: sheltered || undefined,
                             crowd: sheltered ? near.length : undefined,

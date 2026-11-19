@@ -52,9 +52,15 @@ test('an already stalled or missing pull is returned to ordinary rotation',()=>{
   assert.deepEqual(f.find(),{follow,alternate:null});
  }
 });
+// A hold carries no "proven" qualification any more (operator, 2026-11-19: safe spots are not "provable"): the
+// geometry -- wallHere().ok, restSpotRefused -- is the cover check, and a hold without the old flag still qualifies.
+test('a geometric hold needs no proof',()=>{
+ const f=fixture();delete f.ap.hold.proven;delete f.ap.hold.failures;const a=f.find();
+ assert.ok(a?.alternate,'a hold without `proven` still takes the covered alternate');
+});
 test('requires full health, fight-ready vigor, proven arm, and exact validated cover',()=>{
  for(const change of [f=>f.hp.value--,f=>f.vigor.value=139,f=>f.ap.armedForSure=()=>false,
-   f=>f.ap.hold.proven=false,f=>f.ap.wallHere=()=>({ok:false}),f=>f.ap.restSpotRefused=()=>true,
+   f=>f.ap.wallHere=()=>({ok:false}),f=>f.ap.restSpotRefused=()=>true,
    f=>f.me.predicted=true,f=>f.s.damagedAt=Date.now(),f=>f.geo.security++,f=>f.geo.canMove=()=>false]){
   const f=fixture();change(f);assert.equal(f.find(),null);
  }

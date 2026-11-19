@@ -696,6 +696,14 @@ through a nested shelter order.
 - `m59-poison-test.mjs` (11): poison is sheltered in place. A poisoned keeper takes the nearest safe spot, not one
   forward on the route; the hold is kept until the poison ends and then healed at; a poisoned relog stays out long enough
   for the old poison timer to stop.
+- `m59-no-proven-spot-test.mjs` (43): Beaker, Barloque sewers 111, 2026-11-19. No keeper decision reads `.proven`
+  (only telemetry fields); the `testing` experiment, the "proven against" rest leash and observe()'s proof flips are
+  gone. A hold with no `proven` flag shelters, and the leave-to-recover rung takes the nearest spot in this room before
+  any door even with the wall rung's budget spent. The Beaker shape (20%, spot blocked, 108 object_blocked, confined
+  [108,111]): spot before door; below the flee line the survival edge pass lets 112 out and tells the step guard for that
+  room only, for the walk only; one reconnect with `breakOutViaLogoff` off and the session spent, as its one recorded
+  override; the spot again, then out. A banned 112 stays shut and the logoff still happens; no third logoff; above the
+  flee line nothing changes; an unspent session spends its own logoff. `walkBlockedVerdict` cases.
 - `m59-poison-exit-test.mjs` (54): Waldorf, Ancient Place 579, 2026-11-19. Two black-spider bites are one ailment counted
   twice, and the first to end leaves the body poisoned (the client used to erase it); a full re-read cannot double the
   count and the post-save re-read asks for enchantments again. `PoisonWatch` calls every tick on the poison's 10 s clock

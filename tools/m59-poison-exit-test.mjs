@@ -247,7 +247,7 @@ console.log('the keeper asks before it sits a poisoned body down');
   ok('the recovering branch asks the poison verdict before any heal or rest', /const poison=this\.poisonExitState\?\.\(v\);\s*\n\s*if\(poison\?\.act==='exit'\) return await this\.takePoisonExit\(poison,d\);/.test(branch));
   ok('and its rest is cancelled when the verdict turns to exit', /poisonExitState\?\.\(\)\?\.act==='exit'/.test(branch));
   ok('playDead sees through a spent session when the verdict grants the override',
-     /override=mayOverrideLogoff\(me\)\?\(this\.poisonOverrideReason\?\.\(\)\?\?null\):null;/.test(AP));
+     /override=mayOverrideLogoff\(me\)\?\(this\.poisonOverrideReason\?\.\(\)\?\?this\.walkBlockedOverrideReason\?\.\(\)\?\?null\):null;/.test(AP));
   ok('the overmatch verdict counts a poison still ticking after its icon went', /poison still ticking after its icon went/.test(AP));
 }
 function pilot({ hp = 80, poisoned = true, near = [], wallOk = false, attackAt = null, spent = true, name = 'waldorf-k' } = {}) {

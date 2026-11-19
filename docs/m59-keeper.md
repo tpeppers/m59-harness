@@ -1079,3 +1079,31 @@ and healing occurs afterwards, not to flee through it and risk low-health travel
   Live: the journal says `POISONED AND REACHED: the shelter will not hold`, `poison exit: ...`, `LOGOFF OVERRIDE:
   projected death outranks the one-logoff rule`; `autopilot status` carries `poison: { watch, verdict, tried }`; a
   postmortem's `vitals.poison` the watch and the last verdict.
+- **NO SAFE SPOT IS "PROVEN", AND A WALK-BLOCKED BODY DOES NOT STAND AND BLEED.** Operator, 2026-11-19: "all room have
+  safe spots, but a 'proven' safe spot sounds like a bug ... safe spots shouldn't be 'provable' in our code", and "the
+  'held under fire' discriminator should be removed". Beaker (t6, 143 max health), the Barloque sewers 111, 2026-11-19
+  18:12Z: a karma-strict caster among twenty-five monsters he mostly spares, the session's logoff spent, the nearest spot
+  "blocked -- every heading refused", then every pass from 20% to 3% "leaving the room to recover ... there is no proven
+  wall here", the confinement [108,111] refusing 112, the walk to 108 `object_blocked`, and "reconnecting to shed the
+  crowd" with no reconnect made (`breakOutViaLogoff` off, session spent): 104 -> 0 on one square in 25 s. Now:
+  1. **No keeper decision reads `.proven`.** A square the geometry says nothing can reach (`can_reach_you === 0`) is a
+     safe spot from the moment it is taken. Gone: the `testing` experiment in `passFleeAndRest` (rest on an "unproven"
+     square only as a trial), the rest leash keyed on what a square was "proven against" (`hold.mostAttackers`; the
+     leash is now 20 s with something in swing range, 150 s without), `observe()` promoting/demoting `hold.proven`
+     (the quiet is still recorded once per hold, as `quietRecorded`), and the `hold.proven` gates in the Ocean covered
+     pull, the Ocean rest-to-road logoff reserve, the safe-wall logoff recovery proof and the recovery-rearm check.
+     A blow landed on a body standing still still steps it off that square for a while (`noteFailedRestSpot`): that
+     is damage now, not a verdict on proof.
+  2. **The spot in this room first, the door second.** The leave-to-recover rung asks for the nearest safe spot in the
+     current room before it walks for an exit (the wall rung's 30 s budget no longer starves it; a failed approach in
+     this room excuses it for 10 s). A spot in the room needs no door, so no confinement question arises.
+  3. **Walk-blocked at critical health is what the logoff is for.** A failed spot approach and a failed way out are
+     recorded per room (`noteWalkBlocked`). Below the flee line, off any recovery wall and being reached, with both
+     failed in the last 30 s (`walkBlockedVerdict` in `m59-healing-session.mjs`), `breakOut` reconnects whatever
+     `breakOutViaLogoff` says, `playDead` logs off in the open (it comes back and flees to the nearest spot, not a
+     freeze), and a spent session grants its one override -- the same one the poison exit uses; never a third logoff.
+     After the reconnect the spot is asked for again before the door.
+  4. **The survival edge pass applies to the leave-to-recover rung** (and to the spent-session exit) below the flee
+     line: one room out of the confinement, never a banned or recent-PvP room (`criticalEdgeExits`;
+     [m59-boundary.md](m59-boundary.md)). It never applied before because this rung filtered exits itself and walked
+     them with `leaveViaAny`, never reaching `Autopilot.travel`. `m59-no-proven-spot-test.mjs` (43).

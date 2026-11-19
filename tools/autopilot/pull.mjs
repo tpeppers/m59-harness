@@ -13,7 +13,7 @@
 //   combatApproachCooling, deferBlockedCombatApproach, finishFailedCombatApproach, finishChasePiece, pendingPullWait,
 //   switchFromStalledPull, pullDidNotConvert, pullAttemptFailed, pullConverted, huntRoomCheck,
 //   yieldCheck, equipCheck, equippedNames
-import { closeIfHealed, mayLogoff, noteLogoff } from '../m59-healing-session.mjs';
+import { closeIfHealed, mayLogoff, mayOverrideLogoff, noteLogoff } from '../m59-healing-session.mjs';
 import { chaseCapable, chasePiece, walkPlan } from '../m59-chase.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
@@ -484,23 +484,46 @@ export class PullPart {
   // only wake as we act, so instead of walking out through five creatures that are
   // already swinging we walk out through five of which about one has noticed. It
   // costs a few seconds.
-  async breakOut(why) {
+  //
+  // AND A BODY THAT IS WALK-BLOCKED BELOW ITS FLEE LINE TAKES IT WHATEVER THE POLICY SAYS. `breakOutViaLogoff` and
+  // `breakOutAbove` are a preference about LEAVING A SPOT WITH A CROWD ON IT, and the leave-to-recover rung reaches for
+  // this same reconnect when the walk out has failed. Beaker (t6), 2026-11-19, Barloque sewers: breakOutViaLogoff false,
+  // the one logoff of the session spent, and every pass ended "could not leave -- object_blocked, reconnecting to shed
+  // the crowd" with no reconnect ever made, 104 -> 0 on one square. `critical: true` is that caller saying so; it is
+  // honoured only when walkBlockedOverrideReason agrees (both the spot and the exit failed from here, below the flee
+  // line, off any recovery wall, something reaching), and inside a spent session it takes the session's one override
+  // (mayOverrideLogoff) -- never a third logoff.
+  async breakOut(why, { critical = false } = {}) {
     const t = this.threat();
-    if (!this.policy.breakOutViaLogoff) return { did: false, crowd: t.near.length };
-    if (t.near.length < (this.policy.breakOutAbove ?? 2)) return { did: false, crowd: t.near.length };
-    // One logoff per healing session, whatever it is for (m59-healing-session.mjs).
     const me = String(this.s?.name ?? '');
+    const blocked = critical ? (this.walkBlockedOverrideReason?.() ?? null) : null;
+    if (!blocked) {
+      if (!this.policy.breakOutViaLogoff) return { did: false, crowd: t.near.length };
+      if (t.near.length < (this.policy.breakOutAbove ?? 2)) return { did: false, crowd: t.near.length };
+    }
+    // One logoff per healing session, whatever it is for (m59-healing-session.mjs).
     { const h = this.s.client?.vitals?.()?.health; closeIfHealed(me, { hp: h?.value, max: h?.max }); }
-    if (!mayLogoff(me)) return { did: false, crowd: t.near.length, why: 'this healing session already logged off once' };
-    this.note('reconnecting before stepping out', {
+    let override = null;
+    if (!mayLogoff(me)) {
+      if (!blocked || !mayOverrideLogoff(me))
+        return { did: false, crowd: t.near.length, why: blocked
+          ? 'this healing session already logged off and took its one override'
+          : 'this healing session already logged off once' };
+      override = blocked;
+      this.note('LOGOFF OVERRIDE: projected death outranks the one-logoff rule', { why, override,
+        rule: 'one play-dead logoff per healing session, except once when poisoned or walk-blocked, reached and out of health to spare' });
+    }
+    this.note(blocked ? 'reconnecting: walk-blocked below the flee line' : 'reconnecting before stepping out', {
       why, crowd: t.near.length, camped_on_us: t.engaged, what: t.names,
+      ...(blocked ? { walk_blocked: blocked } : {}),
       how: 'a reconnect hands back the entry grace period, so we walk out past a crowd that ' +
            'has to notice us one at a time rather than one that is already mid-swing' });
-    noteLogoff(me, { why: 'breaking out of a crowded safe spot', room: this.s.world?.room?.num ?? null });
-    const r = await this.reconnect('breaking out of a crowded safe spot');
+    noteLogoff(me, { why: blocked ? `walk-blocked: ${why}` : 'breaking out of a crowded safe spot',
+      room: this.s.world?.room?.num ?? null, override });
+    const r = await this.reconnect(blocked ? 'walk-blocked below the flee line' : 'breaking out of a crowded safe spot');
     if (!r.ok) return { did: false, crowd: t.near.length };
     this.tally.breakouts = (this.tally.breakouts || 0) + 1;
-    return { did: true, crowd: t.near.length };
+    return { did: true, crowd: t.near.length, ...(blocked ? { walk_blocked: blocked, override } : {}) };
   }
   // @end 1
 

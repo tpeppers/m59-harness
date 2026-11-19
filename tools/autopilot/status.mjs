@@ -440,14 +440,11 @@ export class StatusPart {
       safe_spot: this.hold ? {
         at: { col: this.hold.col, row: this.hold.row },
         works: this.holdWorks(),
-        evidence: this.hold.proven
-          ? (this.hold.inherited && !this.hold.provenAt
-              ? 'held under attack on an earlier visit'
-              : `nothing landed in ${Math.round(this.hold.quietMs / 1000)}s with ` +
-                `${this.hold.mostAttackers} thing(s) standing next to us`)
-          : (this.hold.failures
-              ? `hit ${this.hold.failures} time(s) while standing still — this square does not work`
-              : 'untested: treated as open floor until something stands next to us without landing a blow'),
+        // GEOMETRY, NOT A RECORD. This used to report "proven" / "untested: treated as open floor" from the
+        // held-under-fire flag, which the operator retired on 2026-11-19: a square the geometry says nothing can reach
+        // IS a safe spot. The quiet time is still reported, as an observation and never as a qualification.
+        evidence: 'the geometry: nothing within reach has line of sight to this square',
+        quiet_s: Math.round((this.hold.quietMs ?? 0) / 1000),
         // Not "sides open" any more: how many of the 28 squares within melee reach can
         // actually swing at this one, and how many we can hit from it for free.
         can_reach_you: this.hold.canReachYou, free_shots: this.hold.freeShots,
