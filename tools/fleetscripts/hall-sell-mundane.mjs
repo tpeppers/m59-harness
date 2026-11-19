@@ -256,8 +256,11 @@ export const script = {
     const steps = [verify(async ({ call }) => {
       S.posture = await posture(call);
       log(`orders saved for the errand: ${JSON.stringify(S.posture)}`);
+      // A FARM STRATEGY OWNS ITS CONFINEMENT and puts it back over a bare confine_rooms push (Bunsen, 05:34Z: still [377]
+      // after the push), so the strategy is cleared for the errand too; the restore step below gives it back.
       const r = await call('autopilot', { action: 'start', agent, mode: 'survive', confine_rooms: [], assigned_room: hall,
-        town_trips: false, why: 'hall-sell-mundane: selling hall gear' }, 60_000).catch(e => ({ error: e.message }));
+        town_trips: false, ...(S.posture.farm_strategy ? { farm_strategy: null } : {}),
+        why: 'hall-sell-mundane: selling hall gear' }, 60_000).catch(e => ({ error: e.message }));
       const now = await posture(call);
       if (now.confine_rooms.length) return { ok: false, why: `could not lift the confinement (${JSON.stringify(now.confine_rooms)}): ${r?.error ?? r?.reason ?? 'no reason given'}` };
       return true;
