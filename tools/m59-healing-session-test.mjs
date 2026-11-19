@@ -230,8 +230,10 @@ console.log('every logoff records itself, and the loop is gone');
   ok('the poisoned "hostile adjacent after the relog" loop is gone', !/poisoned, a hostile adjacent after the relog/.test(src) && !/_poisonRelogs/.test(src));
   ok('the survival pass closes a healed session every pass', /const healingSession = closeIfHealed\(/.test(src));
   ok('and the poison shelter takes no second spot inside a spent session', /!this\.hold && !oneSpotAlready/.test(src));
-  ok('the breakout logoff records itself and is refused inside a spent session',
-     /if \(!mayLogoff\(me\)\) return \{ did: false[\s\S]{0,800}noteLogoff\(me[^\n]*\n\s*const r = await this\.reconnect\('breaking out of a crowded safe spot'\)/.test(src));
+  // A spent session refuses it unless the body is walk-blocked below its flee line, and then only as the session's one
+  // override (Beaker, 2026-11-19; m59-no-proven-spot-test.mjs drives it end to end).
+  ok('the breakout logoff records itself and is refused inside a spent session (but for its one walk-blocked override)',
+     /if \(!mayLogoff\(me\)\) \{\s*if \(!blocked \|\| !mayOverrideLogoff\(me\)\)\s*return \{ did: false[\s\S]{0,1200}noteLogoff\(me,[^\n]*\n[^\n]*override \}\);\n\s*const r = await this\.reconnect\(blocked \? 'walk-blocked below the flee line' : 'breaking out of a crowded safe spot'\)/.test(src));
 }
 
 console.log('every named cause, in Robin\'s order, at full health: one logoff');

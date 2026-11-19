@@ -244,6 +244,8 @@ const SUITES = [
    'a journey never walks to an edge the confinement step guard will refuse (2142 -> 2133, 2501 -> 2508, prod 2026-10-27..31)'],
   ['m59-survival-edge-test.mjs',
    'a survival exit may leave the confinement into its one room, never a banned or recent-PvP room (probationary 2026-10-30)'],
+  ['m59-no-proven-spot-test.mjs',
+   'no decision reads a "proven" spot; the room\'s nearest spot before any door; walk-blocked below the flee line logs off once and may leave the confinement one room (Beaker, 111, 2026-11-19)'],
   ['m59-body-held-square-test.mjs',
    'a monster standing on the next square\'s stand point is walked round into that square, not re-aimed at for ever (Rowlf, Ukgoth r19c35)'],
   ['m59-track-midroom-test.mjs',

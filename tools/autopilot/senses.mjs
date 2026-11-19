@@ -448,7 +448,7 @@ export class SensesPart {
       trial.counted = counted;
       if (this.hold) {
         trial.quiet_total_s = Math.round(this.hold.quietMs / 1000);
-        trial.proven_after = this.hold.proven;
+        trial.quiet_recorded = !!this.hold.quietRecorded;
       }
       this.trials.push(trial);
       if (this.trials.length > 120) this.trials.splice(0, this.trials.length - 120);
@@ -510,14 +510,13 @@ export class SensesPart {
             });
             return;
           }
-          // It does not work. Say so loudly, forget the proof, and write it down so
-          // that the geometry cannot talk us back onto this square in ten minutes.
+          // SOMETHING LANDED A BLOW ON A BODY STANDING STILL HERE. That is not a verdict on the square's
+          // "proof" (there is no such thing any more -- operator, 2026-11-19); it is damage, now, and
+          // this keeper steps off the square for a while rather than rest through it.
           this.idleDamage = lost;
           this.hold.failures++;
           this.hold.damageWhileIdle += lost;
           this.hold.quietMs = 0;
-          const wasProven = this.hold.proven;
-          this.hold.proven = false;
           this.noteFailedRestSpot(this.hold.room, this.hold.col, this.hold.row);
           // THE ONE OBSERVATION THAT DISPROVES THE DEFINITION, WRITTEN SOMEWHERE CLEAN.
           //
@@ -539,7 +538,7 @@ export class SensesPart {
           this.recordRestOutcome({ damage: lost, settledMs, since: prev?.at ?? null });
           this.note('THIS IS NOT A SAFE SPOT', {
             where: { col: this.hold.col, row: this.hold.row }, room: room?.num,
-            lost_health: lost, attackers: company, was_proven: wasProven,
+            lost_health: lost, attackers: company,
             settled_ms: Math.max(0, settledMs),
             why: 'we were hit while standing still and not swinging, which is the one thing ' +
                  'that cannot happen in a working spot',
@@ -557,16 +556,15 @@ export class SensesPart {
           this.releaseHold('it does not work — we were hit standing still in it');
         } else {
           this.hold.quietMs += now - prev.at;
-          const alreadyProven = this.hold.proven;
-          if (!this.hold.proven && this.hold.quietMs >= PROOF_MS) {
-            this.hold.proven = true;
-            this.hold.provenAt = now;
-            // A `book.held(...)` write stood here. It recorded the same hold coordinates the
-            // failure path did, so its successes were as unattributable as its failures —
-            // and a square's past quiet was never the reason to trust it anyway.
-            // THE CASE THE DEFINITION PREDICTS: things stood next to us for PROOF_MS and not
-            // one of them landed a blow. Recorded so `clean` has a denominator — a rule with
-            // no violations and no observations says nothing at all.
+          // QUIET IS AN OBSERVATION, NOT A QUALIFICATION. This branch used to PROMOTE the square to
+          // `proven` after PROOF_MS of quiet with something adjacent -- the held-under-fire
+          // discriminator the operator retired on 2026-11-19 ("safe spots shouldn't be 'provable' in
+          // our code"). Nothing decides on it now: a square the geometry says nothing can reach is a
+          // safe spot from the moment it is taken. What is kept is the record: one clean outcome per
+          // hold, so the restwatch denominator is not empty, and one journal line saying so.
+          const alreadyRecorded = !!this.hold.quietRecorded;
+          if (!alreadyRecorded && this.hold.quietMs >= PROOF_MS) {
+            this.hold.quietRecorded = true;
             this.recordRestOutcome({ damage: 0, settledMs: this.hold.quietMs,
                                      since: this.hold.takenAt ?? null });
             this.note('this safe spot works', {
@@ -574,20 +572,17 @@ export class SensesPart {
               quiet_for_s: Math.round(this.hold.quietMs / 1000), attackers: this.hold.mostAttackers,
               why: 'things have been standing next to us for ' +
                    Math.round(this.hold.quietMs / 1000) + 's and none of them has landed a blow',
-              means: 'we can now rest to full here instead of running, and break off any fight ' +
-                     'that turns against us at no cost',
-              ...(this.spotTest ? { learned_by: 'deliberately holding the swing to find out' } : {}) });
-            this.spotTest = null;      // the question is answered; get on with the fight
+              means: 'nothing: the geometry already made this a safe spot when it was taken; this is the ' +
+                     'observation agreeing with it, recorded for the restwatch outcome count',
+              ...(this.spotTest ? { learned_by: 'deliberately holding the swing' } : {}) });
+            this.spotTest = null;
           }
-          // Settled last, so that `proven_after` on this reading says what this
-          // reading concluded rather than what was believed before it.
-          settle(this.hold.proven && !alreadyProven
-            ? `PROVED: ${Math.round(this.hold.quietMs / 1000)}s quiet with up to ` +
+          settle(!alreadyRecorded && this.hold.quietRecorded
+            ? `QUIET: ${Math.round(this.hold.quietMs / 1000)}s with up to ` +
               `${this.hold.mostAttackers} adjacent, nothing landed`
-            : alreadyProven
+            : alreadyRecorded
               ? `still holding: ${company} adjacent, nothing landed`
-              : `quiet with ${company} adjacent — ${Math.round(this.hold.quietMs / 1000)}s of the ` +
-                `${PROOF_MS / 1000}s needed`, true);
+              : `quiet with ${company} adjacent — ${Math.round(this.hold.quietMs / 1000)}s so far`, true);
         }
       }
     }
@@ -706,7 +701,7 @@ export class SensesPart {
     if (!this.hold) return;
     const h = this.hold;
     this.note('gave up the safe spot', {
-      where: { col: h.col, row: h.row }, why, proven: h.proven,
+      where: { col: h.col, row: h.row }, why,
       held_s: Math.round((Date.now() - h.takenAt) / 1000) });
     this.hold = null;
     // Pull evidence belongs to the square being released. Letting two misses from one

@@ -4,7 +4,9 @@
 // `installParts` (tools/autopilot/parts.mjs). Do not import this file directly: import tools/m59-autopilot.mjs, which
 // loads it. `autopilotSource()` (tools/autopilot/source.mjs) splices the `@part` block below into the keeper's text.
 //
-// 6 methods: poisonWatchNow, poisonExitState, poisonOverrideReason, takePoisonExit, curePotionInPack, drinkCurePotion
+// 11 methods: poisonWatchNow, poisonExitState, noteWalkBlocked, belowFleeLine, criticalEdgeExits, walkBlockedRecently,
+//   walkBlockedOverrideReason,
+//   poisonOverrideReason, takePoisonExit, curePotionInPack, drinkCurePotion
 //
 // THE OPERATOR'S RULE STANDS: "the correct solution to poison is to lock down in the nearest safe spot until the poison
 // ends and healing occurs afterwards, not to flee through it". It is right because poison cannot kill (player.kod
@@ -28,11 +30,13 @@
 //             (retreat_to_inn), so the room's exit is the last one here. Nothing left: the ladder gets the pass.
 import { castRecoveryCure, affordablePoisonCure } from '../m59-recovery-cure.mjs';
 import { affordableHeal, castRecoveryHeal } from '../m59-recovery-heal.mjs';
-import { mayLogoff, mayOverrideLogoff, SPENT_EXIT_RETRY_MS } from '../m59-healing-session.mjs';
+import { mayLogoff, mayOverrideLogoff, SPENT_EXIT_RETRY_MS, WALK_BLOCKED_WINDOW_MS, walkBlockedVerdict } from '../m59-healing-session.mjs';
 import { levelBlow, PoisonWatch, poisonedNow, poisonExitVerdict, poisonStacks } from '../m59-poison.mjs';
 import { potionCatalogue, potionCondition } from '../m59-potions.mjs';
 import { chooseSurvivalDecision, currentSurvivalDecision } from '../m59-survival-decision.mjs';
 import { roomIsNoCombat } from '../m59-hazards.mjs';
+import { pvpWindowMs, survivalEdgeVerdict } from '../m59-survival-edge.mjs';
+import { recentPvpDeathRooms } from '../m59-pvp-return.mjs';
 import { healAllowOf } from '../m59-autopilot.mjs';
 
 // One attempt of each exit per this long, so a cure that fizzles or a heal that is refused is not the whole answer.
@@ -108,6 +112,77 @@ export class PoisonExitPart {
     }
     this._poisonVerdict = { ...verdict, at: now };
     return verdict;
+  }
+
+  /**
+   * WALK-BLOCKED: a safe-spot approach (`kind` 'spot') or a way out of the room ('exit') just failed from here. Kept per
+   * room and only for WALK_BLOCKED_WINDOW_MS (walkBlockedVerdict), so a body that moves on, or that walks again, is not
+   * remembered as stuck. Bookkeeping only: nothing is refused because of it; it is what lets the logoff see through a
+   * spent healing session once (walkBlockedOverrideReason).
+   */
+  noteWalkBlocked(kind, why = null, now = Date.now()) {
+    const room = this.s?.world?.room?.num ?? null;
+    if (room == null || (kind !== 'spot' && kind !== 'exit')) return null;
+    const b = (this._walkBlocked && this._walkBlocked.room === room) ? this._walkBlocked : (this._walkBlocked = { room });
+    b[`${kind}At`] = now;
+    b[`${kind}Why`] = why == null ? null : String(why).slice(0, 160);
+    return b;
+  }
+
+  /**
+   * CRITICAL HEALTH, ONE DEFINITION: below the flee line (safety().fleeAt, else the policy's fleeBelow). The line the
+   * walk-blocked override and the survival exit's pass out of the confinement (m59-survival-edge.mjs) both read.
+   * -> `{ below, frac, fleeAt }`; `below` is false when health cannot be read.
+   */
+  belowFleeLine() {
+    const h = this.s?.client?.vitals?.()?.health;
+    const frac = h?.max > 0 && Number.isFinite(h.value) ? h.value / h.max : null;
+    let fleeAt = null;
+    try { fleeAt = this.safety?.()?.fleeAt ?? null; } catch { fleeAt = null; }
+    fleeAt ??= this.policy?.fleeBelow ?? 0.45;
+    return { below: frac !== null && Number.isFinite(fleeAt) && frac < fleeAt, frac, fleeAt };
+  }
+
+  /**
+   * THE SURVIVAL EDGE PASS AT CRITICAL HEALTH (m59-survival-edge.mjs, probationary since 2026-10-30). Of `exits` -- exits
+   * the confinement refuses -- the ones a survival exit may take: below the flee line only, and never into a banned room
+   * or one where we died to a player within the PvP hold. Beaker's leave-to-recover rung filtered its exits by the
+   * confinement itself and walked them with leaveViaAny, so it never reached Autopilot.travel, which is the only place
+   * the pass was ever asked: the probationary rule existed and this branch could not see it.
+   */
+  criticalEdgeExits(exits = []) {
+    if (!this.belowFleeLine().below) return [];
+    let pvpRooms = new Set();
+    try { pvpRooms = recentPvpDeathRooms({ withinMs: pvpWindowMs(this.policy) }); } catch { pvpRooms = new Set(); }
+    return (Array.isArray(exits) ? exits : []).filter(e => e?.to != null &&
+      survivalEdgeVerdict({ to: e.to, policy: this.policy, pvpRooms }).allowed);
+  }
+
+  /** Did `kind` fail from this room within `withinMs`? */
+  walkBlockedRecently(kind, withinMs = WALK_BLOCKED_WINDOW_MS, now = Date.now()) {
+    const b = this._walkBlocked, room = this.s?.world?.room?.num ?? null;
+    const at = b && b.room === room ? b[`${kind}At`] : null;
+    return Number.isFinite(at) && now - at < withinMs;
+  }
+
+  /**
+   * For playDead and breakOut: a reason when this WALK-BLOCKED body may take the once-per-session override logoff
+   * (m59-healing-session.mjs walkBlockedVerdict -- Beaker), else null. Below the flee line, off any recovery wall, being
+   * reached (something within striking range, or a blow in the last five seconds), and both the safe spot and the way out
+   * failed from this room in the last thirty seconds.
+   */
+  walkBlockedOverrideReason(now = Date.now()) {
+    const s = this.s, c = s?.client;
+    if (!c || s.live === false || s.world?.room?.num === 1) return null;
+    const { frac, fleeAt } = this.belowFleeLine();
+    let onWall = false;
+    try { onWall = !!this.currentRecoveryWall?.(); } catch { onWall = false; }
+    let near = [];
+    try { near = this.inReachOfUs?.() ?? []; } catch { near = []; }
+    const reached = near.length > 0 || (Number.isFinite(s.damagedAt) && now - s.damagedAt < 5_000);
+    const v = walkBlockedVerdict({ blocked: this._walkBlocked, room: s.world?.room?.num ?? null, now, frac, fleeAt,
+      onWall, reached });
+    return v.grant ? v.why : null;
   }
 
   /** For playDead: a reason when this body may take the projected-death override logoff, else null. */

@@ -316,3 +316,12 @@ entered. If there are none, drop the "probationary" label. If PvP followed, narr
 (`SURVIVAL_EDGE_ORIGINS` in the module). `node tools/m59-survival-edge-test.mjs` (9) pins the verdict,
 the PvP-room reader, and the pass on the real 2501 north edge.
 
+**And the leave-to-recover rung, below the flee line (2026-11-19).** `passFleeAndRest`'s leave-to-recover
+rung filters exits by the confinement itself and walks them with `leaveViaAny`, so it never reached
+`Autopilot.travel` and the pass never applied to it -- Beaker died in the Barloque sewers with 112 refused
+and 108 blocked. Below the flee line it now asks the same verdict (`Autopilot.criticalEdgeExits`), adds the
+allowed rooms to its candidates, records `survival_edge_pass`, and opens the step guard with an edge pass
+naming exactly those rooms for the length of the walk. The spent-session exit (`leaveRoomForRecovery`) does
+the same through `spentSessionExit`'s `edge` predicate. Above the flee line nothing changed.
+`m59-no-proven-spot-test.mjs` pins it.
+

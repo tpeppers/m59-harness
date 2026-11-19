@@ -146,6 +146,33 @@ export function mayOverrideLogoff(agent, { dir = healingDir(), now = Date.now() 
   const s = readSession(agent, { dir, now });
   return !!s && s.logoffs >= 1 && (s.overrides ?? 0) < LOGOFF_OVERRIDES_PER_SESSION;
 }
+// AND SO DOES A BODY THAT CANNOT WALK ANYWHERE. Beaker (t6), 2026-11-19 18:12Z, the Barloque sewers (111), 143 max health,
+// a karma-strict Qor caster in a room of twenty-five monsters, most of them giant rats he spares: his one logoff spent
+// earlier in the session, the nearest safe spot "could not reach -- blocked, every heading refused", the permitted exit
+// `object_blocked` three times a pass, the confinement refusing the other one -- and he stood on r35c47 from 104 health to
+// 0 over twenty-five seconds, each pass deciding correctly to leave and none of them able to. The logoff is the one move
+// that needs no walk at all, and a reconnect hands back the entry grace period, so the crowd that was blocking the walk
+// has to notice the body again one at a time. So a body that is WALK-BLOCKED -- a safe-spot approach and a way out both
+// failed from this room within WALK_BLOCKED_WINDOW_MS -- below its flee line, off any recovery wall and being reached,
+// takes the same once-per-session override the poison exit takes (mayOverrideLogoff); a third logoff is still never
+// granted. Pure, so the decision can be pinned without a keeper.
+export const WALK_BLOCKED_WINDOW_MS = 30_000;
+/**
+ * `blocked`: `{ room, spotAt, spotWhy, exitAt, exitWhy }` (the keeper's noteWalkBlocked record). -> `{ grant, why }`.
+ */
+export function walkBlockedVerdict({ blocked = null, room = null, now = Date.now(), frac = null, fleeAt = null,
+                                     onWall = false, reached = false, windowMs = WALK_BLOCKED_WINDOW_MS } = {}) {
+  const fresh = at => Number.isFinite(at) && at <= now && now - at < windowMs;
+  if (!blocked || room == null || Number(blocked.room) !== Number(room)) return { grant: false, why: 'not walk-blocked in this room' };
+  if (!fresh(blocked.spotAt)) return { grant: false, why: 'no failed safe-spot approach here recently' };
+  if (!fresh(blocked.exitAt)) return { grant: false, why: 'no failed way out of here recently' };
+  if (!(Number.isFinite(frac) && Number.isFinite(fleeAt) && frac < fleeAt)) return { grant: false, why: 'not below the flee line' };
+  if (onWall) return { grant: false, why: 'on a recovery wall: rest there' };
+  if (!reached) return { grant: false, why: 'nothing is reaching the body' };
+  return { grant: true, why: `walk-blocked at ${Math.round(frac * 100)}% (flee line ${Math.round(fleeAt * 100)}%): ` +
+    `the safe spot (${blocked.spotWhy ?? 'unreached'}) and the way out (${blocked.exitWhy ?? 'unreached'}) both failed ` +
+    'from here, and something is still reaching the body' };
+}
 /** Record the logoff, opening the session if none is open. `cooperative`: a fleet-mate's distraction logoff.
  *  `override`: the projected-death override (mayOverrideLogoff), with its reason. */
 export function noteLogoff(agent, { why = null, room = null, cooperative = false, override = null, dir = healingDir(), now = Date.now() } = {}) {
@@ -213,11 +240,15 @@ export function spentLogoffReplacement({ active = null, onSpot = false, hadHold 
 
 // WHICH WAY OUT. The nearest reachable exit into a room the confinement allows -- for a farm strategy that is its own
 // fall-back (kocatan-avar-warriors: 2115 -> 2013, the guard tower). A confinement is the operator's and is not waived here
-// (the leave-to-recover rung in passFleeAndRest refuses the same exits): with no permitted exit the answer is null.
-export function spentSessionExit(exits = [], { here = null, confine = null } = {}) {
+// by default (the leave-to-recover rung in passFleeAndRest refuses the same exits): with no permitted exit the answer is
+// null. `edge` is the one exception: a predicate over an out-of-confinement room, true when the probationary survival
+// edge pass (m59-survival-edge.mjs) lets a body at critical health out into it. The keeper passes one only below the
+// flee line (Autopilot.criticalEdgeExits); then such an exit competes on distance with the permitted ones.
+export function spentSessionExit(exits = [], { here = null, confine = null, edge = null } = {}) {
   const allowed = Array.isArray(confine) && confine.length ? new Set(confine.map(Number)) : null;
+  const passes = to => !allowed || allowed.has(to) || (typeof edge === 'function' && edge(to) === true);
   const usable = (Array.isArray(exits) ? exits : []).filter(e => e && e.to != null && e.reachable !== false
-    && Number(e.to) !== Number(here) && Number(e.to) !== 1 && (!allowed || allowed.has(Number(e.to))));
+    && Number(e.to) !== Number(here) && Number(e.to) !== 1 && passes(Number(e.to)));
   usable.sort((a, b) => (a.steps_away ?? 999) - (b.steps_away ?? 999));
   return usable[0] ?? null;
 }

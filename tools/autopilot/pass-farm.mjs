@@ -90,7 +90,7 @@ export class PassFarmPart {
     const { s, hold, pendingPull } = this, c = s.client, me = c?.self;
     if (this.mode !== 'farm' || this.policy.neverAttack === true || this.policy.assignedRoom !== 552 ||
         !this.oceanRangedRecoveryEnabled() ||
-        s.world?.room?.num !== 552 || !pendingPull?.target_id || !hold?.proven || hold.failures ||
+        s.world?.room?.num !== 552 || !pendingPull?.target_id || !hold ||
         hold.room !== 552 || hold.row !== me?.row || hold.col !== me?.col || me?.predicted ||
         this.policy.partner || this.clearing) return null;
     const { id: roomId, security } = c.room;
@@ -121,7 +121,7 @@ export class PassFarmPart {
           !this.oceanRangedRecoveryEnabled() || this.policy.partner || this.clearing ||
           s.world?.room?.num !== 552 || s.world?.geometry !== geo ||
           s.movementGeneration !== generation || s.lifeBoundary !== life ||
-          this.hold !== hold || !hold.proven || hold.failures || at?.predicted ||
+          this.hold !== hold || at?.predicted ||
           at?.row !== hold.row || at?.col !== hold.col || this.pendingPull?.target_id !== pullId ||
           this.stopping || this.inert || this.suspendedJourney || s.job?.busy ||
           liveMoveOrder(s) || s.combat?.active || s._rite ||

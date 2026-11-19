@@ -269,10 +269,12 @@ export class CooperativePart {
         // PROJECTED DEATH OUTRANKS THE ONE-LOGOFF RULE, ONCE (m59-healing-session.mjs mayOverrideLogoff). Asked here, so
         // every rung that reaches for the logoff -- the flee line, the doomed rung, the recovery dispatcher, the poison
         // exit -- sees through a spent session when the body is poisoned and reached with no health to spare. Waldorf.
-        override=mayOverrideLogoff(me)?(this.poisonOverrideReason?.()??null):null;
+        // AND WHEN IT IS WALK-BLOCKED below its flee line (walkBlockedOverrideReason): the safe spot and the way out both
+        // failed from here, and something is still reaching it. Beaker. The same one override; never a third logoff.
+        override=mayOverrideLogoff(me)?(this.poisonOverrideReason?.()??this.walkBlockedOverrideReason?.()??null):null;
         if(override){
           this.note('LOGOFF OVERRIDE: projected death outranks the one-logoff rule',{why,override,
-            rule:'one play-dead logoff per healing session, except once when poisoned, reached and out of health to spare',
+            rule:'one play-dead logoff per healing session, except once when poisoned or walk-blocked, reached and out of health to spare',
             session:readSession(me)});
         }
       }
@@ -342,7 +344,17 @@ export class CooperativePart {
       catch(e) { this.note('cooperative logoff unavailable',{why:e.message}); }
       if (!sameLife()) return false;
     }
-    if (!atWall && !this.playerThreatPresent()) {
+    // EXCEPT A BODY THAT CANNOT MOVE. "The ladder falls through to something that MOVES" is the refusal's whole premise,
+    // and a walk-blocked body below its flee line has just been refused by every mover there is: the nearest safe spot
+    // ("blocked -- every heading refused") and the way out (object_blocked). Beaker (t6), 2026-11-19, the Barloque sewers:
+    // twenty-five seconds on r35c47 from 104 to 0, nothing moving. And the relog this buys is not the freeze the refusal
+    // is about: playDeadObserved comes back and FLEES to the nearest reachable spot (operator, 2026-10-27), with the
+    // entry grace period handed back, so the crowd that blocked the walk has to notice the body again one at a time.
+    const walkBlocked = !atWall ? (this.walkBlockedOverrideReason?.() ?? null) : null;
+    if (walkBlocked && !this.playerThreatPresent())
+      this.note('logging off in the open: walk-blocked below the flee line', { why, walk_blocked: walkBlocked,
+        then: 'reconnect, then the nearest reachable safe spot with the grace period in hand' });
+    if (!atWall && !this.playerThreatPresent() && !walkBlocked) {
 
       this.note('refusing to play dead in the open — it does not work on monsters', {
         why, health: s.client?.vitals?.()?.health?.value ?? null,
@@ -649,7 +661,7 @@ export class CooperativePart {
     const bodyId = client.selfId, roomId = client.room?.id;
     const canProveRecovery = room === 552 && this.mode === 'farm' && this.oceanRangedRecoveryEnabled() &&
       d?.id === decisionId && d.strategy === 'logoff_safe' && typeof d.epoch === 'string' &&
-      spot?.proven === true && spot.room === room && client.self?.id === bodyId &&
+      !!spot && spot.room === room && client.self?.id === bodyId &&
       Number.isSafeInteger(bodyId) && Number.isSafeInteger(roomId) &&
       before?.value > 0 && before.value < before.max && client.ailments?.()?.length === 0;
     this._safeLogoffRecovery = null;
@@ -713,7 +725,7 @@ export class CooperativePart {
         }
 
         this.note('back on the safe spot', {
-          where: { col: spot.col, row: spot.row }, proven: spot.proven,
+          where: { col: spot.col, row: spot.row },
           turned: armed.confirmed === true, facing: armed.confirmed ? returned.self.degrees : null,
           plan: armed.confirmed
             ? 'health regeneration is armed and nothing can reach this square — rest to full here'

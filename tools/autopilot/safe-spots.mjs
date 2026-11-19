@@ -222,7 +222,7 @@ export class SafeSpotsPart {
     // refused by it.
     if(options.recovery) {
       if(result?.took)this.clearSurvivalJam('safe refuge reached');
-      else if(!result?.cancelled)this.rememberSurvivalJam({failed:true});
+      else if(!result?.cancelled){this.rememberSurvivalJam({failed:true});this.noteWalkBlocked?.('spot',result?.why??'refuge unavailable');}
     }
     if (result?.took && options.recovery) this.recordShelterStop();
     if (decision && currentSurvivalDecision(this.s)?.id === decision.id) {
@@ -468,7 +468,7 @@ export class SafeSpotsPart {
     const overmatchReady=!whole && !scriptedReady && !farmReady && this.overmatchRested?.(v)===true;
     if (whole || scriptedReady || farmReady || overmatchReady) {
       const hold=this.hold, refuge=d.chosen_refuge;
-      if ((d.strategy==='rest_safe' || sameLogoff) && d.status==='recovering' && hp===1 && hold?.proven===true &&
+      if ((d.strategy==='rest_safe' || sameLogoff) && d.status==='recovering' && hp===1 && !!hold &&
           hold.room===s.world?.room?.num && refuge?.room===hold.room && refuge.row===hold.row && refuge.col===hold.col &&
           client?.combatReady===true && client.ailments?.()?.length===0 && this.currentRecoveryWall()) {
         const rearmed=noteHealingRecovery(String(s.name??''),{decision:d,health:v.health,safeLogoff:sameLogoff ? receipt : null});
@@ -636,11 +636,16 @@ export class SafeSpotsPart {
     this._spentExitTried={room,at:Date.now()};
     let exits=[];try{exits=s.world?.exits?.()??[];}catch{exits=[];}
     const confine=Array.isArray(this.policy?.confineRooms)&&this.policy.confineRooms.length?this.policy.confineRooms:null;
-    const fallback=spentSessionExit(exits,{here:room,confine});
+    // AT CRITICAL HEALTH THE SURVIVAL EDGE PASS APPLIES HERE TOO (criticalEdgeExits; m59-survival-edge.mjs): an exit out
+    // of the confinement into one room that is neither banned nor a recent PvP death room. travel() below asks the same
+    // verdict for a `survival_exit` and opens the step guard for it, so nothing else needs letting out.
+    const edgeRooms=new Set((this.criticalEdgeExits?.(exits)??[]).map(e=>Number(e.to)));
+    const fallback=spentSessionExit(exits,{here:room,confine,edge:edgeRooms.size?(to=>edgeRooms.has(Number(to))):null});
     const exit=shorterOceanRecoveryExit(this,exits,fallback) ?? fallback;
     const hp=s.client?.vitals?.()?.health;
     if(!exit) {
       const why=confine?'no reachable exit into the confinement':'no reachable exit';
+      this.noteWalkBlocked?.('exit',why);
       finishSurvivalDecision(s,d.id,'blocked',why);
       this.note('no safe spot and no way out: the ordinary ladder takes the pass',{room,why,
         confined_to:confine?.map(Number)??null,health:hp?`${hp.value}/${hp.max}`:null});
@@ -661,6 +666,7 @@ export class SafeSpotsPart {
       this.progress('left a room with no reachable safe spot');
       return true;
     }
+    this.noteWalkBlocked?.('exit',r?.reason??r?.why??'could not leave');
     finishSurvivalDecision(s,d.id,'blocked',`could not leave by ${exit.to}: ${r?.reason??r?.why??'no reason given'}`);
     this.note('could not leave the room: the ordinary ladder takes the pass',{room,to:Number(exit.to),
       why:r?.reason??r?.why??null});
