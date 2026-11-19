@@ -328,6 +328,10 @@ export class StatusPart {
             spent_rest_since: this.spentRestSince ?? null };
         } catch { return null; }
       })(),
+      // THE WEAPON RESERVE (m59-weapon-reserve.mjs): whether a replacement weapon's room is being kept free (`in_force`,
+      // or `waived` by a usable spare), the free space against it, the last pickup left for it, and what the unarmed
+      // remedy last did (`remedy`: armed / room / blocked / held, with what it dropped and what stayed).
+      weapon_reserve: (() => { try { return this.weaponReserveStatus?.() ?? null; } catch { return null; } })(),
       vigor: this.vigor.engagements || this.vigor.waited ? {
         floor_now: this.fightFloor(), want: WANT_FIGHT_VIGOR,
         engagements: this.vigor.engagements,

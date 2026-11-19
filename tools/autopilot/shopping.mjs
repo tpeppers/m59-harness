@@ -8,17 +8,22 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 18 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
+// 21 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
 //   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, townSaleOptions, townHeldBackIds, townReceivedOnTop, ownSalePlan, salePlanView,
-//   makeSpaceNow, postShoppingPlan,
+//   makeSpaceNow, reserveDropRules, makeRoomBeyondPlan, reserveDroppedStock, postShoppingPlan,
 //   ensurePurchaseFunds, bankRun, walkingFloat, bankAboveNow, purseLeaseStatus
 import { readBankerLine } from '../m59-bank.mjs';
 import { readSession } from '../m59-healing-session.mjs';
 import { guildPlan } from '../m59-guildwants.mjs';
-import { MARKET_KEEP, isFood, weighPack } from '../m59-items.mjs';
-import { makeSpace, salePlanSummary } from '../m59-make-space.mjs';
+import { addStashClaim, dibsFile } from '../m59-dibs.mjs';
+import { stashClaim } from '../m59-floor-cache.mjs';
+import { intentForSession } from '../m59-inventory-intent.mjs';
+import { MARKET_KEEP, isFood, itemNameKey, weighPack } from '../m59-items.mjs';
+import { chooseDrops, dropPicks, freeOf, makeSpace, neverDropped, salePlanSummary } from '../m59-make-space.mjs';
+import { isQuestItem } from '../m59-quest-items.mjs';
+import { beyondThePlan, isShort, shortOf, unwieldableWhy } from '../m59-weapon-reserve.mjs';
 import { bankAboveOf, leaseCarry, walkingFloatOf } from '../m59-purse-lease.mjs';
-import { norm } from '../m59-loadout.mjs';
+import { keepTest, norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
 import { farmTownKeep, farmTownMenu, farmTownSaleLoadout, usesOceanCourier } from '../m59-farm-town.mjs';
@@ -28,6 +33,10 @@ import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
 import { countsOf, overlayRequests } from '../m59-reagent-autobalance.mjs';
 import * as skills from '../m59-skills.mjs';
 import { BANKS, FOOD_SHOP, ITEM_VALUE, MARKET_STOPS, REST_VIGOR_CAP, TITHE_FLEET, VIGOR_CAP, hungerNeedsTown, purchaseEnabled, reagentTargetFor, splitBySourcing, townDestinations , townTable } from '../m59-autopilot.mjs';
+
+// How far around the square it stood on a stack dropped by the unarmed remedy is reserved (dibs `near`). The drop lands
+// on the dropper's own square; one square of slack covers a position the client had only predicted.
+const RESERVE_DROP_RADIUS = 1;
 
 export class ShoppingPart {
   // @part 1
@@ -310,13 +319,173 @@ export class ShoppingPart {
       capacityOf: () => skills.carryCapacity(this.s.client),
       heldBack: () => this.heldBackIds?.() ?? new Set() });
     // A drop, or a shortfall the plan could not cover, is worth a row; "already enough room" is not.
+    // AND A SHORTFALL SAYS WHAT STAYED (`kept`: the biggest stacks and what protects each). `dropped: []` with nothing
+    // beside it was this line's whole answer to four unarmed farmers for hours on 2026-11-18.
     if (r.dropped?.length || (!r.refused && !r.ok)) {
+      const kept = (r.kept ?? []).map(k => `${k.amount} ${k.name}: ${k.why}`);
       try { this.ledgerEvent?.('make_space', { needed: r.needed, freed: r.freed, dropped: r.dropped,
-        short_by: r.short_by, ok: r.ok, why, room_num: this.s.world?.room?.num ?? null }); } catch {}
+        short_by: r.short_by, ok: r.ok, why, room_num: this.s.world?.room?.num ?? null,
+        ...(kept.length ? { kept: r.kept } : {}) }); } catch {}
       this.note('made space', { needed: r.needed, freed: r.freed, short_by: r.short_by,
-        dropped: (r.dropped ?? []).map(d => `${d.amount} ${d.name}`), why });
+        dropped: (r.dropped ?? []).map(d => `${d.amount} ${d.name}`), ...(kept.length ? { kept } : {}), why });
     }
     return r;
+  }
+
+  /**
+   * WHAT THE UNARMED REMEDY MAY NEVER DROP, WHAT IS USELESS GEAR, AND HOW MUCH OF A STACK MUST STAY: the rules
+   * beyondThePlan (tools/m59-weapon-reserve.mjs) sorts the pack by, read from this keeper at the moment of asking.
+   *   hard      worn or wielded; money, a bow, arrows, the chalice (m59-make-space neverDropped); a quest item; an id
+   *             this keeper holds back (enchanted or dedicated, just delivered, hall-bound magic weapons); an item
+   *             bound to a duty (dutyBoundNames: the chalice, a holder's cargo, a curse-cycle keep, the roulette's
+   *             weapon); a cursed item; an operator's keep veto or a loot policy that says keep.
+   *   unusable  junk; a broken weapon or broken armour; a weapon on the ban list or outside the "only" weapon. Never a
+   *             magic-graded or unread weapon: that is loot whose worth nobody has read, not dead weight.
+   *   named     for gear: a name the protect / vault / guild lists or the loadout keep.
+   *   floor     the working stock of a stack: the loadout's carry minimum, the PvP and training reserve for the spells
+   *             this character knows, and its create-food reagent target.
+   */
+  reserveDropRules(c = this.s?.client, { worn = skills.equippedNow(c) ?? new Set(), heldBack = this.heldBackIds?.() ?? new Set() } = {}) {
+    const s = this.s;
+    const live = id => (c?.inventory ?? []).find(o => Number(o.id) === Number(id)) ?? null;
+    const key = n => itemNameKey(n);
+    let duty = [], protectedNames = [], floors = {}, pvp = new Map(), banned = null, only = null, keepLoadout = null;
+    try { duty = this.dutyBoundNames?.() ?? []; } catch { duty = []; }
+    try { protectedNames = this.protectedItemNames?.() ?? []; } catch { protectedNames = []; }
+    try { floors = this.carryFloors?.() ?? {}; } catch { floors = {}; }
+    try { banned = this.bannedWeaponsNow?.() ?? null; only = this.trainingWeaponOnlyNow?.() ?? null; } catch { /* no ban known */ }
+    try { keepLoadout = keepTest(this.loadout?.() ?? null); } catch { keepLoadout = null; }
+    try {
+      const who = s?.reserveWho ?? null;
+      const book = who ? readReserve(reserveFile(who.fleet)) : null;
+      if (book) {
+        const known = (c?.spells ?? []).map(sp => c.rsc?.get?.(sp.nameRsc) ?? sp.name).filter(Boolean);
+        const casts = keptCastsFor(book, who);
+        pvp = floorsFor({ spells: casts, items: resolveReserve(book, who)?.items ?? {} }, known.length ? known : Object.keys(casts));
+      }
+    } catch { pvp = new Map(); }
+    const broken = skills.brokenSet(c);
+    const hard = row => {
+      const o = live(row.id), name = row.name;
+      if (!o) return 'no longer in the pack';
+      if (row.equipped || worn.has(o.id)) return 'worn or wielded';
+      if (neverDropped(name)) return 'never dropped: money, a bow, arrows or the chalice';
+      if (isQuestItem(name)) return 'a quest item';
+      if (heldBack.has(Number(o.id))) return 'held back: enchanted or dedicated, just delivered, or bound for the hall';
+      if (this.wontDrop?.has?.(o.id)) return 'the server will not let it be put down';
+      if (skills.itemIsProtected(name, duty)) return "bound to a duty: the chalice, a holder's cargo, a curse-cycle keep or the training weapon";
+      if (skills.isCursedItem(c, o, name)) return 'cursed: a drop does not put it down';
+      if (intentForSession(s, { id: o.id, name })?.state === 'keep') return 'an operator keep veto';
+      if (s?.lootDisposition?.(o)?.action === 'keep') return 'a loot policy keeps it';
+      return null;
+    };
+    const unusable = row => {
+      const o = live(row.id), name = row.name;
+      if (!o) return null;
+      if (skills.isJunk(name)) return 'junk';
+      if (skills.weaponScore(name) > 0) {
+        if (skills.isMagicGrade(o) || (skills.isUnrevealed(o) && !skills.isOwnSummon(c, o))) return null;
+        if (broken.has(o.id)) return 'a broken weapon';
+        const why = unwieldableWhy(name, { banned, only });
+        return why ? `a weapon it may not wield: ${why}` : null;
+      }
+      return skills.armourKind(name) && broken.has(o.id) ? 'broken armour' : null;
+    };
+    const named = row => {
+      if (skills.itemIsProtected(row.name, protectedNames)) return 'a protected name (its protect, vault or guild lists)';
+      const kept = keepLoadout?.(row.name);
+      return kept ? `its loadout: ${kept}` : null;
+    };
+    const floor = row => {
+      let n = 0;
+      for (const [name, min] of Object.entries(floors)) if (key(name) === key(row.name)) n = Math.max(n, Number(min) || 0);
+      n = Math.max(n, pvp.get(reagentKey(row.name)) ?? 0);
+      const kind = skills.shareKind(row.name);
+      if (kind) n = Math.max(n, Number(reagentTargetFor(kind, this.policy?.reagentTarget)) || 0);
+      return n;
+    };
+    return { hard, unusable, named, floor, isFood: row => isFood(row.name), stack: row => (Number(live(row.id)?.amount) || 0) >= 1 };
+  }
+
+  /**
+   * THE UNARMED REMEDY, BEYOND THE SALE PLAN (steps 3 and 4 of Autopilot.unarmedMakeSpace; tools/m59-weapon-reserve.mjs).
+   * Until `need` ({ bulk, weight }: the weapon reserve) is free, and not a unit past it:
+   *   gear   weapons and armour this body may not use and nothing protects, then
+   *   stock  the minimum number of units of the least valuable protected stack (value per unit of the dimension that
+   *          is short, m59-make-space chooseDrops), then
+   *   food   the same from the larder, never the last of a food.
+   * Every drop is by exact id and amount and verified by a re-read (dropPicks). Dropped stock is reserved on the floor
+   * for this character in the dibs book, so no other farmer's sweep takes it: this character picks it back up once it
+   * has the room, and a fleet-mate or courier takes it by id. One `make_space` ledger row says what, how many and why;
+   * `kept` says what stayed and what protects it.
+   */
+  async makeRoomBeyondPlan({ need, why = 'unarmed: room for a weapon' } = {}) {
+    const s = this.s, c = s?.client;
+    const none = (refused, whyNot) => ({ ok: false, refused, why: whyNot, needed: need, dropped: [], freed: { bulk: 0, weight: 0 }, kept: [] });
+    if (!c) return none('no client', 'no client');
+    if (c.trade) return none('trading', 'a trade is open; nothing is dropped mid-offer');
+    const worn = skills.equippedNow(c);
+    if (!worn) return none('equipment unknown', 'the use list has not been read, so what is worn cannot be told from what is carried');
+    const since = c.evSeq;
+    await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+    await c.waitFor({ since, kinds: ['inventory'], timeoutMs: 3000 }).catch(() => null);
+    const free0 = freeOf(skills.carryCapacity(c));
+    if (!free0) return none('capacity unknown', 'might has not been read');
+    if (!isShort(shortOf(free0, need)))
+      return { ok: true, needed: need, dropped: [], freed: { bulk: 0, weight: 0 }, kept: [], short_by: { bulk: 0, weight: 0 }, why };
+    const plan = this.ownSalePlan();
+    if (plan?.error) return none('sale plan unavailable', plan.error);
+    const heldBack = this.heldBackIds?.() ?? new Set();
+    const tiers = beyondThePlan(salePlanSummary(plan, { heldBack }).rows, this.reserveDropRules(c, { worn, heldBack }));
+    const dropped = [], refused = [], freed = { bulk: 0, weight: 0 };
+    let free = free0;
+    for (const tier of [tiers.gear, tiers.stock, tiers.food]) {
+      if (!tier.length || !isShort(shortOf(free, need))) continue;
+      const { picks } = chooseDrops(tier.map(r => ({ ...r, droppable: true, sale_amount: r.give })), { free, need });
+      const at = c.self ? { row: c.self.row, col: c.self.col } : null;
+      const r = await dropPicks(s, picks, { whyOf: p => p.row.drop_why });
+      dropped.push(...r.dropped); refused.push(...r.refused);
+      freed.bulk += r.freed.bulk; freed.weight += r.freed.weight;
+      free = freeOf(skills.carryCapacity(c)) ?? { bulk: free.bulk + r.freed.bulk, weight: free.weight + r.freed.weight };
+      for (const d of r.dropped) {
+        // Useless gear is not picked straight back up (the looter's shed list); stock is reserved where it lies.
+        if (d.tier === 'gear') (s._shedIds ??= new Map()).set(d.id, Date.now());
+        else this.reserveDroppedStock(d, at);
+      }
+    }
+    const short_by = shortOf(free, need) ?? need;
+    const ok = !isShort(short_by);
+    // What stayed, biggest first: the rules' own verdicts, then whatever a tier still holds back at its floor.
+    const kept = [...tiers.kept].sort((a, b) => (b.bulk ?? -1) - (a.bulk ?? -1)).slice(0, 8)
+      .map(({ name, amount, bulk, weight, why: w }) => ({ name, amount, bulk, weight, why: w }));
+    const result = { ok, needed: need, before: { free: free0 }, after: { free }, freed, dropped, short_by, kept,
+      ...(refused.length ? { refused_items: refused } : {}), why };
+    if (dropped.length || !ok) {
+      try { this.ledgerEvent?.('make_space', { needed: need, freed, dropped, short_by, ok, why, beyond_plan: true,
+        ...(ok ? {} : { kept }), room_num: s.world?.room?.num ?? null }); } catch { /* bookkeeping only */ }
+      this.note('made space beyond the sale plan', { needed: need, freed, short_by,
+        dropped: dropped.map(d => `${d.amount} ${d.name} (${d.why})`),
+        ...(ok ? {} : { kept: kept.map(k => `${k.amount} ${k.name}: ${k.why}`) }), why,
+        because: 'unarmed with no room for a weapon, and the sale plan had nothing more to give: gear it may not use ' +
+                 'first, then the fewest units of the cheapest protected stack that reach the weapon reserve' });
+    }
+    return result;
+  }
+
+  /** Reserve a stack this character just dropped, where it lies, for itself (the dibs book; a stash claim). Never throws. */
+  reserveDroppedStock(d, at = null) {
+    try {
+      const c = this.s?.client, room = this.s?.world?.room?.num ?? null;
+      const who = c?.me?.name ?? this.s?.name ?? null;
+      if (!who || room == null) return null;
+      return addStashClaim(dibsFile(), stashClaim({ room, item: d.name, holder: who, near: at, radius: RESERVE_DROP_RADIUS,
+        by: 'weapon-reserve',
+        why: `${who} dropped ${d.amount} to make room for a weapon (it was unarmed with a full pack): reserved for ${who}; ` +
+             'a pickup that wants it takes it by id' }));
+    } catch (e) {
+      this.note?.('could not reserve the dropped stock', { item: d?.name, why: e?.message });
+      return null;
+    }
   }
 
   postShoppingPlan(plan) {

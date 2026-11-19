@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 17 methods: carryFloors, protectedItemNames, inheritedProtectedNames, stockpileKeptNames,
+// 18 methods: carryFloors, protectedItemNames, inheritedProtectedNames, dutyBoundNames, stockpileKeptNames,
 //   chestSourcedNames, saleProtectedNames, islandSaleRelease, saleLoadout, guildWantedNames, notOursToEat,
 //   reagentFoodNames, neverEatNames, optionalMealExclude, optionalLarder, larder, giveableLarder, uneatableReserve
 import { CHALICE } from '../m59-chalice.mjs';
@@ -24,6 +24,22 @@ import { stockpileKeepTest } from '../m59-stockpile.mjs';
 import { StorageCache } from '../m59-storage.mjs';
 import { onIsland } from '../m59-autopilot.mjs';
 import { dispositionNames } from '../m59-loot-policy-runtime.mjs';
+
+// One list, two readers (inheritedProtectedNames, dutyBoundNames).
+const dutyBound = ap => [
+  // The fleet's chalice is never sold, eaten or evicted for loot. The hand-off drops it
+  // deliberately, by id, which none of the protect lists govern.
+  ...(ap.chaliceCfg ? [CHALICE.name] : []),
+  // AND WHAT THE CURSE CYCLE KEEPS FOR THE GUILD HALL (m59-curse-cycle.mjs `keep`).
+  ...(ap._curseCycleCfg?.keep ?? []),
+  // AND THE HOLDER'S RESTOCK while it is being carried: it is somebody else's.
+  ...(ap._holderCargo ? Object.keys(ap._holderCargo.items) : []),
+  // AND THE WEAPON THE ROULETTE IS WORKING TOWARDS. A summon cannot be sold, so every
+  // value ranking prices it at nothing, and overfarm's trade-up dropped each conjured
+  // hammer between seconds and three minutes after the hit — Animal, Floyd and Sweetums on
+  // prod 2026-09-25, all with full packs. Held only while the skill is under 70.
+  ...(ap.rouletteTarget?.()?.want ? [ap.rouletteTarget().want] : []),
+];
 
 export class InventoryPart {
   // @part 1
@@ -74,19 +90,15 @@ export class InventoryPart {
       ...this.guildWantedNames(),
       ...this.stockpileKeptNames(),
       ...this.chestSourcedNames(),
-      // The fleet's chalice is never sold, eaten or evicted for loot. The hand-off drops it
-      // deliberately, by id, which none of the protect lists govern.
-      ...(this.chaliceCfg ? [CHALICE.name] : []),
-      // AND WHAT THE CURSE CYCLE KEEPS FOR THE GUILD HALL (m59-curse-cycle.mjs `keep`).
-      ...(this._curseCycleCfg?.keep ?? []),
-      // AND THE HOLDER'S RESTOCK while it is being carried: it is somebody else's.
-      ...(this._holderCargo ? Object.keys(this._holderCargo.items) : []),
-      // AND THE WEAPON THE ROULETTE IS WORKING TOWARDS. A summon cannot be sold, so every
-      // value ranking prices it at nothing, and overfarm's trade-up dropped each conjured
-      // hammer between seconds and three minutes after the hit — Animal, Floyd and Sweetums on
-      // prod 2026-09-25, all with full packs. Held only while the skill is under 70.
-      ...(this.rouletteTarget?.()?.want ? [this.rouletteTarget().want] : []),
+      ...dutyBound(this),
     ].map(String).filter(Boolean))];
+  }
+
+  // WHAT IS BOUND TO A DUTY, BY NAME: the half of inheritedProtectedNames that is not stock for a chest. Nothing on it
+  // is ever surplus, at any quantity. The unarmed remedy asks exactly this (Autopilot.reserveDropRules): it may drop
+  // the least valuable protected STOCK to make room for a weapon, and never one of these.
+  dutyBoundNames() {
+    return [...new Set(dutyBound(this).map(String).filter(Boolean))];
   }
 
   // Cheap on the common path: no plan, or the flag off, returns [] without touching disk

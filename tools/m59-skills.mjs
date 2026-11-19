@@ -782,6 +782,17 @@ export const isArmed = (c) => {
 export const HANDS_FULL = /hands are too full/i;
 export const handsFullText = (t) => HANDS_FULL.test(t || '');
 
+// THE OWNER'S "ONLY THIS WEAPON", AS A TEST OVER NAMES (`s.equipOnly`, Autopilot trainingWeaponOnlyNow). Whole words,
+// case and inner spacing forgiven: 'mace' is the mace and never the "broken mace"'s cousin "grimace". null when the
+// list is empty, which restricts nothing. One definition, because two readers must agree on it: equipBest below, and
+// the weapon reserve's "may this body wield that" (m59-weapon-reserve.mjs), which decides what an unarmed body leaves
+// on the floor.
+export function equipOnlyTest(only) {
+  if (!Array.isArray(only) || !only.length) return null;
+  const rx = only.map(w => new RegExp(`\\b${String(w).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s?')}\\b`, 'i'));
+  return name => rx.some(r => r.test(String(name ?? '')));
+}
+
 export async function equipBest(s, { priority = null, banned = null, maxTries = 4,
                                      refresh = true, allowUnrevealed = false,
                                      beforeMutation = null, shouldCancel = null,
@@ -822,11 +833,9 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
   let trollQuarry = false;
   try { trollQuarry = s?.equipTrollQuarry?.() === true; } catch { trollQuarry = false; }
   const rankedAll = weaponRanking(c, { priority, banned, allowUnrevealed, trollQuarry });
-  const onlyRx = Array.isArray(only) && only.length
-    ? only.map(w => new RegExp(`\\b${String(w).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s?')}\\b`, 'i'))
-    : null;
-  const ranked = onlyRx ? rankedAll.filter(r => onlyRx.some(rx => rx.test(r.name))) : rankedAll;
-  if (onlyRx && !ranked.length)
+  const onlyTest = equipOnlyTest(only);
+  const ranked = onlyTest ? rankedAll.filter(r => onlyTest(r.name)) : rankedAll;
+  if (onlyTest && !ranked.length)
     return { wielding: null, verified: false, refused: true, only,
              considered: rankedAll.map(x => x.name),
              note: `only ${only.join(' / ')} may be wielded here (training_weapon_only), and none ` +

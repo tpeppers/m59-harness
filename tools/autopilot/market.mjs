@@ -251,8 +251,15 @@ export class MarketPart {
     // and bulk share the formula and either can bind, so the fuller of the two decides.
     const cap = skills.carryCapacity(c);
     const frac = (v, max) => (max > 0 && Number.isFinite(v) ? v / max : 0);
-    const fullness = cap?.known && cap.load
+    const measured = cap?.known && cap.load
       ? Math.max(frac(cap.load.weight, cap.weight_max), frac(cap.load.bulk, cap.bulk_max)) : 0;
+    // A PACK STOPPED AT ITS WEAPON RESERVE IS FULL (m59-weapon-reserve.mjs). The loot path leaves a replacement
+    // weapon's room free, so a pack stops filling at about 95-97% of its ceiling. Every trigger below that level
+    // fires exactly as it did. One ABOVE it -- a sell_at_load of 0.97 or 1, SELL_REGARDLESS_AT -- could never be
+    // reached, and the farmer would kill and loot nothing for ever. So a pack that has stopped at the reserve line
+    // (weaponReserveReached: within a few units of it, or a pickup just left for it) reads as full here.
+    const atReserve = this.weaponReserveReached?.(cap) === true;
+    const fullness = atReserve ? Math.max(1, measured) : measured;
     // Protected or refused cargo may remain heavy after every counter. Give the
     // farmer a working interval rather than immediately repeating the same circuit.
     const saleCooling = Date.now() - (this.lastMarketServiceAt ?? 0) < 600_000;
@@ -320,7 +327,8 @@ export class MarketPart {
     const loadDue = !saleCooling && fullness >= at && !hold && !cheap;
     const stacksDue = !saleCooling && stacks >= (this.policy.maxCarry ?? 14) && !hold && !cheap;
     const relief = (loadDue || stacksDue) ? this.saleRelief(cap) : null;
-    if (relief && !((loadDue && relief.fixesLoad(at, fullness)) ||
+    // (At the reserve line the pack reads 100% whatever it measures, so "fixed" is asked against where it really is.)
+    if (relief && !((loadDue && relief.fixesLoad(atReserve ? Math.min(at, measured) : at, fullness)) ||
                     (stacksDue && relief.fixesStacks(this.policy.maxCarry ?? 14, stacks)))) {
       if (Date.now() - (this._keepFullNotedAt ?? 0) > 600_000 && (this._keepFullNotedAt = Date.now()))
         this.note('sell trip held: the pack is full of what it keeps', {
@@ -332,7 +340,9 @@ export class MarketPart {
     }
     if (loadDue && !hold)
       return { sell: true, trigger: 'load', fullness, estimated_value: worth?.value,
-               why: `pack is ${Math.round(fullness * 100)}% of capacity` };
+               ...(atReserve ? { at_weapon_reserve: true, measured } : {}),
+               why: atReserve ? `pack is full up to its weapon reserve (${Math.round(measured * 100)}% of capacity; the rest is kept free for a replacement weapon)`
+                              : `pack is ${Math.round(fullness * 100)}% of capacity` };
     if (stacksDue && !hold)
       return { sell: true, trigger: 'stacks', stacks, estimated_value: worth?.value,
                why: `${stacks} stacks, at the pack ceiling` };

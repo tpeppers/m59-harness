@@ -249,14 +249,19 @@ export function overfarmPhase({ packPercent = null, sifted = 0, capacity = null,
  * @param {number}   opts.might     for the pack ceiling; `capacity` overrides it
  * @param {number}   opts.capacity  the ceiling directly, when the caller already has it
  * @param {number}   opts.sifted    binding cost sifted so far this lap
+ * @param {number}   opts.reserve   pack space that loot may not use (the weapon reserve, m59-weapon-reserve.mjs):
+ *                                  counted as carried, so the pack is FULL at the reserve line and the lap trades up
+ *                                  there instead of stopping. 0 (the default) is the plan this always made. The sift
+ *                                  target is still measured against the whole capacity.
  * @returns {{phase, take, leave, swaps, room, sifted_percent, why}}
  */
 export function planPickup({ floor = [], pack = [], policy = OVERFARM_DEFAULTS,
                              protect = [], keepIds = null, floors = null, unbuyable = null,
-                             might = null, capacity = null, sifted = 0 } = {}) {
+                             might = null, capacity = null, sifted = 0, reserve = 0 } = {}) {
   const p = policy;
   const max = capacity ?? (might == null ? null : packMax(might));
-  const carriedCost = pack.reduce((n, it) => {
+  const held = Number(reserve) > 0 ? Number(reserve) : 0;
+  const carriedCost = held + pack.reduce((n, it) => {
     const c = unitCost(it.name);
     return n + (c.known ? c.cost * (Number(it.amount) || 1) : 0);
   }, 0);

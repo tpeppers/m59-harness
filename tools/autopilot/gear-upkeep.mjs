@@ -8,16 +8,19 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 28 methods: noteReceivedGoods, heldBackIds, saveWeaponMagic, sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
+// 34 methods: noteReceivedGoods, heldBackIds, saveWeaponMagic, sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
 //   overfarmKeepIds, packWeapons, wieldedWeaponId, weaponMagicStatus, noteCurseSuspect,
 //   clearCurseSuspect, noteSwapOutcome, noteReagentRefusal, noteUncursed, sweepCursed,
 //   noteEnchantLapse, noteWeaponArrived, noteDedication, shedUnusedConjures, fieldSpareWeapons,
-//   fieldWeaponCap, capFieldWeapons, sweepWeaponMagic, syncMagicSet, magicForMode, applyMagicPreference
+//   fieldWeaponCap, usableWeaponsNow, weaponCollected, weaponReserveNow, packFreeNow, weaponReserveReached,
+//   weaponReserveStatus, capFieldWeapons, sweepWeaponMagic, syncMagicSet, magicForMode, applyMagicPreference
 import { clearConjureHoard } from '../m59-conjure-cleanup.mjs';
 import { spellCost } from '../m59-deskpractice.mjs';
-import { reconcile } from '../m59-loadout.mjs';
+import { keepTest, reconcile } from '../m59-loadout.mjs';
+import { isPvpOnly } from '../m59-pvp-gear.mjs';
 import { shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
+import { reserveReached, reserveState, shortOf, unwieldableWhy, usableWeapons, weaponReserveSize } from '../m59-weapon-reserve.mjs';
 import { WeaponMagicBook, magicSwap } from '../m59-weapon-magic.mjs';
 import { normalizeMagicFor, decideMagicFor, MAGIC_FOR_GAP_MS } from '../m59-magic-for.mjs';
 import { CONJURABLE_WEAPONS, CURSE_SUSPECT_REFUSALS, swapWhyNot } from '../m59-autopilot.mjs';
@@ -521,6 +524,91 @@ export class GearUpkeepPart {
     if (this.policy.dropJunk === false || !Number.isFinite(max) || max < 0) return null;
     if (this.s.client?.equipment?.()?.known !== true) return null;
     return { max, count: () => this.fieldSpareWeapons().length };
+  }
+
+  // ---------------------------------------------------------------- the weapon reserve (m59-weapon-reserve.mjs)
+  //
+  // The keeper's half of one question: IS THE ROOM FOR THE NEXT WEAPON BEING KEPT, AND MAY THIS BODY WIELD THAT?
+  // Prod 2026-11-18: four farmers unarmed for hours with 50 to 62 bulk free, their packs filled to the brim with
+  // product nothing may sell. The session's loot path (Session.lootFloor), the unarmed remedy (unarmedMakeSpace), the
+  // sell trigger (checkIfShouldSell) and `autopilot status` all read these, so none of them can disagree.
+
+  /** The weapons in the pack this body would actually put in its hand, best first: rows { o, name }. */
+  usableWeaponsNow(c = this.s?.client) {
+    if (!c) return [];
+    try {
+      return usableWeapons(c, { priority: this.weaponPriorityNow?.() ?? null, banned: this.bannedWeaponsNow?.() ?? null,
+        only: this.trainingWeaponOnlyNow?.() ?? null, trollQuarry: this.huntsTrolls?.() === true });
+    } catch { return []; }
+  }
+
+  /** Does something COLLECT a weapon of this name: a loadout that keeps or carries it, a vault list, a guild plan still short of it. */
+  weaponCollected(name) {
+    try { if (keepTest(this.loadout?.() ?? null)?.(name)) return true; } catch { /* no loadout opinion */ }
+    try {
+      return skills.itemIsProtected(name, [...(Array.isArray(this.policy?.vaultItems) ? this.policy.vaultItems : []),
+        ...(this.guildWantedNames?.() ?? [])]);
+    } catch { return false; }
+  }
+
+  /**
+   * THE RESERVE AS IT STANDS NOW: { in_force, reserve: { bulk, weight } | null, waived?, unarmed, spares, usable_carried,
+   * why, mayWield(name) -> reason | null, collects(name) -> bool }. In force for a body that fights and carries no
+   * usable spare; off for `weapon_reserve: false`, never_attack, a posted room caster, bare-handed training on its own
+   * ground, PvP gear, and an unread hand. Asked by the loot path at the moment of every sweep (setWeaponReserve).
+   */
+  weaponReserveNow(c = this.s?.client) {
+    let exempt = null;
+    if (!c) exempt = 'no client';
+    else if (this.policy?.neverAttack === true) exempt = 'never_attack: this character swings nothing';
+    else if (this.policy?.roomEnchant?.enabled) exempt = 'posted as a room caster: holding no weapon is the job';
+    else if (c.pvpGearActive) exempt = 'PvP gear is on';
+    else { try { if (this.bareHandedByTraining?.() === true) exempt = 'training bare-handed on its own ground'; } catch { /* not exempt */ } }
+    const enabled = this.policy?.weaponReserve !== false;
+    const eq = c?.equipment?.() ?? null;
+    const known = eq?.known === true;
+    const worn = new Set(known ? (eq.equipped ?? []).map(e => Number(e.id)) : []);
+    const armed = known && (eq.equipped ?? []).some(e => skills.weaponScore(e.name ?? c.rsc?.get?.(e.nameRsc) ?? '') > 0);
+    const carried = enabled && !exempt && known ? this.usableWeaponsNow(c).filter(r => !worn.has(Number(r.o.id))) : [];
+    const state = reserveState({ enabled, exempt, equipment: known, armed, carried: carried.map(r => r.name) });
+    if (!state.in_force && !state.waived) return state;
+    const banned = this.bannedWeaponsNow?.() ?? null;
+    let only = null;
+    try { only = this.trainingWeaponOnlyNow?.() ?? null; } catch { only = null; }
+    return { ...state, usable_carried: carried.length,
+      mayWield: name => unwieldableWhy(name, { banned, only, pvpOnly: !c.pvpGearActive && isPvpOnly(name) }),
+      collects: name => this.weaponCollected(name) };
+  }
+
+  /** Free pack space as weighed: { bulk, weight }, an upper bound when something is unweighed; null when might is unread. */
+  packFreeNow(cap = skills.carryCapacity(this.s?.client)) {
+    if (!cap?.known || !cap.load) return null;
+    return { bulk: cap.bulk_max - cap.load.bulk, weight: cap.weight_max - cap.load.weight };
+  }
+
+  /** Has the pack stopped filling at the reserve line (reserveReached)? The sell trigger calls that full. Never throws. */
+  weaponReserveReached(cap = skills.carryCapacity(this.s?.client)) {
+    try {
+      const state = this.weaponReserveNow();
+      if (!state?.reserve) return false;
+      return reserveReached({ free: this.packFreeNow(cap), reserve: state.reserve, left: this.s?._weaponReserveLeft ?? null });
+    } catch { return false; }
+  }
+
+  /** For `autopilot status`: the reserve, the room against it, and what the unarmed remedy last did. */
+  weaponReserveStatus() {
+    try {
+      const c = this.s?.client;
+      if (!c) return null;
+      const { mayWield, collects, ...state } = this.weaponReserveNow(c);
+      const free = this.packFreeNow();
+      const left = this.s?._weaponReserveLeft ?? null;
+      return { ...state, size: weaponReserveSize(), free,
+        short_by: state.reserve ? shortOf(free, state.reserve) : null,
+        reached: this.weaponReserveReached(),
+        last_left: left ? { at: left.at, items: left.left, free: left.free } : null,
+        remedy: this._unarmedRoom ?? null };
+    } catch { return null; }
   }
 
   async capFieldWeapons({ nameOf, cancelled }) {

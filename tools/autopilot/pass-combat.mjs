@@ -8,8 +8,8 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 9 methods: damageRate, timeToDeath, passArm, unarmedMakeSpace, engagePlayerTarget, respondToConflict, passPlaybook,
-//   fightNow, passFightBack
+// 15 methods: damageRate, timeToDeath, passArm, roomShortOfReserve, unarmedRoomShort, unarmedMakeSpace, unarmedNoRoomSaid, unarmedNoRoomLever,
+//   declareUnarmedNoRoom, unarmedNoRoomDetail, engagePlayerTarget, respondToConflict, passPlaybook, fightNow, passFightBack
 import * as grudge from '../m59-grudge.mjs';
 import { tryFarmGearCache } from '../m59-farm-gear-cache.mjs';
 import { usesOceanCourier } from '../m59-farm-town.mjs';
@@ -25,12 +25,15 @@ import { pvpAllowedHere, pvpRoomsOf } from '../m59-pvp-rooms.mjs';
 import { refusedHere } from '../m59-refused-targets.mjs';
 import * as skills from '../m59-skills.mjs';
 import * as tougher from '../m59-tougher.mjs';
+import { WEAPON_RESERVE_MARGIN, isShort, shortOf, weaponReserveSize } from '../m59-weapon-reserve.mjs';
 import { CONJURED_WEAPON_BULK, CONTINUE, FIGHT_BACK_GAP_MS, FIGHT_BACK_STALE_MS, HANDLED, REACH, SPELL_EXERTION_VIGOR, partialFightMadeProgress, pct, releaseQuarry, scriptedWalkDefersArming, sleep, unarmedBlocker, vigorOf } from '../m59-autopilot.mjs';
 
-// The unarmed make-space hook: at most once per ten minutes, and room for the weapon plus a margin.
+// The unarmed remedy (unarmedMakeSpace): at most once per ten minutes when the pack itself was the answer, again after
+// half a minute when the moment was (a trade open, a faculty leased), and room for the weapon plus a margin. The room
+// itself is the weapon reserve (tools/m59-weapon-reserve.mjs weaponReserveSize): an axe, 90 weight and 90 bulk.
 export const UNARMED_MAKE_SPACE_EVERY_MS = 10 * 60_000;
-export const UNARMED_MAKE_SPACE_MARGIN = 10;
-const CONJURED_AXE_SIZE = 90;
+export const UNARMED_MAKE_SPACE_RETRY_MS = 30_000;
+export const UNARMED_MAKE_SPACE_MARGIN = WEAPON_RESERVE_MARGIN;
 
 export class PassCombatPart {
   // @part 1
@@ -83,6 +86,7 @@ export class PassCombatPart {
         this.suspendedJourney && this.travelGuard(this.suspendedJourney.guard).arm !== true || scriptedWalkDefersArming(this)) {
       this.clearRefusal('UNARMED_NO_DONOR');
       this.clearRefusal('UNARMED_CANNOT_CAST');
+      this.clearRefusal('UNARMED_NO_ROOM');
       if (['MANA_FOR_CREATE_WEAPON', 'VIGOR_FOR_CREATE_WEAPON'].includes(this.waitingOn?.code))
         this.doneWaiting?.();
       return CONTINUE;
@@ -172,6 +176,7 @@ export class PassCombatPart {
     // something attacks it.
     if (this.policy.roomEnchant?.enabled && !skills.isArmed(this.s.client)) {
       this.clearRefusal('UNARMED_NO_DONOR');
+      this.clearRefusal('UNARMED_NO_ROOM');
       // Said once a minute rather than every pass: it is a standing condition, not an event.
       if (Date.now() - (this._casterUnarmedNoteAt ?? 0) > 60_000) {
         this._casterUnarmedNoteAt = Date.now();
@@ -183,6 +188,7 @@ export class PassCombatPart {
       }
     } else if (skills.isArmed(this.s.client)) {
       this.clearRefusal('UNARMED_NO_DONOR');
+      this.clearRefusal('UNARMED_NO_ROOM');
       if (this.waitingOn?.code === 'MANA_FOR_CREATE_WEAPON' ||
           this.waitingOn?.code === 'VIGOR_FOR_CREATE_WEAPON') this.doneWaiting?.();
     }
@@ -243,6 +249,23 @@ export class PassCombatPart {
       await this.sweepCursed().catch(() => null);
       const ok = await this.armSelf().catch(() => false);
       if (ok && skills.isArmed(this.s.client)) { this.progress('armed itself'); return HANDLED; }
+      // UNARMED AND SHORT OF ROOM IS A WORK BLOCKER WITH AN ORDERED REMEDY (tools/m59-weapon-reserve.mjs).
+      //
+      // Whatever arms this body next -- a conjure, a counter, a cache, a hand-over, a pickup -- has to FIT, and
+      // nothing regenerates pack space. So before any of the routes below is weighed: armSelf above has already tried
+      // the usable weapon in the pack (1); unarmedMakeSpace drops what was going to be sold (2), then gear the body
+      // may not use and nothing protects (3), then the minimum number of units of the least valuable protected stack
+      // (4), and re-arms. Here rather than in the 'room' branch far below, because that branch is reached only by a
+      // body that knows create weapon and has its mana and vigor: Raphael (no cast would be made) and every body
+      // waiting on mana stood outside it with a full pack. Prod 2026-11-18: Gonzo 5.3 hours, Fozzie 3.3, Zoot 4.3.
+      // Rate-bounded inside (UNARMED_MAKE_SPACE_EVERY_MS); `weapon_reserve: false` leaves only the old 'room' branch.
+      let roomRemedyTried = false;
+      const roomShort = this.unarmedRoomShort(c);
+      if (roomShort) {
+        roomRemedyTried = true;
+        if (await this.unarmedMakeSpace(c).catch(() => false)) return HANDLED;
+        this.declareUnarmedNoRoom(c);
+      } else if (this.policy?.weaponReserve !== false) this.clearRefusal('UNARMED_NO_ROOM');
       // makeWeapon refreshes the spell list before reporting failure when mana is
       // sufficient. Below 15 mana it cannot do that, so refresh once in sanctuary
       // before deciding whether mana recovery can ever produce a weapon.
@@ -529,7 +552,9 @@ export class PassCombatPart {
         // least valuable sale-plan rows until the weapon fits (+ a margin), then try to arm again.
         // ONLY sale-plan rows (makeSpaceNow, tools/m59-make-space.mjs), and at most once per
         // MAKE_SPACE_EVERY_MS — a plan that cannot cover it says so and falls through to the trip.
-        if (await this.unarmedMakeSpace(c).catch(() => false)) return HANDLED;
+        // (Since 2026-11-18 the remedy has usually run already, above, for every unarmed body short of the weapon
+        // reserve; this call is the one a `weapon_reserve: false` character still gets.)
+        if (!roomRemedyTried && await this.unarmedMakeSpace(c).catch(() => false)) return HANDLED;
         // AND THEN DO IT. The remedy below is "a sale, a drop or a hand-over", and the sale is
         // `bankRun` — which lives in passErrand, a rung this one never lets run, because the
         // refusal below returns HANDLED every pass. So an unarmed character with a full pack
@@ -590,10 +615,16 @@ export class PassCombatPart {
       //
       // Structural rather than a better sentence, because the skip is a code test and a
       // regex over prose; a new code cannot be pattern-matched back into the old branch.
+      //
+      // AND 'room' HAS ITS OWN CODE TOO (UNARMED_NO_ROOM, 2026-11-18), for the same reason run the other way: it
+      // carried UNARMED_NO_DONOR, so the supervisor filed four bodies with full packs under "waiting for casting
+      // mana" for up to 5.3 hours. What the last remedy attempt found (unarmedNoRoomDetail) rides on the refusal.
+      const noRoom = blocker === 'room' ? this.unarmedNoRoomDetail?.() ?? null : null;
       this.refuse(classified.code, {
         faculty: 'work', blocking: true,
         why: blocker === 'room'
-          ? `unarmed — no room to hold one: ${bulkFreeNow} bulk free, needs ${CONJURED_WEAPON_BULK}`
+          ? `unarmed — no room to hold one: ${bulkFreeNow} bulk free, needs ${CONJURED_WEAPON_BULK}` +
+            (noRoom?.why ? `. ${noRoom.why}` : '')
           : blocker === 'vigor'
           ? `unarmed — too tired to cast: ${vigorLeft} vigor, needs ${SPELL_EXERTION_VIGOR}`
           : blocker === 'mana'
@@ -602,7 +633,8 @@ export class PassCombatPart {
             `${bulkFreeNow} bulk free, all sufficient. The cast is being declined` +
             (unblockedWhy ? `: ${unblockedWhy}` : ' for a reason this pass could not read'),
         remedy: blocker === 'room'
-          ? 'sell, drop or hand over something — waiting does not make pack space, and the ' +
+          ? (noRoom?.remedy ? `${noRoom.remedy}. ` : '') +
+            'sell, drop or hand over something — waiting does not make pack space, and the ' +
             'weapon is deleted on hand-over rather than refused before the mana is spent'
           : blocker === 'vigor'
           ? 'let it rest or feed it — casting spends vigor, and vigor is what it is short of'
@@ -614,8 +646,11 @@ export class PassCombatPart {
             'cast (training unarmed, every conjurable banned, a hoard of unusable results) ' +
             'or the character needs a weapon handed to it',
         retryAfterMs: 60_000 });
+      // THE STALL NAMES ITS LEVER (stallLever, m59-autopilot.mjs). The bare sentence is `make_room`: the keeper's own
+      // remedy is what acts on it, on its ten-minute clock. With the suffix the remedy has said nothing more may be
+      // dropped, and the lever is outside this pass: `town_trip` or `hand_over`.
       this.noProgress(blocker === 'room'
-        ? `unarmed -- ${bulkFreeNow} bulk free, needs ${CONJURED_WEAPON_BULK} to hold one`
+        ? `unarmed -- ${bulkFreeNow} bulk free, needs ${CONJURED_WEAPON_BULK} to hold one` + (noRoom?.stall ? `; ${noRoom.stall}` : '')
         : blocker === 'vigor'
         ? `unarmed -- ${vigorLeft} vigor, needs ${SPELL_EXERTION_VIGOR} to cast one`
         : blocker === 'mana'
@@ -629,26 +664,151 @@ export class PassCombatPart {
     return CONTINUE;
   }
 
-  // UNARMED AND NO ROOM FOR THE CONJURED WEAPON: drop sale-plan rows until it fits, then arm.
+  /**
+   * How far the pack is short of the room a weapon needs (the weapon reserve, both dimensions): { bulk, weight }, or
+   * null when it has the room or might has not been read. Free space is the load as weighed, an upper bound when
+   * something is unweighed: certainty in one direction only.
+   */
+  roomShortOfReserve(c = this.s?.client) {
+    try {
+      const short = c ? shortOf(this.packFreeNow(skills.carryCapacity(c)), weaponReserveSize()) : null;
+      return isShort(short) ? short : null;
+    } catch { return null; }
+  }
+
+  /**
+   * The same, for a body the reserve is IN FORCE for (weaponReserveNow: `weapon_reserve` on, a body that fights, the
+   * use list read, no usable weapon to spare). null otherwise: a posted caster, a bare-handed trainee, a body in PvP
+   * gear or one switched off is never made room for a weapon it is not going to hold.
+   */
+  unarmedRoomShort(c = this.s?.client) {
+    try { return c && this.weaponReserveNow(c)?.in_force === true ? this.roomShortOfReserve(c) : null; }
+    catch { return null; }
+  }
+
+  // UNARMED AND NO ROOM FOR A WEAPON: THE ORDERED REMEDY (tools/m59-weapon-reserve.mjs). True only when it ended armed.
   //
-  // True only when it ended armed. At most once per UNARMED_MAKE_SPACE_EVERY_MS whatever the
-  // outcome — a plan that cannot cover it must not be asked again every pass — and never while a
-  // bot holds the economy faculty, since dropping is the economy's call then. makeSpaceNow drops
-  // only rows of ownSalePlan() (tools/m59-make-space.mjs) and writes the `make_space` ledger row.
+  //   (2) drop what was going to be sold anyway -- makeSpaceNow, rows of ownSalePlan() only (operator 2026-11-05:
+  //       "just drop items planned to be sold, it's fine"), to the reserve plus a margin;
+  //   (3) drop gear this body may not use and nothing protects, then
+  //   (4) the minimum number of units of the least valuable protected stack -- makeRoomBeyondPlan, to the reserve and
+  //       not a unit past it, reserved on the floor for this character;
+  //   then armSelf again, the same one the top of passArm uses.
+  // (3) and (4) are the 2026-11-18 half: a pack that is all product has an empty sale plan, so (2) alone dropped
+  // nothing for Gonzo 31 times in 5.3 hours. `weapon_reserve: false` stops after (2), which is the hook this was.
+  //
+  // At most once per UNARMED_MAKE_SPACE_EVERY_MS when the answer was a fact about the pack -- a pack that cannot
+  // cover it must not be asked again every pass -- and again after UNARMED_MAKE_SPACE_RETRY_MS when it was a fact
+  // about the moment (a trade open, a faculty leased, an unread hand). Never while a bot holds the economy faculty:
+  // dropping is the economy's call then. `this._unarmedRoom` keeps what the last attempt found, for the refusal,
+  // the stall sentence and `autopilot status`.
   async unarmedMakeSpace(c = this.s?.client, now = Date.now()) {
-    if (!c || this.facultyHeld?.('economy')) return false;
+    if (!c) return false;
     if (now - (this._unarmedMakeSpaceAt ?? 0) < UNARMED_MAKE_SPACE_EVERY_MS) return false;
     this._unarmedMakeSpaceAt = now;
-    // Create Weapon can roll an axe, which needs 90 in both dimensions. Once
-    // recovery is clearing the pack, leave room for that result too.
-    const clearance = CONJURED_AXE_SIZE + UNARMED_MAKE_SPACE_MARGIN;
-    const made = await this.makeSpaceNow({ bulk: clearance, weight: clearance,
-      why: 'unarmed: room for a conjured weapon' }).catch(e => ({ ok: false, why: e?.message }));
-    if (!made?.dropped?.length && !made?.ok) return false;
+    const retrySoon = () => { this._unarmedMakeSpaceAt = now - UNARMED_MAKE_SPACE_EVERY_MS + UNARMED_MAKE_SPACE_RETRY_MS; };
+    const record = o => { this._unarmedRoom = { at: now, ...o }; };
+    if (this.facultyHeld?.('economy')) {
+      retrySoon();
+      let owner = null;
+      try { owner = this.facultyOwner?.('economy') ?? null; } catch { owner = null; }
+      record({ outcome: 'held', why: `the economy faculty is held by ${owner ?? 'another owner'}, and dropping is its call` });
+      return false;
+    }
+    const reserve = weaponReserveSize();
+    // Create Weapon can roll an axe, which needs 90 in both dimensions (the reserve). Once
+    // recovery is clearing the pack, leave room for that result too, and a margin.
+    const made = await this.makeSpaceNow({ bulk: reserve.bulk + UNARMED_MAKE_SPACE_MARGIN, weight: reserve.weight + UNARMED_MAKE_SPACE_MARGIN,
+      why: 'unarmed: room for a conjured weapon' }).catch(e => ({ ok: false, refused: 'error', why: e?.message }));
+    // THE HOOK AS IT WAS, for a body the reserve is not in force for (`weapon_reserve: false`, or exempt): the sale
+    // plan and nothing beyond it, and no arm retry when that dropped nothing.
+    let inForce = false;
+    try { inForce = this.weaponReserveNow(c)?.in_force === true; } catch { inForce = false; }
+    if (!inForce) {
+      this._unarmedRoom = null;
+      if (!made?.dropped?.length && !made?.ok) return false;
+      const rearmed = await this.armSelf().catch(() => false);
+      if (rearmed && skills.isArmed(c)) { this.progress?.('made space and armed itself'); return true; }
+      return false;
+    }
+    let beyond = null;
+    if (made?.refused) retrySoon();
+    else if (this.roomShortOfReserve(c))
+      beyond = await this.makeRoomBeyondPlan({ need: reserve, why: 'unarmed: room for a weapon' })
+        .catch(e => ({ ok: false, refused: 'error', why: e?.message, dropped: [], kept: [] }));
+    if (beyond?.refused) retrySoon();
+    const dropped = [...(made?.dropped ?? []), ...(beyond?.dropped ?? [])];
+    const short = this.roomShortOfReserve(c);
+    if (short) {
+      const held = made?.refused ?? beyond?.refused ?? null;
+      record({ outcome: held ? 'held' : 'blocked', short_by: short, dropped: dropped.map(d => `${d.amount} ${d.name}`),
+        kept: (beyond?.kept?.length ? beyond.kept : made?.kept ?? []).slice(0, 8),
+        why: held ? `${held}: ${made?.refused ? made?.why : beyond?.why}` : 'nothing more in the pack may be dropped' });
+      if (!held) this.unarmedNoRoomSaid(short);
+    } else record({ outcome: 'room', dropped: dropped.map(d => `${d.amount} ${d.name}`) });
+    if (!dropped.length && !made?.ok && short) return false;
     // RETRY THE CONJURE NOW, through the same armSelf the top of passArm uses.
     const armed = await this.armSelf().catch(() => false);
-    if (armed && skills.isArmed(c)) { this.progress?.('made space and armed itself'); return true; }
+    if (armed && skills.isArmed(c)) {
+      record({ outcome: 'armed', dropped: dropped.map(d => `${d.amount} ${d.name}`) });
+      this.progress?.('made space and armed itself');
+      return true;
+    }
     return false;
+  }
+
+  // STEP 5, SAID ONCE PER ATTEMPT: the room could not be made, and this is what is in the way. The journal line and
+  // one `unarmed_no_room` ledger row carry every stack that stayed and what protects it, so whoever reads it knows
+  // whether the answer is a hall trip, a hand-over or a different order -- not just that a number is short.
+  unarmedNoRoomSaid(short) {
+    const last = this._unarmedRoom ?? {};
+    const detail = { short_by: short, needs: weaponReserveSize(), kept: last.kept ?? [], dropped: last.dropped ?? [],
+      lever: this.unarmedNoRoomLever(), room: this.s?.world?.room?.num ?? null };
+    this.note('unarmed and no room for a weapon: nothing more may be dropped', { ...detail,
+      why: 'every stack left is worn, money, a quest or bound item, working stock at its floor, unweighed or unvalued',
+      doing: 'a town trip if this strategy has a town; otherwise it needs a hand-over or an operator drop' });
+    try { this.ledgerEvent?.('unarmed_no_room', { ...detail, room_num: detail.room }); } catch { /* bookkeeping only */ }
+  }
+
+  /** What can act on an unarmed body the remedy could not make room for: its own town trip, or somebody else's hands. */
+  unarmedNoRoomLever() {
+    return this.policy?.townTrips !== false ? 'town_trip' : 'hand_over';
+  }
+
+  /**
+   * THE REFUSAL FOR A BODY STILL SHORT OF ROOM AFTER THE REMEDY: `UNARMED_NO_ROOM`, blocking, with what is in the
+   * way and who can move it. Its own code on purpose: the supervisor reads codes as data, and UNARMED_NO_DONOR is
+   * the one it steps over as "waiting for casting mana" -- which is how four bodies stood for hours with a refusal
+   * on the board that every automated reader was told to ignore. Cleared the moment the room is there.
+   */
+  declareUnarmedNoRoom(c = this.s?.client) {
+    const short = this.unarmedRoomShort(c);
+    if (!short) { this.clearRefusal('UNARMED_NO_ROOM'); return null; }
+    const d = this.unarmedNoRoomDetail(short);
+    if (!d) return null;
+    this.refuse('UNARMED_NO_ROOM', { faculty: 'work', blocking: true, why: d.why, remedy: d.remedy, retryAfterMs: 60_000 });
+    return d;
+  }
+
+  /** { why, remedy, stall, lever } from the last remedy attempt, or null when none is on record. */
+  unarmedNoRoomDetail(short = this.unarmedRoomShort()) {
+    const last = this._unarmedRoom;
+    if (!last || !short || !['blocked', 'held'].includes(last.outcome)) return null;
+    const need = weaponReserveSize();
+    const shortText = [short.bulk ? `${short.bulk} bulk` : null, short.weight ? `${short.weight} weight` : null].filter(Boolean).join(' and ');
+    const kept = (last.kept ?? []).slice(0, 4).map(k => `${k.amount} ${k.name} (${k.why})`).join('; ');
+    if (last.outcome === 'held')
+      return { lever: 'make_room', stall: null,
+        why: `unarmed — ${shortText} short of the ${need.bulk} bulk and ${need.weight} weight a weapon needs, and room cannot be made yet: ${last.why}`,
+        remedy: 'the keeper tries again shortly; if a bot holds the economy faculty, dropping is that bot\'s call' };
+    const lever = this.unarmedNoRoomLever();
+    return { lever,
+      stall: lever === 'town_trip' ? 'nothing more may be dropped: needs a town trip or a hand-over'
+                                   : 'nothing more may be dropped: needs a hand-over',
+      why: `unarmed — ${shortText} short of the ${need.bulk} bulk and ${need.weight} weight a weapon needs, and nothing more in the ` +
+           `pack may be dropped${kept ? `: ${kept}` : ''}`,
+      remedy: (lever === 'town_trip' ? 'a town trip empties it (opened by the keeper where the strategy allows one); ' : '') +
+              'otherwise hand it a weapon after taking something off it, or drop a stack by hand — waiting does not make pack space' };
   }
 
   // A TARGET LIST NARROWS THE DEFENSIVE DECISION. IT CANNOT MAKE ONE.

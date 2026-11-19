@@ -103,7 +103,8 @@ import * as exitgap from './m59-exitgap.mjs';
 // temporal dead zone and throw only on the branch that calls it.
 import { autopilotIfAny } from './m59-autopilot.mjs';
 import { lapsedWeapon, dedicatedWeapon, alreadyDedicated } from './m59-weapon-magic.mjs';
-import { planLootOnly, newLootOnlyMemory, isBodyArmor } from './m59-loot-filter.mjs';
+import { planLootOnly, newLootOnlyMemory, isBodyArmor, floorAllowList, lootFloorRule, itemAllowed } from './m59-loot-filter.mjs';
+import { reservePickup, unwieldableLeftWhy } from './m59-weapon-reserve.mjs';
 import { readDibs, dibsFile, dibsFilter } from './m59-dibs.mjs';
 import { boundFarmFoodPile, FARM_FOOD_CACHE_ROOM, isFarmFoodCacheItem, readFarmFoodCache } from './m59-farm-food-cache-record.mjs';
 import { boundFarmGearPiles, isFarmGearCacheItem, readFarmGearCache } from './m59-farm-gear-cache-record.mjs';
@@ -5303,6 +5304,16 @@ class Session {
     else this._lootOnlyMemory = null;
   }
 
+  // THE WEAPON RESERVE (m59-weapon-reserve.mjs). `fn()` is the keeper's answer at the moment of the sweep
+  // (Autopilot.weaponReserveNow): { reserve: { bulk, weight } | null, unarmed, mayWield(name, o) -> reason | null,
+  // collects(name, o) -> bool }. A FUNCTION for the same reason keepIds is one below: a weapon breaks between passes,
+  // and a snapshot installed at the top of the pass would be a fight old. Installed every pass like its neighbours;
+  // null (and a provider that throws) is no reserve, which is the loot path this always was.
+  setWeaponReserve(fn = null) { this._weaponReserve = typeof fn === 'function' ? fn : null; }
+  weaponReserveState() {
+    try { return this._weaponReserve?.() ?? null; } catch { return null; }
+  }
+
   // `keepIds` is a FUNCTION returning ids, asked at the moment of the swap: the autopilot's weapon
   // book learns of a dedication between passes, and a set copied at install time would be a pass old.
   setOverfarmPolicy(policy = null, protect = [], floors = null, keepIds = null) {
@@ -5501,15 +5512,39 @@ class Session {
     // floor pass would pick each one straight back up. `_shedIds` is what it dropped (30 min), and
     // `_fieldWeaponCap` says how many spares are carried against the cap.
     const shedSkipped = [];
+    // THE WEAPON RESERVE, ASKED ONCE PER SWEEP (m59-weapon-reserve.mjs; the keeper's answer, Autopilot.weaponReserveNow).
+    // Never for an explicit id request: a caller naming the object it wants is choosing to take it.
+    // (Read off the field, not through a method: this function is also called on bare session-shaped objects.)
+    let weaponReserve = null;
+    if (!ids?.length || !explicitIdsOverride) { try { weaponReserve = this._weaponReserve?.() ?? null; } catch { weaponReserve = null; } }
+    const unwieldableSkipped = [];
+    const replacementIds = new Set();   // the wieldable weapon an empty hand takes past the spare cap
     if (!ids?.length || !explicitIdsOverride) {
       const shed = this._shedIds, cap = this._fieldWeaponCap, now = Date.now();
       let spares = cap ? Number(cap.count?.()) || 0 : 0;
+      // What a loot list says to pick up, from any floor: the "*" list, or (scope floor) every creature rule's items.
+      const listed = this._lootOnly ? floorAllowList(this._lootOnly, lootFloorRule(this._lootOnlyFloor)) : null;
       cands = cands.filter(o => {
         const name = c.rsc.get(o.nameRsc) || '';
         if ((shed?.get?.(o.id) ?? 0) > now - 1_800_000) { shedSkipped.push(name); return false; }
         // A farm town's hall takes loot magic weapons (m59-farm-town.mjs `hall.magicWeapons`, set on the client as
         // `_noUnreadWield`): a graded one is cargo for the chests, not a spare against the cap.
         const hallCargo = c._noUnreadWield === true && (Number(o.amount) || 0) <= 1 && [100, 1, 2, 4].includes(Number(o.rarity));
+        // AN UNARMED BODY DOES NOT PICK UP A WEAPON IT MAY NOT WIELD. Prod 2026-11-18: Raphael, unarmed with 9 bulk
+        // free and allowed nothing but a mace (training_weapon_only), carried four long swords and picked the same
+        // ones back up after they were dropped for him in Colhorr's shop. A weapon it cannot put in its hand only
+        // fills the room the one it can hold needs. Still taken when something COLLECTS it: hall cargo, a loot
+        // policy's pickup, a loot list that names it, or the keeper's own answer (a loadout or guild want naming it).
+        // AND THE ONE IT MAY WIELD IS NOT A SPARE AGAINST THE CAP: it is going into an empty hand. One per sweep.
+        if (weaponReserve?.unarmed && !hallCargo && skills.weaponScore(name) > 0 && !this.lootDisposition?.(o)?.pickup) {
+          let why = null, collected = false;
+          try { why = weaponReserve.mayWield?.(name, o) ?? null; } catch { why = null; }
+          if (why) {
+            try { collected = (!!listed && itemAllowed(name, listed, o.translation ?? null)) || weaponReserve.collects?.(name, o) === true; }
+            catch { collected = true; }
+            if (!collected) { unwieldableSkipped.push({ id: o.id, item: name, why: unwieldableLeftWhy(name, why) }); return false; }
+          } else if (weaponReserve.reserve && !replacementIds.size) { replacementIds.add(o.id); return true; }
+        }
         if (!hallCargo && !this.lootDisposition?.(o)?.pickup && cap && Number.isFinite(cap.max) && skills.weaponScore(name) > 0) {
           if (spares >= cap.max) { shedSkipped.push(name); return false; }
           spares++;
@@ -5681,7 +5716,7 @@ class Session {
     }).map(o => c.rsc.get(o.nameRsc) || '').filter(Boolean)];
     let wasCancelled = false;
     for (const l of lootOnlyLeft) refused.push({ id: l.id, item: l.name, why: l.why });
-    refused.push(...dibsSkipped, ...cacheSkipped);
+    refused.push(...dibsSkipped, ...cacheSkipped, ...unwieldableSkipped);
     for (const n of ignoredSkipped)
       refused.push({ item: n, why: 'IGNORED — on the fleet loot-ignore list (substrate/loot-ignore.json): not worth its weight. Left on the floor.' });
     for (const n of gateSkipped)
@@ -5721,6 +5756,10 @@ class Session {
             equipped: (c.equipment?.()?.equipped ?? []).some(e => e.id === o.id) })),
           policy: ofPolicy, protect, keepIds, floors: this._overfarmFloors, capacity: cap.weight_max,
           sifted: this._overfarm.sifted,
+          // THE PACK IS FULL AT THE WEAPON RESERVE (m59-weapon-reserve.mjs): counted as carried, so the lap trades
+          // up at the reserve line. Without it the plan would take what "fits", the reserve below would leave it,
+          // nothing would be sifted, and the overfarm hold on the town trip would never release.
+          reserve: weaponReserve?.reserve ? Math.max(weaponReserve.reserve.bulk, weaponReserve.reserve.weight) : 0,
         });
 
         // The swaps first: the pack has to have the room before the get is sent, or the
@@ -5779,10 +5818,38 @@ class Session {
     for (const id of chaliceSkipped)
       refused.push({ id, item: 'Chalice of the Rain', why: 'already carrying a chalice — a second one ' +
                                    'would be poured into the first and destroyed (chalice.kod NewOwner)' });
+    // THE WEAPON RESERVE: A PICKUP MAY NOT TAKE THE ROOM THE NEXT WEAPON NEEDS (m59-weapon-reserve.mjs).
+    //
+    // Prod 2026-11-18: four farmers unarmed for one to five hours each, 50 to 62 bulk free against the 70 a conjured
+    // weapon needs, because this loop filled every pack to the last unit and nothing regenerates pack space. While the
+    // keeper says a reserve is in force (a body that fights, with no usable spare aboard), an item whose whole stack
+    // would leave less than the reserve free in EITHER dimension stays on the floor and says so. A weapon this body
+    // may wield is never refused for it -- that pickup is what the reserve is for -- and once one is aboard as a
+    // spare the rest of the sweep fills the pack as before. Free space is the load as weighed (an upper bound when
+    // something is unweighed), less what this sweep has already taken; an unweighed item is taken as before.
+    const reserveNeed = weaponReserve?.reserve ?? null;
+    let reserveFree = null, usablePicked = 0, reserveLeft = 0;
+    if (reserveNeed) {
+      const cap = skills.carryCapacity(c);
+      if (cap?.known && cap.load)
+        reserveFree = { bulk: cap.bulk_max - cap.load.bulk, weight: cap.weight_max - cap.load.weight };
+    }
+    const reserveWaived = () => (Number(weaponReserve?.usable_carried) || 0) + usablePicked - (weaponReserve?.unarmed ? 1 : 0) >= 1;
     for (const o of cands) {
       if (cancelled()) { wasCancelled = true; break; }
       const name = c.rsc.get(o.nameRsc);
       if (!pickupAllowed(o.id, name)) continue;
+      let reserveCost = null, isReplacement = false;
+      if (reserveNeed && !reserveWaived()) {
+        const unit = unitCost(name), n = Number(o.amount) > 0 ? Number(o.amount) : 1;
+        reserveCost = unit.known ? { bulk: unit.bulk * n, weight: unit.weight * n } : null;
+        try {
+          isReplacement = replacementIds.has(o.id) || (skills.weaponScore(name || '') > 0 &&
+            typeof weaponReserve.mayWield === 'function' && weaponReserve.mayWield(name, o) == null);
+        } catch { isReplacement = false; }
+        const verdict = reservePickup({ free: reserveFree, reserve: reserveNeed, cost: reserveCost, replacement: isReplacement });
+        if (!verdict.take) { refused.push({ id: o.id, name, why: verdict.why }); reserveLeft++; continue; }
+      }
       setIntentTarget(this,{kind:'pickup',object_id:o.id});
       const me = c.self;
       // UserGet measures MANHATTAN distance and refuses past 7, so only walk when
@@ -5816,9 +5883,17 @@ class Session {
       if (!sent) continue;
       const ev = await c.waitFor({ since: before, kinds: ['got', 'message', 'vanished'], timeoutMs: 3000 });
       const got = ev.events.find(e => e.kind === 'got');
-      if (got) taken.push({ id: o.id, name, amount: o.amount || undefined, icon_rsc: o.iconRsc });
+      if (got) {
+        taken.push({ id: o.id, name, amount: o.amount || undefined, icon_rsc: o.iconRsc });
+        // What it took comes off the room this sweep may still use; a wieldable weapon counts toward the spare.
+        if (isReplacement) usablePicked++;
+        if (reserveFree && reserveCost) reserveFree = { bulk: reserveFree.bulk - reserveCost.bulk, weight: reserveFree.weight - reserveCost.weight };
+      }
       else refused.push({ id: o.id, name, why: ev.events.filter(e => e.text).map(e => e.text).join('; ') || 'no reply' });
     }
+    // The pack stopped at the reserve line this sweep: remembered so the sell trigger can call it full
+    // (Autopilot.checkIfShouldSell, reserveReached), with the free space it stopped at.
+    if (reserveLeft && reserveFree) this._weaponReserveLeft = { at: Date.now(), free: reserveFree, left: reserveLeft };
     setIntentTarget(this,null);
     if (!wasCancelled) {
       await this.pacer.submit('read', () => c.requestInventory());

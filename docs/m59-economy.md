@@ -536,6 +536,11 @@ policy is absent:
   unrankable. `unitWorth` tries both, in both tables. Same family as the fleet board's
   reagent columns reading zero.
 
+- **THE PACK IS FULL AT THE WEAPON RESERVE.** While a body carries no usable spare weapon, 90 units are counted as
+  carried (`planPickup`'s `reserve`), so the overfarm phase starts a weapon's room short of the ceiling and trades up
+  there. The sift target is still measured against the whole capacity. See
+  [the weapon reserve](#the-weapon-reserve-room-for-the-next-weapon-weapon_reserve).
+
 - **WHAT IS PROTECTED IS NOT A DROP CANDIDATE AT ANY SCORE.** The list is
   `protectedItemNames()` — vault items, temporary cargo, whatever the guild plan is short of,
   and the declared stockpile floors — so the things this fleet already refuses to SELL are
@@ -1377,9 +1382,9 @@ one`, and while that refusal stood every journey to a merchant was refused too. 
 | where | what |
 |---|---|
 | `sale_plan agent=<a>` (broker tool, keeper op `sale_plan`, `Autopilot.salePlanView`) | READ-ONLY. The keeper's own sale plan on the counter's terms (`ownSalePlan()`: `MARKET_KEEP`, protected names with the island release, the sale loadout, `max_weapons`): every row with id, name, amount, sale_amount, role, recommended, blocked, reason, per-unit bulk/weight, estimated per-unit value, and `droppable` / `drop_block`. Totals: `sell` (what a town trip sells), `keep`, `droppable`; plus `capacity`. Sends nothing to the server. |
-| `make_space agent=<a> bulk=N weight=M` (broker tool, keeper op `make_space`, `Autopilot.makeSpaceNow`) | Drops `droppable` rows of that SAME plan until N bulk / M weight is FREE (a target, not an amount to drop; each capped at 400). Returns `{ok, needed, freed, dropped:[{name, amount, why}], short_by}`; a `make_space` ledger row when anything was dropped or it fell short. |
+| `make_space agent=<a> bulk=N weight=M` (broker tool, keeper op `make_space`, `Autopilot.makeSpaceNow`) | Drops `droppable` rows of that SAME plan until N bulk / M weight is FREE (a target, not an amount to drop; each capped at 400). Returns `{ok, needed, freed, dropped:[{name, amount, why}], short_by}` and, when it fell short, `kept:[{name, amount, bulk, weight, why}]`: the biggest stacks still in the pack and what protects each. A `make_space` ledger row when anything was dropped or it fell short. |
 | `run make-space agents=t19 bulk=70` (fleetscript, `tools/fleetscripts/make-space.mjs`) | The same, per agent, in place: no walking. |
-| the unarmed hook (`Autopilot.unarmedMakeSpace`, pass-combat) | When the unarmed blocker is `room`, it makes 70 + 10 bulk free and calls `armSelf()` again, BEFORE the pack-full town trip. At most once per 10 minutes (`UNARMED_MAKE_SPACE_EVERY_MS`) whatever the outcome; skipped while a bot holds the economy faculty. |
+| the unarmed remedy (`Autopilot.unarmedMakeSpace`, pass-combat) | For any unarmed body short of the [weapon reserve](#the-weapon-reserve-room-for-the-next-weapon-weapon_reserve): this plan first, to the reserve plus 10 (100 bulk and 100 weight), then the two steps beyond the plan described there, then `armSelf()` again. BEFORE the pack-full town trip. At most once per 10 minutes (`UNARMED_MAKE_SPACE_EVERY_MS`) when the pack was the answer, again after 30 s when the moment was (a trade open, the economy faculty leased); never while a bot holds the economy faculty. |
 
 - **Only the plan.** A row is droppable when the plan recommends it, has queued it (`state: sell`) and blocks it for
   no reason: equipped gear, loadout keeps, protected names, fleet-wanted items, conjured (IA_MADE) items, operator
@@ -1392,11 +1397,85 @@ one`, and while that refusal stood every journey to a merchant was refused too. 
 - **Partial stacks**, by exact id and amount: 45 bulk short of fairy wings at 5 each drops 9 of 10.
 - **Judged by the pack.** Every drop is followed by an inventory read; a drop the server did not take frees nothing and
   comes back under `refused_items`. Unknown equipment blocks every row, so it drops nothing; an open trade refuses.
-- **Short is an answer.** When the plan cannot cover the target it drops what it can and says `short_by`, with
-  `ok: false`. It never reaches outside the plan to make up the difference.
+- **Short is an answer, and it says what stayed.** When the plan cannot cover the target it drops what it can and says
+  `short_by`, with `ok: false`, and `kept` names the biggest stacks left and what protects each (`the keep list`,
+  `protected item`, `wanted by the fleet`, a loadout floor). `make_space` itself never reaches outside the plan to make
+  up the difference. It used to answer an all-product pack with `dropped: []` and one sentence, every ten minutes, to
+  four unarmed farmers for hours (2026-11-18). Quest items are blocked in the plan too: the client never sends a drop
+  for one, so choosing it only spent the turn.
 - Not the same as loot ejection's `overflow_at` above, which is a standing pack-fullness rule; this is a one-shot
   target, asked for by an operator, a fleetscript or the unarmed hook.
 
+
+## The weapon reserve: room for the next weapon (`weapon_reserve`)
+
+Prod, 2026-11-18. Gonzo stood unarmed in the Ancient Place for 5.3 hours reciting `unarmed -- 60 bulk free, needs 70
+to hold one` 17,710 times with `stuck.lever: null`; Fozzie 3.3 hours at 51 free, Zoot 4.3 at 50 (his inside a town
+trip the travel guard had paused for the empty hand), Waldorf at 61, Raphael at 9. Their packs were 400 to 820 orc
+teeth and purple mushrooms: product the keep list, the protect lists, the farm town's `keep` and the fleet-wants board
+all hold back from sale, so the sale plan was empty and `make_space` dropped nothing. Freed by hand, Zoot conjured and
+then re-looted the same teeth to 8 bulk free.
+
+Nothing kept room for the next weapon and nothing could make it. `tools/m59-weapon-reserve.mjs` is one definition
+with four readers; `m59-weapon-reserve-test.mjs` (109) pins it.
+
+**The size is the largest thing `create weapon` can hand over: an axe, 90 bulk and 90 weight** (`weaponReserveSize`,
+measured off the weight table over the spell's seven results: mace 60/60, short sword 50/50, hammer 80/75, axe 90/90,
+long sword 80/60, scimitar 85/70, mystic sword 60/60, weight/bulk). `ReqNewHold` refuses on either ceiling and
+`creaweap.kod:116-129` deletes the weapon after the mana is spent, so both dimensions count. The 70-bulk preflight in
+`makeWeapon` (`CONJURED_WEAPON_BULK`) is still the line under which a cast is declined; the reserve is what makes
+every roll fit, and any ordinary bought, looted or handed-over weapon fits in it too.
+
+**It is in force while a body that fights carries no usable spare weapon** (`Autopilot.weaponReserveNow`). "Usable" is
+what `equipBest` would actually put in the hand: `weaponRanking` narrowed by `training_weapon_only`, so not junk,
+broken, cursed, banned, PvP-only, magic-graded or unread hall cargo. With a usable spare aboard the reserve is
+**waived** and the pack fills to the brim as it always did: the spare is the replacement. It is off for
+`never_attack`, a posted room caster, bare-handed training on its own ground, PvP gear, and an unread use list (an
+unread hand is not an empty one). `autopilot status` shows it as `weapon_reserve: { in_force | waived, reserve, free,
+short_by, reached, last_left, remedy, why }`.
+
+| who asks | what it does |
+|---|---|
+| `Session.lootFloor` | A sweep leaves any item whose whole stack would take free space under the reserve, in either dimension, and says so: `WEAPON RESERVE — taking it would leave N bulk free, and the next weapon needs 90` on the refusal and therefore on the `kill_drop` row (`m59-lootfate` groups it as `weapon reserve`). A weapon this body may wield is never refused for it, and once one is aboard as a spare the rest of the sweep loots as before. An unweighed pack or item is taken as before: the reserve refuses only what it can show would breach it. Never applied to an explicit id request. |
+| the same sweep | **An unarmed body does not pick up a weapon it may not wield** (`UNWIELDABLE — ...`): on its ban list, or outside its "only" weapon. Raphael, allowed nothing but a mace, was carrying four long swords and picked the same ones back up after they were dropped for him. Still taken when something collects it: a loot list that names it, a loot policy's pickup, hall cargo (`town.hall.magicWeapons`), a loadout that keeps or carries it, a vault list, a guild plan still short of it. A `protect` entry does not collect: it says what may not leave the pack, not what to pick up. The one weapon an empty hand may wield is not counted against `max_weapons`. An armed body takes unwieldable weapons as sale stock, as before. |
+| `planPickup` (overfarm) | `reserve` is counted as carried, so an overfarm lap is full at the reserve line and trades up there. Without it the plan would take what "fits", the reserve would leave it, nothing would be sifted and the overfarm hold on the town trip would never release. |
+| `checkIfShouldSell` | A pack that has stopped at the reserve line reads as full (`reserveReached`: within 10 units of it, or a pickup left for it in the last ten minutes with the pack no emptier). The pack now stops at about 95-97% of its ceiling, so every trigger below that fires exactly as before; a `sell_at_load` of 0.97 or 1 and the 97% "sell whatever it is worth" rule could otherwise never be reached. The verdict carries `at_weapon_reserve: true`. Loot ejection's `overflow_at` is not adjusted: set it under 0.94. |
+
+### Unarmed and short of room: the ordered remedy
+
+`passArm` asks it for every unarmed body short of the reserve, before any of the create-weapon branches, so it also
+runs for a body that cannot conjure, for one waiting on mana, and on the wall a journey was paused at when the travel
+guard's `arm` trigger fired. Each step re-reads the pack and stops as soon as the reserve is free.
+
+1. **Wield a usable carried weapon** (`armSelf`, as always).
+2. **Drop what was going to be sold** (`make_space` above, to the reserve plus 10).
+3. **Drop gear the body may not use and nothing protects**: a weapon on its ban list or outside its "only" weapon, a
+   broken weapon or broken armour, junk. Not a magic-graded or unread weapon, and not a name its protect, vault or
+   guild lists or its loadout keep. What it drops goes on the looter's shed list, so it is not picked straight back up.
+4. **Drop the minimum number of units of the least valuable protected stack**, to the reserve and not a unit past it:
+   value per unit of the dimension that is short, cheapest first (orc teeth at 9.3 a bulk go before purple mushrooms at
+   11.2 and gems at 21+). Stacks only, weighed and valued (unknown is not cheap, so herbs are never chosen), never below
+   the working stock: the loadout's carry minimum, the PvP and training reserve for the spells the character knows,
+   and its create-food reagent target. Food goes after everything else and never the last of a food.
+5. **If the room still is not there, say so with a lever**: see [docs/m59-keeper.md](m59-keeper.md#unarmed-with-no-room-has-two-levers-and-its-own-code).
+
+Never, at any step: anything worn or wielded, money, a bow, arrows, the chalice, a quest item, an id the keeper holds
+back (enchanted or dedicated, just delivered by trade, hall-bound magic weapons), a holder's cargo, a curse-cycle
+keep, the roulette's training weapon, a cursed item, an operator's keep veto or a loot policy that says keep. Never
+while a bot holds the economy faculty, and never with a trade open or the use list unread.
+
+**The dropped stock is reserved where it lies.** Step 4 writes a stash claim in the dibs book (`by: weapon-reserve`,
+this character only, one square around where it stood, 30 minutes), so another farmer's sweep leaves it. Its own
+sweep takes it back once it has room past the reserve, which in practice is after its next town or hall trip; a
+fleet-mate or a courier that wants it takes it by id, which dibs never refuses. The floor is not a vault (the room's
+dispose timer thins it every five minutes), so this is a buffer for the product, not a store: 13 orc teeth is what a
+re-armed farmer cost on 2026-11-18. Steps 3 and 4 write one `make_space` ledger row with `beyond_plan: true` and, per
+drop, `{name, amount, tier: gear | stock | food, why}`; a remedy that could not make the room writes
+`unarmed_no_room` with every stack that stayed and what protects it.
+
+**`weapon_reserve: false`** (broker `autopilot` argument, a strategy's `weaponReserve`, default `true`) is the old
+behaviour whole: loot to the brim, pick up any sound weapon under the cap, and stop the remedy at the sale plan. It is
+`economy`, like `lootOnly` and `overfarm`. Keepers pick the reserve up when they restart.
 
 ## An errand's purse is leased
 

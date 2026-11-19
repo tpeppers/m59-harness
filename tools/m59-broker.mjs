@@ -201,6 +201,7 @@ import { requiresVerdict, factsFromStatus, requestFor, resetFloor } from './m59-
 import { normalizeLootEject, normalizeTradeGoods } from './m59-loot-eject.mjs';
 import { normSecondWindFarming } from './m59-second-wind.mjs';
 import { normOvermatch } from './m59-overmatch.mjs';
+import { normWeaponReserve } from './m59-weapon-reserve.mjs';
 import { normalizePurseLease } from './m59-purse-lease.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
@@ -12839,6 +12840,14 @@ const TOOLS = [
         'when spent (under 20). Off while travelling, on an errand, leased, recovering from a death, poisoned, in PvP, or ' +
         'with a creature of unknown level in sight or in the room spawn table. The play-dead logoff moves to flee_below. ' +
         '"off" is the lines and walls this character had before. null resets to the default' },
+      weapon_reserve: { type: ['boolean', 'null'], description: 'THE WEAPON RESERVE (m59-weapon-reserve.mjs). true (default): a ' +
+        'character that fights and carries no usable spare weapon leaves on the floor any pickup that would take its free ' +
+        'pack space under what a replacement weapon needs (90 bulk and 90 weight: the largest create weapon result), an ' +
+        'unarmed character picks up no weapon it may not wield unless a loot list, loadout or guild want names it, and one ' +
+        'that is unarmed and short of that room makes it: sale-plan rows, then gear it may not use, then the fewest units ' +
+        'of its least valuable protected stack (never money, the last of a food, the chalice, a quest or bound item, or ' +
+        'working stock), reserved on the floor for itself. false: loot to the brim and drop only sale-plan rows. null ' +
+        'resets to the default' },
       lock_no_combat: { type: 'boolean', description: 'THE NO-COMBAT LOCK, a lockdown that accepts ANY NO_COMBAT room (every ' +
         'inn, shop, bank and hall): the keeper locks the character (assigned_room and confine_rooms) to the no-combat room ' +
         'it stands in, re-deciding on every pass, so a character a person leaves in another inn stays THERE; outside a ' +
@@ -13974,6 +13983,12 @@ const TOOLS = [
       if (a.overmatch !== undefined) {
         try { normOvermatch(a.overmatch); p.policy.overmatch = a.overmatch; }
         catch (e) { return { started: false, reason: `overmatch refused: ${e.message}`, note: 'nothing was changed' }; }
+      }
+      // THE WEAPON RESERVE (m59-weapon-reserve.mjs): true | false, null resets to the default (true). Anything else is
+      // refused whole, with the reason.
+      if (a.weapon_reserve !== undefined) {
+        try { p.policy.weaponReserve = normWeaponReserve(a.weapon_reserve); }
+        catch (e) { return { started: false, reason: `weapon_reserve refused: ${e.message}`, note: 'nothing was changed' }; }
       }
       if (a.loot_eject !== undefined) {
         try { p.policy.lootEject = normalizeLootEject(a.loot_eject); }
