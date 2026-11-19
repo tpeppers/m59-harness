@@ -104,7 +104,7 @@ import * as exitgap from './m59-exitgap.mjs';
 import { autopilotIfAny } from './m59-autopilot.mjs';
 import { lapsedWeapon, dedicatedWeapon, alreadyDedicated } from './m59-weapon-magic.mjs';
 import { planLootOnly, newLootOnlyMemory, isBodyArmor, floorAllowList, lootFloorRule, itemAllowed } from './m59-loot-filter.mjs';
-import { reservePickup, unwieldableLeftWhy } from './m59-weapon-reserve.mjs';
+import { WEAPON_SPARES_KEPT, reservePickup, spareLeftWhy, unwieldableLeftWhy } from './m59-weapon-reserve.mjs';
 import { readDibs, dibsFile, dibsFilter } from './m59-dibs.mjs';
 import { boundFarmFoodPile, FARM_FOOD_CACHE_ROOM, isFarmFoodCacheItem, readFarmFoodCache } from './m59-farm-food-cache-record.mjs';
 import { boundFarmGearPiles, isFarmGearCacheItem, readFarmGearCache } from './m59-farm-gear-cache-record.mjs';
@@ -5519,6 +5519,7 @@ class Session {
     if (!ids?.length || !explicitIdsOverride) { try { weaponReserve = this._weaponReserve?.() ?? null; } catch { weaponReserve = null; } }
     const unwieldableSkipped = [];
     const replacementIds = new Set();   // the wieldable weapon an empty hand takes past the spare cap
+    let sparesTaken = 0;                // wieldable weapons this sweep is taking, toward the two spares a body keeps
     if (!ids?.length || !explicitIdsOverride) {
       const shed = this._shedIds, cap = this._fieldWeaponCap, now = Date.now();
       let spares = cap ? Number(cap.count?.()) || 0 : 0;
@@ -5536,14 +5537,26 @@ class Session {
         // fills the room the one it can hold needs. Still taken when something COLLECTS it: hall cargo, a loot
         // policy's pickup, a loot list that names it, or the keeper's own answer (a loadout or guild want naming it).
         // AND THE ONE IT MAY WIELD IS NOT A SPARE AGAINST THE CAP: it is going into an empty hand. One per sweep.
-        if (weaponReserve?.unarmed && !hallCargo && skills.weaponScore(name) > 0 && !this.lootDisposition?.(o)?.pickup) {
-          let why = null, collected = false;
-          try { why = weaponReserve.mayWield?.(name, o) ?? null; } catch { why = null; }
+        // AND NOT A THIRD SPARE. A weapon it MAY wield is a replacement only until two usable spares are aboard
+        // (WEAPON_SPARES_KEPT); past that it is 50 to 90 bulk of pack. Kermit, 2026-11-18: six usable spares and a
+        // pack at the brim, because `drop_junk: false` switches the field weapon cap below off whole. Counted by the
+        // keeper over every usable weapon carried, protected names included, and over what this sweep has taken.
+        if (weaponReserve && typeof weaponReserve.mayWield === 'function' && !hallCargo && skills.weaponScore(name) > 0 &&
+            !this.lootDisposition?.(o)?.pickup) {
+          let why = null;
+          try { why = weaponReserve.mayWield(name, o) ?? null; } catch { why = null; }
+          const collected = () => {
+            try { return (!!listed && itemAllowed(name, listed, o.translation ?? null)) || weaponReserve.collects?.(name, o) === true; }
+            catch { return true; }
+          };
           if (why) {
-            try { collected = (!!listed && itemAllowed(name, listed, o.translation ?? null)) || weaponReserve.collects?.(name, o) === true; }
-            catch { collected = true; }
-            if (!collected) { unwieldableSkipped.push({ id: o.id, item: name, why: unwieldableLeftWhy(name, why) }); return false; }
-          } else if (weaponReserve.reserve && !replacementIds.size) { replacementIds.add(o.id); return true; }
+            if (weaponReserve.unarmed && !collected()) { unwieldableSkipped.push({ id: o.id, item: name, why: unwieldableLeftWhy(name, why) }); return false; }
+          } else {
+            const sparesNow = (Number(weaponReserve.usable_carried) || 0) + sparesTaken - (weaponReserve.unarmed ? 1 : 0);
+            if (sparesNow >= WEAPON_SPARES_KEPT && !collected()) { unwieldableSkipped.push({ id: o.id, item: name, why: spareLeftWhy(name) }); return false; }
+            sparesTaken++;
+            if (weaponReserve.unarmed && weaponReserve.reserve && !replacementIds.size) { replacementIds.add(o.id); return true; }
+          }
         }
         if (!hallCargo && !this.lootDisposition?.(o)?.pickup && cap && Number.isFinite(cap.max) && skills.weaponScore(name) > 0) {
           if (spares >= cap.max) { shedSkipped.push(name); return false; }

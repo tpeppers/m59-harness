@@ -138,7 +138,10 @@ export function freeOf(cap) {
 // WHICH DROPS, AND HOW MANY OF EACH — pure. Greedy on the dimension furthest short: the candidate
 // with the lowest value per unit of THAT dimension goes first, as many units as close the gap
 // (partial stacks), then the gap is recomputed. Unknown value sorts after every known one.
-export function chooseDrops(rows, { free, need }) {
+// `first(row)`: rows that go before every other whatever they are worth (the unarmed remedy passes "a weapon the plan
+// would sell": a spare past max_weapons is 50 to 90 bulk each, and it is the hoard that filled the pack).
+export function chooseDrops(rows, { free, need, first = null }) {
+  const lead = x => { try { return first && first(x.row) ? 0 : 1; } catch { return 1; } };
   const short = {
     bulk: Math.max(0, (need?.bulk ?? 0) - (free?.bulk ?? 0)),
     weight: Math.max(0, (need?.weight ?? 0) - (free?.weight ?? 0)),
@@ -157,7 +160,7 @@ export function chooseDrops(rows, { free, need }) {
       break;
     }
     const cost = x => (x.row.unit_value == null ? Infinity : x.row.unit_value / x.row.unit[dim]);
-    options.sort((a, b) => cost(a) - cost(b) || (b.row.unit[dim] - a.row.unit[dim]) || (a.row.id - b.row.id));
+    options.sort((a, b) => lead(a) - lead(b) || cost(a) - cost(b) || (b.row.unit[dim] - a.row.unit[dim]) || (a.row.id - b.row.id));
     const best = options[0];
     const n = Math.min(best.units, Math.ceil(short[dim] / best.row.unit[dim]));
     const p = picks.get(best.row.id) ?? { row: best.row, amount: 0 };
@@ -182,7 +185,7 @@ async function readPack(s, c) {
 // DO IT. `planOf()` is the keeper's own sale plan (called fresh, after a pack read); `capacityOf()`
 // is `skills.carryCapacity(c)`. Every drop is by exact id and amount and verified by a re-read.
 export async function makeSpace(s, { bulk = null, weight = null, planOf, capacityOf, heldBack = () => new Set(),
-                                     maxDrops = 40, why = 'make_space' } = {}) {
+                                     maxDrops = 40, why = 'make_space', first = null } = {}) {
   const c = s.need ? s.need() : s.client;
   const needed = makeSpaceTarget({ bulk, weight });
   const out = (o) => ({ needed, ...o });
@@ -202,7 +205,7 @@ export async function makeSpace(s, { bulk = null, weight = null, planOf, capacit
   if (plan?.error) return out({ ok: false, refused: 'sale plan unavailable', why: plan.error, before,
     freed: { bulk: 0, weight: 0 }, dropped: [], short_by: { bulk: Math.max(0, needed.bulk - free0.bulk),
                                                            weight: Math.max(0, needed.weight - free0.weight) } });
-  const { picks } = chooseDrops(summary.rows, { free: free0, need: needed });
+  const { picks } = chooseDrops(summary.rows, { free: free0, need: needed, first });
   const { dropped, refused, freed } = await dropPicks(s, picks, { maxDrops,
     whyOf: p => `${p.row.reason || 'on the sale plan'}` + (p.row.unit_value == null ? '; value unknown' : `; ~${p.row.unit_value} each`) });
   const after = freeOf(capacityOf()) ?? { bulk: free0.bulk + freed.bulk, weight: free0.weight + freed.weight };
@@ -262,7 +265,8 @@ export async function dropPicks(s, picks = [], { maxDrops = 40, whyOf = () => 'm
     if (!gone) { refused.push({ name: p.row.name, why: 'the server did not take the drop' }); continue; }
     freed.bulk += p.row.unit.bulk * gone;
     freed.weight += p.row.unit.weight * gone;
-    dropped.push({ id: p.row.id, name: p.row.name, amount: gone, why: whyOf(p), ...(p.row.tier ? { tier: p.row.tier } : {}) });
+    dropped.push({ id: p.row.id, name: p.row.name, amount: gone, why: whyOf(p), ...(p.row.tier ? { tier: p.row.tier } : {}),
+                   ...(p.row.stock_class ? { stock_class: p.row.stock_class } : {}) });
   }
   return { dropped, refused, freed };
 }

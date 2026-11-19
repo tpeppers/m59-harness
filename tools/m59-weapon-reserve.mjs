@@ -112,6 +112,17 @@ export function reservePickup({ free = null, reserve = null, cost = null, replac
          'that does not fit is deleted after the mana is spent). Left on the floor.' };
 }
 
+// HOW MANY USABLE SPARES A BODY KEEPS. The best two by its own ranking (weaponRanking: the order equipBest would reach
+// for them). A third is not a replacement, it is 50 to 90 bulk of pack: Kermit, 2026-11-18, carried six usable spare
+// weapons with the reserve reading "waived: a usable spare is carried". `drop_junk: false` had switched his field
+// weapon cap off whole (fieldWeaponCap), pickup limit included, so nothing was counting.
+export const WEAPON_SPARES_KEPT = 2;
+
+/** The refusal for a weapon picked up past the spares a body keeps. */
+export const spareLeftWhy = (name, kept = WEAPON_SPARES_KEPT) =>
+  `SPARE WEAPONS — ${kept} usable spare weapons are already carried, and a further ${name} is not a replacement, only ` +
+  'bulk the pack needs for loot. Nothing collects it (no loot list, loadout, guild want or hall names it). Left on the floor.';
+
 /** The refusal for a weapon an unarmed body may not wield. `why` is unwieldableWhy's answer. */
 export const unwieldableLeftWhy = (name, why) =>
   `UNWIELDABLE — unarmed, and ${name} is a weapon this character may not wield (${why}). Nothing collects it ` +
@@ -152,15 +163,22 @@ export function usableWeapons(c, { priority = null, banned = null, only = null, 
  *               PvP gear on), or null
  *   equipment   true when the server's use list has been read; unknown is not unarmed
  *   armed       a weapon is in the hand
- *   carried     usable weapons in the pack that are NOT in the hand (names)
+ *   carried     usable weapons in the pack that are NOT in the hand (names), best first
+ *   surplus     the usable spares past the best WEAPON_SPARES_KEPT that nothing protects (names)
  * A body with nothing in its hand will wield one of `carried` next pass, so that one is not a spare.
+ * A HOARD IS NOT A WAIVER: with surplus spares aboard the reserve stays in force, so the pack does not fill to the
+ * brim around weapons that are themselves the problem. They are what the sale plan sells and the remedy sheds first.
  */
-export function reserveState({ enabled = true, exempt = null, equipment = false, armed = false, carried = [], size = weaponReserveSize() } = {}) {
+export function reserveState({ enabled = true, exempt = null, equipment = false, armed = false, carried = [], surplus = [], size = weaponReserveSize() } = {}) {
   const off = why => ({ in_force: false, reserve: null, unarmed: false, spares: null, why });
   if (!enabled) return off('weapon_reserve is off for this character');
   if (exempt) return off(exempt);
   if (!equipment) return off('equipment has not been read: an unread hand is not an empty one');
   const spares = Math.max(0, carried.length - (armed ? 0 : 1));
+  if (surplus.length)
+    return { in_force: true, reserve: { bulk: size.bulk, weight: size.weight }, unarmed: !armed, spares, surplus: surplus.length,
+             why: `${surplus.length} surplus spare weapon(s) are carried (${surplus.join(', ')}) past the ${WEAPON_SPARES_KEPT} it keeps: a hoard is not ` +
+                  `a replacement, so ${size.bulk} bulk and ${size.weight} weight stay free until they are sold or shed` };
   if (spares > 0)
     return { in_force: false, waived: true, reserve: null, unarmed: !armed, spares,
              why: `a usable spare is carried (${carried.slice(armed ? 0 : 1).join(', ')}): it is the replacement, so the pack fills to the brim` };
@@ -187,26 +205,41 @@ export function reserveReached({ free = null, reserve = null, left = null, now =
 // ---------------------------------------------------------------- the unarmed remedy, beyond the sale plan
 //
 // ORDER (Autopilot.unarmedMakeSpace): (1) wield a usable carried weapon -- armSelf, before this is reached; (2) drop
-// sale-plan rows (makeSpace, m59-make-space.mjs); then, only with `weaponReserve` on and only while still short of the
-// reserve:
+// sale-plan rows (makeSpace, m59-make-space.mjs), spare weapons the plan would sell first; then, only with
+// `weaponReserve` on and only while still short of the reserve:
 //   (3) GEAR THE BODY MAY NOT USE AND NOTHING PROTECTS: a weapon on its ban list or outside its "only" weapon, a
-//       broken weapon or broken armour, junk. Not a name its protect / vault / guild lists or its loadout keep.
+//       broken weapon or broken armour, junk, a surplus spare past the two it keeps. Not a name its protect / vault /
+//       guild lists or its loadout keep.
 //   (4) THE MINIMUM NUMBER OF UNITS OF THE LEAST VALUABLE PROTECTED STACK. Stacks only (a number item), weighed and
-//       valued (unknown is not cheap), never below the working stock (`floor`: the loadout's carry minimum and the PvP
-//       and training reserve), food after everything else and never the last unit of a food stack.
+//       valued (unknown is not cheap). PRODUCT first, cheapest first; food after it and never the last of a food.
+//   (5) WORKING STOCK LAST, AND IT SAYS SO. Operator's standing rule: reagent priority is PvP > training > use > vault
+//       > sell. The remedy's first prod drop (Lew, 2026-11-18) was 14 elderberries, his light/fog practice stock: the
+//       cheapest stack by value, and the wrong one. So a stack a spell this character practises, buffs or heals with
+//       consumes, its loadout floor and its create-food stock (`use`), its training reserve (`training`) and its PvP
+//       reserve (`pvp`) are candidates only after every unit of product and food, in that order, cheapest first within
+//       each. They may still be taken -- re-arming beats practising -- and the drop row carries `tier: 'working'` and
+//       the class, so the journal and the ledger say practice stock was spent.
 // NEVER, at any tier (`hard`): anything worn or wielded, money, a bow, arrows, the chalice, a quest item, or an item
 // bound to somebody or something -- enchanted or dedicated, just delivered by trade, hall-bound magic weapons, a
 // holder's cargo, the curse cycle's keeps, an operator's keep veto.
+
+export const WORKING_CLASSES = Object.freeze(['use', 'training', 'pvp']);
+const WORKING_LABEL = Object.freeze({ use: 'working stock', training: 'practice stock', pvp: 'PvP reserve stock' });
 
 /**
  * Sort the pack into what the remedy may give up beyond the plan. Pure.
  *   rows  salePlanSummary rows (m59-make-space.mjs annotateRow): id, name, amount, role, equipped, unit, unit_value, droppable
  *   ctx   { hard(row) -> reason | null, unusable(row) -> reason | null, named(row) -> reason | null (a name-level
- *           keep, asked for gear), floor(row) -> units that must stay, isFood(row) -> bool, stack(row) -> bool }
- * -> { gear: [row + { give, tier: 'gear', drop_why }], stock: [...], food: [...], kept: [{ name, amount, bulk, weight, why }] }
+ *           keep, asked for gear), isFood(row) -> bool, stack(row) -> bool,
+ *           floors(row) -> { use, training, pvp } units of the stack that are working stock by QUANTITY (a loadout
+ *             minimum or create-food target; the training reserve; the PvP reserve), and
+ *           reagentOf(row) -> { cls: 'use' | 'training', why } | null when the whole stack is working stock by NAME
+ *             (a reagent of a spell this character practises, buffs or heals with) }
+ * -> { gear, stock, food, working: { use, training, pvp }, kept }; every candidate row carries { give, tier, drop_why }.
  */
 export function beyondThePlan(rows = [], ctx = {}) {
   const gear = [], stock = [], food = [], kept = [];
+  const working = { use: [], training: [], pvp: [] };
   const keep = (row, why) => kept.push({ id: row.id, name: row.name, amount: row.amount,
     bulk: row.unit ? row.unit.bulk * row.amount : null, weight: row.unit ? row.unit.weight * row.amount : null, why });
   const ask = (fn, row) => { try { return fn ? fn(row) : null; } catch (e) { return `could not be judged (${e?.message ?? e})`; } };
@@ -227,12 +260,32 @@ export function beyondThePlan(rows = [], ctx = {}) {
     if (!isStack) { keep(row, row.drop_block ?? 'a single item, not stock'); continue; }
     if (row.unit_value == null) { keep(row, `${row.drop_block ?? 'kept'}; its value is unknown, and unknown is not cheap`); continue; }
     try { isFood = ctx.isFood ? ctx.isFood(row) === true : row.role === 'food'; } catch { isFood = true; }
-    const floorRaw = Number(ask(ctx.floor, row));
-    const floor = Math.max(Number.isFinite(floorRaw) ? floorRaw : row.amount, isFood ? 1 : 0);
-    const give = Math.max(0, Math.floor(row.amount - floor));
-    if (!(give > 0)) { keep(row, isFood && floor <= 1 ? 'the last of a food: never dropped' : `working stock: ${floor} must stay`); continue; }
-    (isFood ? food : stock).push({ ...row, give, tier: isFood ? 'food' : 'stock', floor,
-      drop_why: `the least valuable protected stack (${row.drop_block ?? 'protected'}); ~${row.unit_value} each` });
+    // HOW MANY UNITS ARE WHOSE, from the most protected up: the PvP reserve, then training, then use, then product.
+    // A judgement that throws keeps the whole stack: unknown is not surplus.
+    let fl = null, reagent = null, judged = true;
+    try { fl = ctx.floors ? ctx.floors(row) : null; reagent = ctx.reagentOf ? ctx.reagentOf(row) : null; } catch { judged = false; }
+    if (!judged) { keep(row, 'working stock that could not be counted: kept whole'); continue; }
+    const n = v => Math.max(0, Math.floor(Number(v) || 0));
+    const units = { pvp: Math.min(row.amount, n(fl?.pvp)) };
+    units.training = Math.min(row.amount, n(fl?.pvp) + n(fl?.training)) - units.pvp;
+    units.use = Math.min(row.amount, Math.max(n(fl?.use), n(fl?.pvp) + n(fl?.training))) - units.pvp - units.training;
+    let product = row.amount - units.pvp - units.training - units.use;
+    if (reagent && WORKING_CLASSES.includes(reagent.cls) && reagent.cls !== 'pvp') { units[reagent.cls] += product; product = 0; }
+    // THE LAST OF A FOOD IS NEVER DROPPED: it comes off the most protected units there are.
+    if (isFood) {
+      if (units.pvp > 0) units.pvp--; else if (units.training > 0) units.training--; else if (units.use > 0) units.use--; else product--;
+    }
+    if (isFood && row.amount <= 1) { keep(row, 'the last of a food: never dropped'); continue; }
+    if (product > 0)
+      (isFood ? food : stock).push({ ...row, give: product, tier: isFood ? 'food' : 'stock',
+        drop_why: `the least valuable protected stack (${row.drop_block ?? 'protected'}); ~${row.unit_value} each` });
+    for (const cls of WORKING_CLASSES) {
+      if (!(units[cls] > 0)) continue;
+      const because = cls === reagent?.cls ? reagent.why
+        : cls === 'pvp' ? 'the PvP reserve' : cls === 'training' ? 'the training reserve' : 'its loadout floor or create-food stock';
+      working[cls].push({ ...row, give: units[cls], tier: 'working', stock_class: cls,
+        drop_why: `${WORKING_LABEL[cls]} (${because}), taken only because nothing else was left to drop; ~${row.unit_value} each` });
+    }
   }
-  return { gear, stock, food, kept };
+  return { gear, stock, food, working, kept };
 }

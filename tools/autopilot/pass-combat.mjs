@@ -718,8 +718,11 @@ export class PassCombatPart {
     const reserve = weaponReserveSize();
     // Create Weapon can roll an axe, which needs 90 in both dimensions (the reserve). Once
     // recovery is clearing the pack, leave room for that result too, and a margin.
+    // A WEAPON THE PLAN WOULD SELL GOES FIRST, whatever it is worth: a spare past max_weapons is 50 to 90 bulk of what
+    // filled the pack, and an unarmed body carrying one cannot wield it or it would not be here.
     const made = await this.makeSpaceNow({ bulk: reserve.bulk + UNARMED_MAKE_SPACE_MARGIN, weight: reserve.weight + UNARMED_MAKE_SPACE_MARGIN,
-      why: 'unarmed: room for a conjured weapon' }).catch(e => ({ ok: false, refused: 'error', why: e?.message }));
+      why: 'unarmed: room for a conjured weapon', first: row => row.role === 'weapon' })
+      .catch(e => ({ ok: false, refused: 'error', why: e?.message }));
     // THE HOOK AS IT WAS, for a body the reserve is not in force for (`weapon_reserve: false`, or exempt): the sale
     // plan and nothing beyond it, and no arm retry when that dropped nothing.
     let inForce = false;

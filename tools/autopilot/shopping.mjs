@@ -21,7 +21,8 @@ import { intentForSession } from '../m59-inventory-intent.mjs';
 import { MARKET_KEEP, isFood, itemNameKey, weighPack } from '../m59-items.mjs';
 import { chooseDrops, dropPicks, freeOf, makeSpace, neverDropped, salePlanSummary } from '../m59-make-space.mjs';
 import { isQuestItem } from '../m59-quest-items.mjs';
-import { beyondThePlan, isShort, shortOf, unwieldableWhy } from '../m59-weapon-reserve.mjs';
+import { WEAPON_SPARES_KEPT, beyondThePlan, isShort, shortOf, unwieldableWhy } from '../m59-weapon-reserve.mjs';
+import { spellCost } from '../m59-deskpractice.mjs';
 import { bankAboveOf, leaseCarry, walkingFloatOf } from '../m59-purse-lease.mjs';
 import { keepTest, norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
@@ -37,6 +38,8 @@ import { BANKS, FOOD_SHOP, ITEM_VALUE, MARKET_STOPS, REST_VIGOR_CAP, TITHE_FLEET
 // How far around the square it stood on a stack dropped by the unarmed remedy is reserved (dibs `near`). The drop lands
 // on the dropper's own square; one square of slack covers a position the client had only predicted.
 const RESERVE_DROP_RADIUS = 1;
+// The heals a keeper casts on itself and its allies when `heal_spells` names none (null: every heal it knows).
+const HEAL_SPELLS = Object.freeze(['minor heal', 'major heal', 'hospice']);
 
 export class ShoppingPart {
   // @part 1
@@ -312,9 +315,9 @@ export class ShoppingPart {
    * DROP SALE-PLAN ITEMS, LEAST VALUABLE FIRST, UNTIL `bulk`/`weight` (each at most 400) IS FREE.
    * Never anything outside ownSalePlan(); see tools/m59-make-space.mjs for the floor under it.
    */
-  async makeSpaceNow({ bulk = null, weight = null, why = 'make_space' } = {}) {
+  async makeSpaceNow({ bulk = null, weight = null, why = 'make_space', first = null } = {}) {
     if (!this.s?.client) return { ok: false, refused: 'no client', dropped: [], freed: { bulk: 0, weight: 0 } };
-    const r = await makeSpace(this.s, { bulk, weight, why,
+    const r = await makeSpace(this.s, { bulk, weight, why, first,
       planOf: () => this.ownSalePlan(),
       capacityOf: () => skills.carryCapacity(this.s.client),
       heldBack: () => this.heldBackIds?.() ?? new Set() });
@@ -342,28 +345,35 @@ export class ShoppingPart {
    *   unusable  junk; a broken weapon or broken armour; a weapon on the ban list or outside the "only" weapon. Never a
    *             magic-graded or unread weapon: that is loot whose worth nobody has read, not dead weight.
    *   named     for gear: a name the protect / vault / guild lists or the loadout keep.
-   *   floor     the working stock of a stack: the loadout's carry minimum, the PvP and training reserve for the spells
-   *             this character knows, and its create-food reagent target.
+   *   floors    the working stock of a stack BY QUANTITY: { use: the loadout's carry minimum or its create-food
+   *             target, training: the reserve book's training casts, pvp: its PvP casts }, for the spells it knows.
+   *   reagentOf the working stock of a stack BY NAME: a reagent of a spell it practises (`training`), or buffs
+   *             allies or heals with (`use`). Operator's standing rule: PvP > training > use > vault > sell, so
+   *             all of it is dropped only after every unit of product and food, and says so when it is.
    */
   reserveDropRules(c = this.s?.client, { worn = skills.equippedNow(c) ?? new Set(), heldBack = this.heldBackIds?.() ?? new Set() } = {}) {
     const s = this.s;
     const live = id => (c?.inventory ?? []).find(o => Number(o.id) === Number(id)) ?? null;
     const key = n => itemNameKey(n);
-    let duty = [], protectedNames = [], floors = {}, pvp = new Map(), banned = null, only = null, keepLoadout = null;
+    let duty = [], protectedNames = [], floors = {}, pvp = new Map(), kept = new Map(), known = [], banned = null, only = null, keepLoadout = null;
     try { duty = this.dutyBoundNames?.() ?? []; } catch { duty = []; }
     try { protectedNames = this.protectedItemNames?.() ?? []; } catch { protectedNames = []; }
     try { floors = this.carryFloors?.() ?? {}; } catch { floors = {}; }
     try { banned = this.bannedWeaponsNow?.() ?? null; only = this.trainingWeaponOnlyNow?.() ?? null; } catch { /* no ban known */ }
     try { keepLoadout = keepTest(this.loadout?.() ?? null); } catch { keepLoadout = null; }
+    try { known = (c?.spells ?? []).map(sp => c.rsc?.get?.(sp.nameRsc) ?? sp.name).filter(Boolean); } catch { known = []; }
     try {
+      // THE RESERVE BOOK, IN ITS TWO TIERS (m59-reagent-reserve.mjs): the PvP casts, and the PvP casts plus the training
+      // stock. An unread spell list counts every reserved spell, as the sale's floors do.
       const who = s?.reserveWho ?? null;
       const book = who ? readReserve(reserveFile(who.fleet)) : null;
       if (book) {
-        const known = (c?.spells ?? []).map(sp => c.rsc?.get?.(sp.nameRsc) ?? sp.name).filter(Boolean);
-        const casts = keptCastsFor(book, who);
-        pvp = floorsFor({ spells: casts, items: resolveReserve(book, who)?.items ?? {} }, known.length ? known : Object.keys(casts));
+        const reserve = resolveReserve(book, who), casts = keptCastsFor(book, who);
+        const knows = list => (known.length ? known : Object.keys(list));
+        pvp = floorsFor({ spells: reserve?.spells ?? {}, items: reserve?.items ?? {} }, knows(reserve?.spells ?? {}));
+        kept = floorsFor({ spells: casts, items: reserve?.items ?? {} }, knows(casts));
       }
-    } catch { pvp = new Map(); }
+    } catch { pvp = new Map(); kept = new Map(); }
     const broken = skills.brokenSet(c);
     const hard = row => {
       const o = live(row.id), name = row.name;
@@ -379,6 +389,8 @@ export class ShoppingPart {
       if (s?.lootDisposition?.(o)?.action === 'keep') return 'a loot policy keeps it';
       return null;
     };
+    let surplusIds = new Set();
+    try { surplusIds = this.weaponReserveNow?.(c)?.surplusIds ?? new Set(); } catch { surplusIds = new Set(); }
     const unusable = row => {
       const o = live(row.id), name = row.name;
       if (!o) return null;
@@ -387,7 +399,8 @@ export class ShoppingPart {
         if (skills.isMagicGrade(o) || (skills.isUnrevealed(o) && !skills.isOwnSummon(c, o))) return null;
         if (broken.has(o.id)) return 'a broken weapon';
         const why = unwieldableWhy(name, { banned, only });
-        return why ? `a weapon it may not wield: ${why}` : null;
+        if (why) return `a weapon it may not wield: ${why}`;
+        return surplusIds.has(Number(o.id)) ? `a surplus spare weapon: ${WEAPON_SPARES_KEPT} better ones are kept` : null;
       }
       return skills.armourKind(name) && broken.has(o.id) ? 'broken armour' : null;
     };
@@ -396,15 +409,46 @@ export class ShoppingPart {
       const kept = keepLoadout?.(row.name);
       return kept ? `its loadout: ${kept}` : null;
     };
-    const floor = row => {
-      let n = 0;
-      for (const [name, min] of Object.entries(floors)) if (key(name) === key(row.name)) n = Math.max(n, Number(min) || 0);
-      n = Math.max(n, pvp.get(reagentKey(row.name)) ?? 0);
+    // A reagent's name as the spell catalogue and the pack both spell it: "orctooth" and "orc tooth" are one thing.
+    const rkey = n => reagentKey(n).replace(/\s+/g, '');
+    const folded = map => new Map([...map].map(([item, n]) => [rkey(item), n]));
+    const keptFloors = folded(kept), pvpFloors = folded(pvp);
+    const floorsOf = row => {
+      let use = 0;
+      for (const [name, min] of Object.entries(floors)) if (key(name) === key(row.name)) use = Math.max(use, Number(min) || 0);
       const kind = skills.shareKind(row.name);
-      if (kind) n = Math.max(n, Number(reagentTargetFor(kind, this.policy?.reagentTarget)) || 0);
-      return n;
+      if (kind) use = Math.max(use, Number(reagentTargetFor(kind, this.policy?.reagentTarget)) || 0);
+      const pvpN = pvpFloors.get(rkey(row.name)) ?? 0;
+      return { use, pvp: pvpN, training: Math.max(0, (keptFloors.get(rkey(row.name)) ?? 0) - pvpN) };
     };
-    return { hard, unusable, named, floor, isFood: row => isFood(row.name), stack: row => (Number(live(row.id)?.amount) || 0) >= 1 };
+    // BY NAME: what the spells this character practises, buffs with or heals with consume (m59-deskpractice spellCost,
+    // the same catalogue the practice drill and the reserve book cost a cast from). Practice outranks use.
+    const spellNames = list => [].concat(list ?? []).map(x => String(typeof x === 'string' ? x : x?.name ?? '').trim().toLowerCase()).filter(Boolean);
+    const on = cfg => cfg && typeof cfg === 'object' && cfg.enabled !== false;
+    const byName = new Map();
+    const claim = (spells, cls, what) => {
+      for (const spell of spells) {
+        let cost = null;
+        try { cost = spellCost(spell); } catch { cost = null; }
+        for (const [item] of cost?.reagents ?? []) {
+          const k = rkey(item), had = byName.get(k);
+          if (!had || (had.cls === 'use' && cls === 'training')) byName.set(k, { cls, what, spells: [spell] });
+          else if (had.cls === cls && !had.spells.includes(spell)) had.spells.push(spell);
+        }
+      }
+    };
+    try {
+      const p = this.policy ?? {};
+      const heals = Array.isArray(p.healSpells) ? spellNames(p.healSpells) : known.map(n => String(n).toLowerCase()).filter(n => HEAL_SPELLS.includes(n));
+      claim(heals, 'use', 'a reagent of the heals it casts');
+      if (on(p.buffAllies)) claim(spellNames(p.buffAllies.spells), 'use', 'a reagent of the buffs it casts on allies');
+      if (on(p.practiceSpells)) claim(spellNames(p.practiceSpells.spells), 'training', 'a reagent of its practice spells');
+    } catch { /* no spell orders readable: quantity floors still stand */ }
+    const reagentOf = row => {
+      const hit = byName.get(rkey(row.name));
+      return hit ? { cls: hit.cls, why: `${hit.what}: ${hit.spells.join(', ')}` } : null;
+    };
+    return { hard, unusable, named, floors: floorsOf, reagentOf, isFood: row => isFood(row.name), stack: row => (Number(live(row.id)?.amount) || 0) >= 1 };
   }
 
   /**
@@ -439,7 +483,8 @@ export class ShoppingPart {
     const tiers = beyondThePlan(salePlanSummary(plan, { heldBack }).rows, this.reserveDropRules(c, { worn, heldBack }));
     const dropped = [], refused = [], freed = { bulk: 0, weight: 0 };
     let free = free0;
-    for (const tier of [tiers.gear, tiers.stock, tiers.food]) {
+    // Product before food before working stock; within working stock, use before training before the PvP reserve.
+    for (const tier of [tiers.gear, tiers.stock, tiers.food, tiers.working.use, tiers.working.training, tiers.working.pvp]) {
       if (!tier.length || !isShort(shortOf(free, need))) continue;
       const { picks } = chooseDrops(tier.map(r => ({ ...r, droppable: true, sale_amount: r.give })), { free, need });
       const at = c.self ? { row: c.self.row, col: c.self.col } : null;
@@ -459,11 +504,18 @@ export class ShoppingPart {
     const kept = [...tiers.kept].sort((a, b) => (b.bulk ?? -1) - (a.bulk ?? -1)).slice(0, 8)
       .map(({ name, amount, bulk, weight, why: w }) => ({ name, amount, bulk, weight, why: w }));
     const result = { ok, needed: need, before: { free: free0 }, after: { free }, freed, dropped, short_by, kept,
+      ...(dropped.some(d => d.tier === 'working') ? { took_working_stock: dropped.filter(d => d.tier === 'working').map(d => `${d.amount} ${d.name} (${d.stock_class})`) } : {}),
       ...(refused.length ? { refused_items: refused } : {}), why };
+    // WORKING STOCK WAS SPENT ON THIS, AND THE RECORD SAYS SO: practice, PvP or loadout stock, by class.
+    const tookWorking = dropped.filter(d => d.tier === 'working').map(d => `${d.amount} ${d.name} (${d.stock_class})`);
     if (dropped.length || !ok) {
       try { this.ledgerEvent?.('make_space', { needed: need, freed, dropped, short_by, ok, why, beyond_plan: true,
+        ...(tookWorking.length ? { took_working_stock: tookWorking } : {}),
         ...(ok ? {} : { kept }), room_num: s.world?.room?.num ?? null }); } catch { /* bookkeeping only */ }
-      this.note('made space beyond the sale plan', { needed: need, freed, short_by,
+      this.note(tookWorking.length ? 'made space beyond the sale plan: TOOK WORKING STOCK' : 'made space beyond the sale plan', {
+        needed: need, freed, short_by,
+        ...(tookWorking.length ? { took_working_stock: tookWorking,
+          working_stock_why: 'practice, PvP or loadout stock is dropped last, and only when nothing else is left: re-arming beats practising' } : {}),
         dropped: dropped.map(d => `${d.amount} ${d.name} (${d.why})`),
         ...(ok ? {} : { kept: kept.map(k => `${k.amount} ${k.name}: ${k.why}`) }), why,
         because: 'unarmed with no room for a weapon, and the sale plan had nothing more to give: gear it may not use ' +

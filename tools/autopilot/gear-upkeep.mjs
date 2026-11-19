@@ -20,7 +20,7 @@ import { keepTest, reconcile } from '../m59-loadout.mjs';
 import { isPvpOnly } from '../m59-pvp-gear.mjs';
 import { shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
-import { reserveReached, reserveState, shortOf, unwieldableWhy, usableWeapons, weaponReserveSize } from '../m59-weapon-reserve.mjs';
+import { WEAPON_SPARES_KEPT, reserveReached, reserveState, shortOf, unwieldableWhy, usableWeapons, weaponReserveSize } from '../m59-weapon-reserve.mjs';
 import { WeaponMagicBook, magicSwap } from '../m59-weapon-magic.mjs';
 import { normalizeMagicFor, decideMagicFor, MAGIC_FOR_GAP_MS } from '../m59-magic-for.mjs';
 import { CONJURABLE_WEAPONS, CURSE_SUSPECT_REFUSALS, swapWhyNot } from '../m59-autopilot.mjs';
@@ -570,12 +570,26 @@ export class GearUpkeepPart {
     const worn = new Set(known ? (eq.equipped ?? []).map(e => Number(e.id)) : []);
     const armed = known && (eq.equipped ?? []).some(e => skills.weaponScore(e.name ?? c.rsc?.get?.(e.nameRsc) ?? '') > 0);
     const carried = enabled && !exempt && known ? this.usableWeaponsNow(c).filter(r => !worn.has(Number(r.o.id))) : [];
-    const state = reserveState({ enabled, exempt, equipment: known, armed, carried: carried.map(r => r.name) });
+    // A HOARD IS NOT A WAIVER. The best WEAPON_SPARES_KEPT spares (after the one an empty hand will take) are kept;
+    // any further one that nothing protects is surplus: not an enchanted, dedicated, delivered or hall-bound weapon
+    // (heldBackIds), not an unread one, not a name the protect / vault / guild lists or the loadout keep.
+    const beyond = carried.slice((armed ? 0 : 1) + WEAPON_SPARES_KEPT);
+    let surplus = [];
+    if (beyond.length) {
+      let held = new Set(), names = [], keepLoadout = null;
+      try { held = this.heldBackIds?.(c) ?? new Set(); } catch { held = new Set(); }
+      try { names = this.protectedItemNames?.() ?? []; } catch { names = []; }
+      try { keepLoadout = keepTest(this.loadout?.() ?? null); } catch { keepLoadout = null; }
+      surplus = beyond.filter(r => !held.has(Number(r.o.id)) && !(skills.isUnrevealed(r.o) && !skills.isOwnSummon(c, r.o)) &&
+        !skills.itemIsProtected(r.name, names) && !keepLoadout?.(r.name));
+    }
+    const state = reserveState({ enabled, exempt, equipment: known, armed, carried: carried.map(r => r.name), surplus: surplus.map(r => r.name) });
     if (!state.in_force && !state.waived) return state;
     const banned = this.bannedWeaponsNow?.() ?? null;
     let only = null;
     try { only = this.trainingWeaponOnlyNow?.() ?? null; } catch { only = null; }
-    return { ...state, usable_carried: carried.length,
+    return { ...state, usable_carried: carried.length, spares_kept: WEAPON_SPARES_KEPT,
+      surplusIds: new Set(surplus.map(r => Number(r.o.id))),
       mayWield: name => unwieldableWhy(name, { banned, only, pvpOnly: !c.pvpGearActive && isPvpOnly(name) }),
       collects: name => this.weaponCollected(name) };
   }
@@ -600,7 +614,7 @@ export class GearUpkeepPart {
     try {
       const c = this.s?.client;
       if (!c) return null;
-      const { mayWield, collects, ...state } = this.weaponReserveNow(c);
+      const { mayWield, collects, surplusIds, ...state } = this.weaponReserveNow(c);
       const free = this.packFreeNow();
       const left = this.s?._weaponReserveLeft ?? null;
       return { ...state, size: weaponReserveSize(), free,
