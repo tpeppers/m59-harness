@@ -669,6 +669,38 @@ guildTithe: { dailyAmount: 800 },
 
 `node tools/m59-farm-hall-test.mjs` is the guard.
 
+### Emptying a hall of its mundane gear, in laps (`hall-sell-mundane`)
+
+Operator, 2026-11-18: *"Send someone to each guildhall to go in laps and sell (or just drop, for anything not able to be
+sold quickly in the nearest town) all non-magic weapons and armors from the hall chests that can be rebought -- with a keep
+list of exceptions: bows of all types, plate mail, and helms ... Non-magic shields also"*.
+
+```
+node tools/m59-hall-sell.mjs plan --hall 714            # read-only: candidates, keep, not-rebuyable, the buyer
+node tools/m59-fleet-repl.mjs  ->  hall-sell-mundane agents=t10 hall=714
+```
+
+- **A candidate is a weapon, body armour, helmet or shield** (by the class's kod directory), **not on the keep list**
+  (default `bow`, `plate armor`, `helm`, as name substrings; `keep=` replaces it), **that some merchant sells**
+  (`m59-merchants.json`, via `m59-chest-evict` `sellersByItem`). A mystic sword, robes of the disciple or a herald shield
+  nobody sells is left in the chests and the plan names it.
+- **The buyer is the hall's town smith** (`HALL_BUYERS`: 714 Fehr'loi Qan @113, 703 Quintor @374, 713 Ixla cha'Totlak
+  @2003) or `sell_at=Name@room`; another hall without `sell_at` is refused. What the smith refuses by its kod rule
+  (`m59-buyers` `willBuy`: Quintor and nerudite) is planned as a drop, never walked to a counter.
+- **Magic is decided in the pack, never from the cache.** The chest cache stores names, so a drawn piece is classified by
+  its rarity grade (unidentified 100, cursed 200, attribute grades 1/2/4) AND its look text, re-checking the id the look
+  answered for: a timed attribute (dedicated, glowing, holy, fiery, shrouded) grades `normal` and only the look shows it.
+  Anything that cannot be proved mundane (no grade, no look) is `unknown` and goes back with the magic. Pieces put back are
+  counted per name, so the next lap asks hall_withdraw (which takes by NAME) for that many more instead of re-planning them.
+- **Every sale is judged by the pack and the purse** (the id left, the shillings rose), one piece per call; a piece that
+  left with no money is reported as given away. Refused pieces are dropped at the buyer (or `drop_room`), never in the hall.
+- **The runner's own kit is a floor**: its carried count of every name at the first draw is never dipped under, and only
+  ids that arrived in a lap's draw are offered. The weapon reserve (`m59-weapon-reserve`) is left free when sizing a lap.
+- **Proceeds go into the chests** at the end (deposit the purse, draw back what was the runner's: the chalice hand-in's
+  pattern); `proceeds=keep` leaves them with the runner.
+
+`node tools/m59-hall-sell-test.mjs` is the guard.
+
 ## Per-creature loot: `loot_only`
 
 `loot_only: {"spider": ["purple mushroom"]}` — after killing a listed creature the keeper takes
