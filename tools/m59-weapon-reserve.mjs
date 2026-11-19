@@ -270,7 +270,10 @@ export function beyondThePlan(rows = [], ctx = {}) {
     units.training = Math.min(row.amount, n(fl?.pvp) + n(fl?.training)) - units.pvp;
     units.use = Math.min(row.amount, Math.max(n(fl?.use), n(fl?.pvp) + n(fl?.training))) - units.pvp - units.training;
     let product = row.amount - units.pvp - units.training - units.use;
-    if (reagent && WORKING_CLASSES.includes(reagent.cls) && reagent.cls !== 'pvp') { units[reagent.cls] += product; product = 0; }
+    // BY NAME, THE WHOLE STACK IS AT LEAST THAT CLASS: a practice reagent's units under a loadout floor are practice
+    // stock too, and are not spent as mere "use" ahead of somebody else's.
+    if (reagent?.cls === 'training') { units.training += units.use + product; units.use = 0; product = 0; }
+    else if (reagent?.cls === 'use') { units.use += product; product = 0; }
     // THE LAST OF A FOOD IS NEVER DROPPED: it comes off the most protected units there are.
     if (isFood) {
       if (units.pvp > 0) units.pvp--; else if (units.training > 0) units.training--; else if (units.use > 0) units.use--; else product--;

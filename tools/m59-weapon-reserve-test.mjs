@@ -371,24 +371,26 @@ console.log('\nB. THE ORDER: SALE PLAN, THEN USELESS GEAR, THEN THE CHEAPEST PRO
 
 console.log('\nB. WHAT IS NEVER DROPPED');
 {
-  // Nothing but money, one meal, the chalice, a quest item, a dedicated weapon and working stock: nothing may go.
+  // Money, one meal, the chalice, a quest item, a dedicated weapon -- and purple mushrooms at their loadout floor.
   const f = body({ pack: [['shilling', 5000], ['meat pie', 1], ['Chalice of the Rain', 0], ['shard of a sword', 3], ['hammer', 0],
-                          ['purple mushroom', 300], ['leather armor', 0]],
+                          ['purple mushroom', 280], ['leather armor', 0]],
                    worn: ['leather armor'], might: 0, protect: ['purple mushroom'], heldBackNames: ['hammer'],
                    policy: { bannedWeapons: ['hammer'] },
-                   loadout: { character: 'Fozzie', keep: [], sell: [], gear: { weapon: [], slots: {} }, carry: [{ item: 'purple mushroom', min: 300, max: 300 }] } });
+                   loadout: { character: 'Fozzie', keep: [], sell: [], gear: { weapon: [], slots: {} }, carry: [{ item: 'purple mushroom', min: 280, max: 280 }] } });
   ok('fixture: short of the reserve', !!f.ap.unarmedRoomShort(f.c), J(f.free()));
-  const armed = await f.ap.unarmedMakeSpace(f.c, 2_000_000_000);
-  ok('money, the last meal, the chalice, a quest item, a held-back weapon and stock at its floor all stay',
-     armed === false && f.floorDrops.length === 0 && f.has('shilling') === 5000 && f.has('meat pie') === 1 && f.has('hammer') === 1 &&
-     f.has('shard of a sword') === 3 && f.has('purple mushroom') === 300, J(f.floorDrops));
-  const kept = f.ap._unarmedRoom?.kept ?? [];
-  const whyOf = n => kept.find(k => k.name === n)?.why ?? '';
+  const r = await f.ap.makeRoomBeyondPlan({ need: { bulk: 90, weight: 90 } });
+  ok('money, the last meal, the chalice, a quest item and a held-back weapon all stay',
+     f.has('shilling') === 5000 && f.has('meat pie') === 1 && f.has('hammer') === 1 && f.has('Chalice of the Rain') === 1 &&
+     f.has('shard of a sword') === 3 && f.floorDrops.every(d => d.name === 'purple mushroom'), J(f.floorDrops));
+  const whyOf = n => r.kept.find(k => k.name === n)?.why ?? '';
   ok('and each says what protects it', /money/.test(whyOf('shilling')) && /quest/.test(whyOf('shard of a sword')) &&
-     /held back/.test(whyOf('hammer')) && /working stock/.test(whyOf('purple mushroom')), J(kept));
-  ok('the outcome is recorded as blocked, with a ledger row and a journal line', f.ap._unarmedRoom?.outcome === 'blocked' &&
-     f.ledger.some(l => l.kind === 'unarmed_no_room' && l.short_by.bulk > 0) &&
-     f.notes.some(n => /nothing more may be dropped/.test(n.what)));
+     /held back/.test(whyOf('hammer')) && /last of a food/.test(whyOf('meat pie')), J(r.kept));
+  ok('stock at its loadout floor is working stock: taken only because nothing else was left, and the row says so',
+     r.ok === true && r.dropped.length === 1 && r.dropped[0].tier === 'working' && r.dropped[0].stock_class === 'use' &&
+     /working stock .*taken only because nothing else was left/.test(r.dropped[0].why) && r.took_working_stock?.length === 1, J(r.dropped));
+  ok('the journal and the ledger both say working stock was spent',
+     f.notes.some(n => n.what === 'made space beyond the sale plan: TOOK WORKING STOCK' && n.detail.took_working_stock.length === 1) &&
+     f.ledger.some(l => l.kind === 'make_space' && l.beyond_plan && l.took_working_stock?.length === 1));
 }
 {
   // Food goes last and never the last of it; working stock above its floor goes only by the overage.
@@ -406,6 +408,9 @@ console.log('\nB. WHAT IS NEVER DROPPED');
   const armed = await f.ap.unarmedMakeSpace(f.c, 2_000_000_000);
   ok('a stack whose value is unknown is not dropped', armed === false && f.floorDrops.length === 0 &&
      /unknown/.test(f.ap._unarmedRoom?.kept?.[0]?.why ?? ''), J(f.ap._unarmedRoom));
+  ok('the outcome is recorded as blocked, with a ledger row and a journal line', f.ap._unarmedRoom?.outcome === 'blocked' &&
+     f.ledger.some(l => l.kind === 'unarmed_no_room' && l.short_by.bulk > 0) &&
+     f.notes.some(n => /nothing more may be dropped/.test(n.what)));
 }
 {
   const f = prodBody({ policy: { weaponReserve: false } });
@@ -429,6 +434,133 @@ console.log('\nB. WHAT IS NEVER DROPPED');
   const h = prodBody({ dropRefuses: new Set(['orc tooth']) });
   await h.ap.unarmedMakeSpace(h.c, t0);
   ok('each drop is judged by the pack: one the server did not take frees nothing', h.has('orc tooth') === 811 && h.ap._unarmedRoom?.outcome === 'blocked');
+}
+
+// ---------------------------------------------------------------------------------------------- working stock last
+console.log('\nPRACTICE, USE AND PVP STOCK ARE DROPPED LAST (PvP > training > use > vault > sell)');
+{
+  // LEW, 2026-11-18: the remedy's first prod drop was "14 elderberry" -- his light/fog practice stock, the cheapest
+  // stack by value (4.7 a bulk against orc teeth at 9.3). Product goes first now, whatever it is worth.
+  const practice = { enabled: true, spells: [{ name: 'light', target: 'self' }, { name: 'fog', target: 'self' }] };
+  const f = body({ pack: [['elderberry', 200], ['orc tooth', 298], ['emerald', 17], ['leather armor', 0], ['shilling', 100]],
+                   worn: ['leather armor'], might: 0, protect: ['elderberry', 'orc tooth', 'emerald'], policy: { practiceSpells: practice }, name: 'Lew' });
+  ok('fixture: 39 bulk free, unarmed, every stack protected', f.free().bulk === 39 && f.ap.salePlanView().totals.droppable.units === 0, J(f.free()));
+  const armed = await f.ap.unarmedMakeSpace(f.c, 2_000_000_000);
+  ok('the practice elderberries stay and the product goes: 17 orc teeth, not 17 of the cheaper elderberry',
+     armed === true && f.has('elderberry') === 200 && f.has('orc tooth') === 281 && f.has('emerald') === 17, J(f.floorDrops));
+  ok('and nothing in the record claims working stock was touched', !f.ledger.some(l => l.took_working_stock) &&
+     f.ledger.filter(l => l.kind === 'make_space').at(-1).dropped[0].tier === 'stock');
+}
+{
+  const practice = { enabled: true, spells: [{ name: 'light', target: 'self' }, { name: 'fog', target: 'self' }] };
+  const f = body({ pack: [['elderberry', 500], ['leather armor', 0], ['shilling', 100]], worn: ['leather armor'], might: 0,
+                   protect: ['elderberry'], policy: { practiceSpells: practice }, name: 'Lew' });
+  ok('fixture: 50 bulk free and nothing aboard but practice stock', f.free().bulk === 50, J(f.free()));
+  const armed = await f.ap.unarmedMakeSpace(f.c, 2_000_000_000);
+  const row = f.ledger.filter(l => l.kind === 'make_space').at(-1);
+  ok('with nothing else left it is still taken: re-arming beats practising', armed === true && f.has('elderberry') === 486, J(f.floorDrops));
+  ok('and the ledger row says it took practice stock, and which spells it was for',
+     row?.took_working_stock?.[0] === '14 elderberry (training)' && row.dropped[0].tier === 'working' && row.dropped[0].stock_class === 'training' &&
+     /practice stock \(a reagent of its practice spells: light, fog\)/.test(row.dropped[0].why), J(row));
+  ok('so does the journal, loudly', f.notes.some(n => n.what === 'made space beyond the sale plan: TOOK WORKING STOCK' &&
+     /re-arming beats practising/.test(n.detail.working_stock_why)));
+}
+{
+  // The order inside working stock, and the catalogue's own spelling ("orctooth" is the pack's "orc tooth").
+  const row = (id, name, amount, unit_value) => ({ id, name, amount, sale_amount: 0, role: 'other', equipped: false, droppable: false,
+    drop_block: 'protected item', unit: { bulk: 3, weight: 3 }, unit_value });
+  const tiers = WR.beyondThePlan([row(1, 'orc tooth', 100, 28), row(2, 'purple mushroom', 100, 56), row(3, 'emerald', 100, 21), row(4, 'ruby', 100, 140)], {
+    stack: () => true, isFood: () => false,
+    floors: r => (r.name === 'purple mushroom' ? { use: 0, training: 20, pvp: 10 } : r.name === 'emerald' ? { use: 30 } : null),
+    reagentOf: r => (r.name === 'orc tooth' ? { cls: 'training', why: 'a reagent of its practice spells: enchant weapon' } : null) });
+  const give = list => list.map(r => `${r.give} ${r.name}`).join(', ');
+  ok('product is what is left above every floor', give(tiers.stock) === '70 purple mushroom, 70 emerald, 100 ruby', give(tiers.stock));
+  ok('use is the loadout floor; training is the training reserve and a practice reagent by name; PvP is last and exact',
+     give(tiers.working.use) === '30 emerald' && give(tiers.working.training) === '100 orc tooth, 20 purple mushroom' &&
+     give(tiers.working.pvp) === '10 purple mushroom', J({ use: give(tiers.working.use), training: give(tiers.working.training), pvp: give(tiers.working.pvp) }));
+  ok('the classes are walked use, training, pvp', J(WR.WORKING_CLASSES) === J(['use', 'training', 'pvp']));
+  const lew = body({ pack: [['orc tooth', 500], ['elderberry', 60], ['leather armor', 0]], worn: ['leather armor'], might: 0,
+                     protect: ['orc tooth', 'elderberry'], policy: { practiceSpells: { enabled: true, spells: ['enchant weapon'] } } });
+  const rules = lew.ap.reserveDropRules(lew.c);
+  ok('the keeper reads a practice spell\'s reagents off the spell catalogue, whatever it spells them',
+     rules.reagentOf({ name: 'orc tooth' })?.cls === 'training' && rules.reagentOf({ name: 'elderberry' })?.cls === 'training' &&
+     rules.reagentOf({ name: 'emerald' }) === null, J(rules.reagentOf({ name: 'orc tooth' })));
+}
+{
+  // THE PVP RESERVE (substrate/reagent-reserve-<fleet>.json): 5 casts of hold are 10 purple mushrooms, and they go last.
+  const { writeFileSync: write } = await import('node:fs');
+  write(process.env.M59_REAGENT_RESERVE_FILE, JSON.stringify({ default: { spells: { hold: 5 } } }));
+  const f = body({ pack: [['purple mushroom', 298], ['leather armor', 0], ['shilling', 10]], worn: ['leather armor'], might: 0, protect: ['purple mushroom'] });
+  f.s.reserveWho = { fleet: 'weapon-reserve-offline-test', agent: 't12', character: 'Fozzie' };
+  f.c.spells = [{ nameRsc: 'hold' }];
+  ok('fixture: 60 bulk free, 30 short of the reserve', f.free().bulk === 60 && f.ap.unarmedRoomShort(f.c)?.bulk === 30, J(f.free()));
+  const fl = f.ap.reserveDropRules(f.c).floors({ name: 'purple mushroom' });
+  ok('the reserve book is read in its two tiers', fl.pvp === 10 && fl.training === 0, J(fl));
+  await f.ap.unarmedMakeSpace(f.c, 2_000_000_000);
+  ok('the product above the PvP floor covers it and the reserve is untouched', f.has('purple mushroom') === 292 &&
+     !f.ledger.some(l => l.took_working_stock), J(f.floorDrops));
+}
+
+// ---------------------------------------------------------------------------------------------- a hoard of spares
+console.log('\nA HOARD OF SPARES IS NOT A WAIVER, AND A THIRD SPARE IS NOT PICKED UP');
+{
+  // KERMIT, 2026-11-18: a hammer in hand, an enchanted short sword and five long swords spare, drop_junk off (which
+  // switches the field weapon cap off whole), "waived: a usable spare is carried", and the pack at the brim.
+  const kermit = () => body({ pack: [['hammer', 0], ['short sword', 0], ['long sword', 0], ['long sword', 0], ['long sword', 0], ['long sword', 0],
+                                     ['long sword', 0], ['emerald', 432], ['diamond', 168], ['chain armor', 0], ['shilling', 86076]],
+                              worn: ['hammer', 'chain armor'], might: 0, protect: ['emerald', 'diamond'], heldBackNames: ['short sword'],
+                              policy: { maxWeapons: 2, dropJunk: false, weaponPriority: ['hammer', 'mace'] }, name: 'Kermit' });
+  const f = kermit();
+  const st = f.ap.weaponReserveNow();
+  ok('fixture: the field weapon cap is off under drop_junk false, which is how seven got through', f.ap.fieldWeaponCap() === null);
+  ok('six usable spares do not waive the reserve: the surplus keeps it in force', st.in_force === true && !st.waived && st.spares === 6 &&
+     st.surplus >= 3 && /surplus spare weapon/.test(st.why), J({ in_force: st.in_force, surplus: st.surplus, why: st.why }));
+  ok('the enchanted spare is never surplus, whatever its rank', ![...st.surplusIds].some(id => f.c.inventory.find(o => o.id === id)?.nameRsc === 'short sword') &&
+     !/short sword/.test(st.why.split('past')[0]), st.why);
+  const sword = f.floor('long sword', { amount: 0 }), gems = f.floor('emerald', { amount: 400 });
+  const r = await f.s.lootFloor({});
+  const row = r.refused.find(x => x.id === sword);
+  ok('a further spare is left on the floor, and says why', f.has('long sword') === 5 && /^SPARE WEAPONS/.test(row?.why ?? '') &&
+     leftReason(row.why) === 'spare weapons', J(r.refused));
+  ok('and the pack no longer fills to the brim around the hoard', f.has('emerald') === 432 && r.refused.some(x => x.id === gems && /^WEAPON RESERVE/.test(x.why)), J(f.free()));
+  ok('the sale plan is what sells the surplus (the plan already lists them)', f.ap.salePlanView().rows.filter(x => x.name === 'long sword' && x.droppable).length >= 4);
+  const rules = f.ap.reserveDropRules(f.c);
+  const surplusRow = f.ap.salePlanView().rows.find(x => st.surplusIds.has(Number(x.id)));
+  ok('and to the remedy a surplus spare is gear to shed, a kept one is not', /surplus spare weapon/.test(rules.unusable(surplusRow) ?? '') &&
+     rules.unusable(f.ap.salePlanView().rows.find(x => x.name === 'short sword')) === null);
+}
+{
+  const two = body({ pack: [['hammer', 0], ['mace', 0], ['long sword', 0], ['orc tooth', 400]], worn: ['hammer'], might: 0, policy: { dropJunk: false } });
+  ok('two usable spares are the waiver they always were', two.ap.weaponReserveNow().waived === true && two.ap.weaponReserveNow().spares === 2);
+  const third = two.floor('short sword', { amount: 0 }); two.floor('orc tooth', { amount: 5, row: 33 });
+  const r = await two.s.lootFloor({});
+  ok('but the third is not picked up, while the product still is', two.has('short sword') === 0 && two.has('orc tooth') === 405 &&
+     /^SPARE WEAPONS/.test(r.refused.find(x => x.id === third)?.why ?? ''), J(r.refused));
+  const one = body({ pack: [['hammer', 0], ['mace', 0], ['orc tooth', 400]], worn: ['hammer'], might: 0, policy: { dropJunk: false } });
+  one.floor('short sword', { amount: 0 }); one.floor('long sword', { amount: 0, row: 32 });
+  await one.s.lootFloor({});
+  ok('one spare aboard: the second is taken and the one after it is not', one.has('short sword') + one.has('long sword') === 1, J(one.c.inventory.map(o => o.nameRsc)));
+  const listed = body({ pack: [['hammer', 0], ['mace', 0], ['long sword', 0]], worn: ['hammer'], might: 0, policy: { dropJunk: false } });
+  listed.s.setLootOnly({ '*': ['short sword'] });
+  listed.floor('short sword', { amount: 0 });
+  await listed.s.lootFloor({});
+  ok('a loot list that names it still collects it', listed.has('short sword') === 1);
+}
+{
+  // IN THE REMEDY, A WEAPON THE PLAN WOULD SELL GOES FIRST: two banned scimitars past max_weapons before any fairy wing.
+  const f = body({ pack: [['scimitar', 0], ['scimitar', 0], ['fairy wing', 40], ['orc tooth', 400], ['leather armor', 0]], worn: ['leather armor'],
+                   might: 0, protect: ['orc tooth'], policy: { bannedWeapons: ['scimitar'], maxWeapons: 0 } });
+  ok('fixture: 10 bulk free, both scimitars on the sale plan', f.free().bulk === 10 &&
+     f.ap.salePlanView().rows.filter(x => x.name === 'scimitar' && x.droppable).length === 2, J(f.free()));
+  const armed = await f.ap.unarmedMakeSpace(f.c, 2_000_000_000);
+  ok('the spare weapons are shed first, although fairy wings are cheaper a bulk', armed === true && f.floorDrops[0]?.name === 'scimitar' &&
+     f.has('scimitar') === 0 && f.has('fairy wing') === 40 && f.has('orc tooth') === 400, J(f.floorDrops));
+  const rows = [{ id: 1, name: 'fairy wing', role: 'other' }, { id: 2, name: 'long sword', role: 'weapon' }].map(x => MS.annotateRow({ ...x, amount: 1, sale_amount: 1,
+    recommended: true, blocked: null, queued: true, state: 'sell' }));
+  const plain = MS.chooseDrops(rows, { free: { bulk: 0, weight: 999 }, need: { bulk: 5, weight: 0 } });
+  const led = MS.chooseDrops(rows, { free: { bulk: 0, weight: 999 }, need: { bulk: 5, weight: 0 }, first: r => r.role === 'weapon' });
+  ok('make_space itself, asked by an operator, still drops the cheapest first; only the remedy leads with weapons',
+     plain.picks[0].row.name === 'fairy wing' && led.picks[0].row.name === 'long sword');
 }
 
 // ---------------------------------------------------------------------------------------------- through passArm

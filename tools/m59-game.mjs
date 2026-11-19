@@ -5847,7 +5847,10 @@ class Session {
       if (cap?.known && cap.load)
         reserveFree = { bulk: cap.bulk_max - cap.load.bulk, weight: cap.weight_max - cap.load.weight };
     }
-    const reserveWaived = () => (Number(weaponReserve?.usable_carried) || 0) + usablePicked - (weaponReserve?.unarmed ? 1 : 0) >= 1;
+    // Waived mid-sweep only by a spare this sweep picked up -- never when the reserve is in force BECAUSE of a hoard of
+    // surplus spares (`surplus`): those are what filled the pack, not a replacement.
+    const reserveWaived = () => !weaponReserve?.surplus &&
+      (Number(weaponReserve?.usable_carried) || 0) + usablePicked - (weaponReserve?.unarmed ? 1 : 0) >= 1;
     for (const o of cands) {
       if (cancelled()) { wasCancelled = true; break; }
       const name = c.rsc.get(o.nameRsc);

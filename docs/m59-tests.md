@@ -600,7 +600,7 @@ through a nested shelter order.
   equipment and an open trade drop nothing; `sale_plan` sends no packet and changes nothing; the unarmed hook drops,
   re-arms, is bounded to once per 10 minutes and steps aside for a bot holding economy; the keeper ops, broker tools and
   the `make-space` fleetscript are wired.
-- `m59-weapon-reserve-test.mjs` (109): the weapon reserve (tools/m59-weapon-reserve.mjs; prod 2026-11-18, four farmers
+- `m59-weapon-reserve-test.mjs` (139): the weapon reserve (tools/m59-weapon-reserve.mjs; prod 2026-11-18, four farmers
   unarmed for one to five hours at 50-62 bulk free with packs of protected product, `stuck.lever: null`). Pure, then the
   REAL `Session.lootFloor`, `inventorySalePlan`, `passArm` and `checkIfShouldSell` against a fake client. **The size:**
   90 bulk and 90 weight, measured over the keeper's own `CONJURABLE_WEAPONS`; a weight table with a hole in it cannot
@@ -622,7 +622,16 @@ through a nested shelter order.
   reads as waiting for mana) naming what is in the way, the stall sentence maps to `hand_over` instead of null, forty
   more passes declare no `STALL_NO_LEVER` and write one `unarmed_no_room` row. **The sell trigger:** a pack stopped at
   the reserve line fires a `sell_at_load` of 0.97 it can no longer reach; below the line nothing changes. And the key
-  is plumbed: default policy, broker `weapon_reserve`, strategy `weaponReserve`, `autopilot status`.
+  is plumbed: default policy, broker `weapon_reserve`, strategy `weaponReserve`, `autopilot status`. **Working stock
+  last** (Lew's 14 practice elderberries, 2026-11-18): with product aboard the practice reagents stay and 17 dearer orc
+  teeth go; with nothing else left they are taken and the row says `working` / `training` and names the spells; the
+  classes sort use, training, PvP by quantity and by name ("orctooth" is "orc tooth"); a PvP floor read from the reserve
+  book is untouched while product covers it; stock at its loadout floor is taken last and labelled. **A hoard of
+  spares** (Kermit: six usable spares, `drop_junk` off so no field cap, "waived", pack at the brim): surplus past the
+  best two keeps the reserve in force, an enchanted spare is never surplus, a further spare is left as `SPARE WEAPONS`
+  and the gems that would fill the pack as `WEAPON RESERVE`; two spares still waive, the third is not picked up, a loot
+  list that names it still collects it; in the remedy a weapon the plan would sell is shed before cheaper stock, while
+  `make_space` asked by an operator still drops the cheapest first.
 - `m59-island-sale-test.mjs` (54): a sell trip on Ko'catan sells the island reagents (prod 2026-10-27: packs full of
   dragonfly eyes, ferns and seraphym, worth 15-17k at Zala, carried home by every trip). Rainbow fern and five other
   real items with a weapon word in their name are not weapons, real weapons still are; on the island the sale plan
