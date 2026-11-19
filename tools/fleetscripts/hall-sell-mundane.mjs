@@ -63,6 +63,7 @@ export const script = {
     agents: { type: 'agents', required: true, describe: 'the runner (one)' },
     hall: { type: 'number', required: true, describe: `the guild hall room (${Object.keys(HALL_BUYERS).join(', ')} have a default buyer)` },
     laps: { type: 'number', default: 20, describe: 'draw-and-sell laps at most' },
+    also: { type: 'string', default: '', describe: 'comma list of names to sell or drop even though no merchant sells them (e.g. scimitar); normal grade only, keep list still wins' },
     keep: { type: 'string', default: '', describe: 'comma list of name substrings never sold (default bow, plate armor, helm; "none" keeps nothing)' },
     sell_at: { type: 'string', default: '', describe: 'override the buyer: "<merchant>@<room>"' },
     drop_unsellable: { default: 'yes', describe: 'drop what the buyer refuses (yes) or put it back in the hall (no)' },
@@ -79,13 +80,14 @@ export const script = {
     const hall = Number(p.hall);
     if (!Number.isFinite(hall)) throw new Error('hall-sell-mundane: hall=<room> is required (703, 713 or 714)');
     const keep = parseKeep(p.keep);
+    const also = String(p.also ?? '').split(',').map(x => decodeURIComponent(x).trim()).filter(Boolean);
     const laps = Math.max(1, Math.min(60, Number(p.laps) || 20));
     const dropUnsellable = yes(p.drop_unsellable);
     const proceeds = String(p.proceeds ?? 'hall').toLowerCase() === 'keep' ? 'keep' : 'hall';
     const maxPieces = Math.max(1, Number(p.max_pieces) || 20);
     // The plan now, from the cache as it stands: printed by `dry`, and it REFUSES here (no buyer, no hall) before a step.
     const inputs0 = await hallInputs({ hall });
-    const plan0 = planHall({ hall, inputs: inputs0, keep, sellAt: p.sell_at || null });
+    const plan0 = planHall({ hall, inputs: inputs0, keep, sellAt: p.sell_at || null, also });
     const buyer = plan0.buyer;
     const dropRoom = Number(p.drop_room) > 0 ? Number(p.drop_room) : buyer.room;
     console.log(formatPlan(plan0));
@@ -185,7 +187,7 @@ export const script = {
           return { ok: false, why: S.done };
         }
         const plan = planHall({ hall, inputs: { ...inputs0, chests: contentsAsChests(contents, rd.chest_ids_as_of.read_at) },
-                                keep, sellAt: p.sell_at || null, setAside: S.setAside });
+                                keep, sellAt: p.sell_at || null, also, setAside: S.setAside });
         if (S.lap === 1 && attempt === 1 && plan.excluded.graded.length)
           log(`left in the chests by grade: ${plan.excluded.graded.map(g => `${g.amount} ${g.item} (${g.grade})`).join(', ')}`);
         const cands = [...plan.sell, ...plan.drop];
@@ -346,7 +348,7 @@ export const script = {
     steps.push({ ...verify(async () => {
       if (!S.done) S.done = `ran out of laps (${laps})`;
       const end = await hallInputs({ hall }).catch(() => null);
-      const left = end ? planHall({ hall, inputs: end, keep, sellAt: p.sell_at || null, setAside: S.setAside }) : null;
+      const left = end ? planHall({ hall, inputs: end, keep, sellAt: p.sell_at || null, also, setAside: S.setAside }) : null;
       console.log(`  ${agent}: HALL-SELL-MUNDANE ${hall} REPORT (${S.done}; ${S.lap} lap(s))\n${formatTally(S.tally)}` +
         (proceeds === 'keep' ? `\n  proceeds kept by ${agent}` : '') +
         (S.tally.notes.length ? `\n  ${S.tally.notes.join('\n  ')}` : '') +

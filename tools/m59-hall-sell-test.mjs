@@ -80,6 +80,13 @@ eq(aside.sell.map(r => [r.item, r.amount]), [['long sword', 1], ['nerudite sword
 eq(aside.excluded.set_aside, [{ item: 'leather armor', amount: 1 }, { item: 'long sword', amount: 2 }], 'and the plan says so, capped at what is there');
 const none = H.selectCandidates({ chests: CHESTS, sellers: SELLERS, fileOf: x => FILES[x.toLowerCase()] ?? null, buys: () => null });
 eq(none.drop.length, 0, 'CANNOT SAY IS NOT NO: an unknown buyer rule offers everything rather than dropping it');
+// ---- `also` (operator 2026-11-19: "get rid of scimitars"): waives ONLY the can-it-be-rebought test
+const also = H.selectCandidates({ chests: [...CHESTS, { slot: 'r20c4', items: [{ name: 'scimitar', amount: 1, rarity: 100, rarity_name: 'unidentified' }] }],
+  sellers: SELLERS, fileOf: x => FILES[x.toLowerCase()] ?? null, buys: () => true, also: ['scimitar', 'plate armor'] });
+ok(also.sell.some(r => r.item === 'scimitar' && r.amount === 1), 'also=scimitar makes the one NORMAL scimitar a candidate though nobody sells scimitars');
+ok(also.excluded.graded.some(r => r.item === 'scimitar' && r.grade === 'unidentified'), 'the unidentified scimitar still stays in the chest');
+ok(!also.sell.some(r => r.item === 'plate armor') && also.excluded.kept.some(r => r.item === 'plate armor'), 'the keep list still beats also');
+ok(also.excluded.not_rebuyable.every(r => r.item !== 'scimitar'), 'and the scimitar is no longer reported as not rebuyable');
 
 // ---- ONLY A NORMAL GRADE IS A CANDIDATE (2026-11-19, hall 714: an unidentified short sword drawn by name wielded itself)
 const fileOf = x => FILES[x.toLowerCase()] ?? null;
