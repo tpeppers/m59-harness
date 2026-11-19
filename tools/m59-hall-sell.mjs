@@ -125,7 +125,10 @@ export function buyerFor(hall, { sellAt = null, merchants = [] } = {}) {
  * Returns { sell: [{item, amount, unit}], drop: [...], excluded: {kept, not_rebuyable, not_gear, set_aside, graded}, total }.
  */
 export function selectCandidates({ chests = [], keep = DEFAULT_KEEP, sellers = new Map(), fileOf = () => null,
-                                   buys = () => null, setAside = {} } = {}) {
+                                   buys = () => null, setAside = {}, also = [] } = {}) {
+  // `also`: names the operator wants gone even though no merchant SELLS them (2026-11-19: "get rid of scimitars"). They are
+  // still normal-grade only and still lose to the keep list; only the "can it be rebought" test is waived for them.
+  const alsoSet = new Set((also ?? []).map(norm).filter(Boolean));
   const counts = new Map(), graded = new Map();
   for (const ch of chests) for (const it of ch.items ?? []) {
     const k = norm(it.name);
@@ -159,7 +162,7 @@ export function selectCandidates({ chests = [], keep = DEFAULT_KEEP, sellers = n
     if (!kind) { excluded.not_gear++; continue; }
     if (isKept(name, keep)) { excluded.kept.push({ item: name, amount, kind }); continue; }
     const who = sellers.get(k) ?? [];
-    if (!who.length) { excluded.not_rebuyable.push({ item: name, amount, kind }); continue; }
+    if (!who.length && !alsoSet.has(k)) { excluded.not_rebuyable.push({ item: name, amount, kind }); continue; }
     const aside = Math.max(0, Number(setAside[k]) || 0);
     const left = amount - aside;
     if (aside) excluded.set_aside.push({ item: name, amount: Math.min(aside, amount) });
@@ -369,10 +372,10 @@ export async function hallInputs({ root = join(HERE, '..'), hall } = {}) {
 }
 
 /** The plan for one hall from those inputs. Pure given them. */
-export function planHall({ hall, inputs, keep = DEFAULT_KEEP, sellAt = null, setAside = {} }) {
+export function planHall({ hall, inputs, keep = DEFAULT_KEEP, sellAt = null, setAside = {}, also = [] }) {
   const buyer = buyerFor(hall, { sellAt, merchants: inputs.merchants });
   const buys = name => (buyer.cls ? inputs.willBuy(buyer.cls, name).buys : null);
-  const sel = selectCandidates({ chests: inputs.chests, keep, sellers: inputs.sellers, fileOf: inputs.fileOf, buys, setAside });
+  const sel = selectCandidates({ chests: inputs.chests, keep, sellers: inputs.sellers, fileOf: inputs.fileOf, buys, setAside, also });
   const oldest = inputs.chests.reduce((m, c) => Math.min(m, Number(c.observed_at) || Infinity), Infinity);
   return { hall: Number(hall), buyer, keep, ...sel, chests: inputs.chests.length,
            oldest_reading: Number.isFinite(oldest) ? new Date(oldest).toISOString() : null };
