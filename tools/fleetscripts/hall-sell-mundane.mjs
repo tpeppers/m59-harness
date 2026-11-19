@@ -1,0 +1,299 @@
+// SELL A GUILD HALL'S MUNDANE WEAPONS, ARMOUR AND SHIELDS, IN LAPS -- and bring the magic ones back.
+//
+// PUBLIC. Operator, 2026-11-18: "Send someone to each guildhall to go in laps and sell (or just drop, for anything not
+// able to be sold quickly in the nearest town) all *non-magic* weapons and armors from the hall chests that can be
+// rebought -- with a keep list of exceptions: bows of all types, plate mail, and helms ... Non-magic shields also should be
+// included ... magic here refers to the 'unidentified' or with special properties".
+//
+//   node tools/m59-fleet-repl.mjs  ->  dry hall-sell-mundane agents=t10 hall=714        (the plan and the steps, sends nothing)
+//                                  ->  hall-sell-mundane agents=t10 hall=714
+//                                  ->  hall-sell-mundane agents=t5 hall=703 keep=bow,plate%20armor,helm,nerudite
+//   node tools/m59-hall-sell.mjs plan --all                                              (the same plan, read-only, no REPL)
+//
+// The generalisation of a prod-local errand (hall-sell-gear: 714 only, one smith, a name list that sold plate and bows
+// and could not tell a magic long sword from a plain one, because the chest cache stores names). The pure half --
+// which names are candidates, which smith, is a drawn piece magic, how much fits -- is tools/m59-hall-sell.mjs; this is
+// the legs. Every lap:
+//
+//   walk to the hall -> READ the chests (any hall_withdraw records every chest it can see) -> plan -> draw what fits,
+//   leaving the weapon reserve free -> classify every drawn piece by its rarity grade AND its look text (re-checking the
+//   id the look answered for) -> MAGIC, UNREAD or CURSED pieces go straight back into the chests, by id, and are counted
+//   so the next lap asks for that many more of the name instead of re-planning them -> walk to the smith -> sell each
+//   mundane piece, one per call, judged by the PACK (the id left) and the PURSE (it rose): a refusal is a sentence, not an
+//   error -> what the smith will not take is dropped there (or at drop_room), never in the hall.
+//
+// THE RUNNER'S OWN KIT IS NEVER SOLD. Before the first draw the pack is snapshotted: what it carries of each name is a
+// floor no sale, drop or deposit dips under, and only ids that ARRIVED in a lap's draw are ever offered.
+//
+// A REFUSED DOOR IS A RETRY, NOT THE END (hall-sell-gear, 2026-11-02: "guild door 59 could not be crossed" twice in an
+// hour at a door that opened for the same body minutes later). A draw refused at the passage is retried after a minute,
+// three times; a lap that still cannot draw is counted, and three such laps end the run with the reason.
+import { walk, verify, purseOf } from '../m59-fleetscript.mjs';
+import { withdrawWithRecovery, depositWithRecovery, hallWithdrawRetrying } from '../m59-hall-access.mjs';
+import { freeRoom } from '../m59-vault-broker.mjs';
+import { weaponReserveSize } from '../m59-weapon-reserve.mjs';
+import { parseKeep, hallInputs, planHall, formatPlan, planLap, drawnRows, classifyPiece,
+         newTally, bump, formatTally, HALL_BUYERS } from '../m59-hall-sell.mjs';
+
+const norm = s => String(s ?? '').toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim();
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const yes = v => !/^(no|false|0|off)$/i.test(String(v ?? 'yes').trim());
+const RETRYABLE = /could not be crossed|not in a guild hall|not in game|trigger not reached|outside the known passage|not in the hall/i;
+
+export const script = {
+  name: 'hall-sell-mundane',
+  describe: "In laps, draw a guild hall's mundane weapons, armour and shields that a merchant sells, sell them to the hall's town smith (drop what he will not take), and put every magic or unread piece back.",
+  recipe: {
+    effect: "The hall's chests end with no rebuyable non-magic weapon, body armour or shield outside the keep list; the run prints drawn/sold/dropped/returned per name and the shillings earned.",
+    run: 'hall-sell-mundane agents=<one> hall=<703|713|714> [laps=20] [keep=bow,plate%20armor,helm] [sell_at=Name@room]',
+    needs: ['membership (or alliance) of the hall\'s guild at rank SIR or above -- CanEnter refuses in silence (ghall.kod:1039)',
+            'a keeper with the hall_withdraw op that records the chests it reads (every keeper since the per-hall chest cache)',
+            'pack room: at least one piece plus the 90 bulk/weight weapon reserve'],
+    cost: { time: 'a lap is ~2-4 min at 714 (the smith is two doors away), longer at 703 (Jasper) and 713 (Ko\'catan)',
+            risk: 'what the smith refuses is dropped in the street; a mid-run system save renumbers ids (handled by counts)' },
+  },
+  params: {
+    agents: { type: 'agents', required: true, describe: 'the runner (one)' },
+    hall: { type: 'number', required: true, describe: `the guild hall room (${Object.keys(HALL_BUYERS).join(', ')} have a default buyer)` },
+    laps: { type: 'number', default: 20, describe: 'draw-and-sell laps at most' },
+    keep: { type: 'string', default: '', describe: 'comma list of name substrings never sold (default bow, plate armor, helm; "none" keeps nothing)' },
+    sell_at: { type: 'string', default: '', describe: 'override the buyer: "<merchant>@<room>"' },
+    drop_unsellable: { default: 'yes', describe: 'drop what the buyer refuses (yes) or put it back in the hall (no)' },
+    drop_room: { type: 'number', default: 0, describe: 'where to drop refused pieces (0 = the buyer\'s room)' },
+    proceeds: { type: 'string', default: 'hall', describe: '"hall": deposit the shillings earned into the chests at the end; "keep": the runner keeps them' },
+    max_pieces: { type: 'number', default: 20, describe: 'most pieces drawn in one lap (each is looked at and sold one call at a time)' },
+    home: { type: 'number', default: 0, describe: 'walk here at the end (0 = stay where the run ends)' },
+  },
+
+  async steps(p, agentArg) {
+    const agent = p.agent ?? agentArg;
+    if (String(p.agents ?? agent).split(',').filter(Boolean).length > 1)
+      throw new Error('hall-sell-mundane takes ONE runner: two drawing from the same chests would plan the same pieces');
+    const hall = Number(p.hall);
+    if (!Number.isFinite(hall)) throw new Error('hall-sell-mundane: hall=<room> is required (703, 713 or 714)');
+    const keep = parseKeep(p.keep);
+    const laps = Math.max(1, Math.min(60, Number(p.laps) || 20));
+    const dropUnsellable = yes(p.drop_unsellable);
+    const proceeds = String(p.proceeds ?? 'hall').toLowerCase() === 'keep' ? 'keep' : 'hall';
+    const maxPieces = Math.max(1, Number(p.max_pieces) || 20);
+    // The plan now, from the cache as it stands: printed by `dry`, and it REFUSES here (no buyer, no hall) before a step.
+    const inputs0 = await hallInputs({ hall });
+    const plan0 = planHall({ hall, inputs: inputs0, keep, sellAt: p.sell_at || null });
+    const buyer = plan0.buyer;
+    const dropRoom = Number(p.drop_room) > 0 ? Number(p.drop_room) : buyer.room;
+    console.log(formatPlan(plan0));
+
+    const S = { tally: newTally(), setAside: {}, carry: [], toSell: [], toDrop: [], done: null, failedLaps: 0,
+                drawn: new Set(), missed: new Set(), at: null, own: null, worn: null, wornNames: null, lap: 0 };
+    const log = m => console.log(`  ${agent}: ${m}`);
+    const finish = why => { if (!S.done) { S.done = why; log(`DONE: ${why}`); } };
+
+    const inventory = async call => (await call('inventory', { agent }, 60_000).catch(() => null))?.items ?? null;
+    const equippedNames = async call => {
+      const eq = await call('equipment', { agent }, 30_000).catch(() => null);
+      if (!eq || eq.known === false) return null;
+      return (eq.equipped ?? eq.items ?? []).map(e => norm(typeof e === 'string' ? e : e?.name)).filter(Boolean).sort();
+    };
+    const countBy = (items, worn = new Set()) => {
+      const m = {};
+      for (const o of items ?? []) if (!worn.has(Number(o.id))) m[norm(o.name)] = (m[norm(o.name)] ?? 0) + (Number(o.amount) > 0 ? Number(o.amount) : 1);
+      return m;
+    };
+    const lookAt = async (call, id) => {
+      for (let i = 0; i < 2; i++) {
+        const l = await call('look_at', { agent, target: id }, 30_000).catch(() => null);
+        if (l && Number(l.id) === Number(id) && l.description) return l;
+        await sleep(700);
+      }
+      return null;
+    };
+
+    // PUT PIECES BACK, BY ID, AND COUNT ONLY WHAT LEFT THE PACK.
+    const fieldOf = x => x.verdict === 'unknown' ? 'returned_unknown' : x.verdict === 'unsold' ? 'returned_unsold' : 'returned_magic';
+    const putBack = async (call, pieces) => {
+      if (!pieces.length) return [];
+      const r = await depositWithRecovery(call, agent, pieces.map(x => `id:${x.id}`));
+      const now = await inventory(call);
+      const still = new Set((now ?? []).map(o => Number(o.id)));
+      const left = [];
+      for (const x of pieces) {
+        if (now && !still.has(Number(x.id))) {
+          bump(S.tally, x.name, fieldOf(x));
+          S.setAside[norm(x.name)] = (S.setAside[norm(x.name)] ?? 0) + 1;
+        } else left.push(x);
+      }
+      if (left.length) log(`could not put back ${left.map(x => `${x.name} #${x.id}`).join(', ')} (${r.why ?? 'still in the pack'}) -- carried, retried next visit, never sold`);
+      return left;
+    };
+
+    // ONE DRAW, THE DOOR RETRIED (hall-sell-gear's pattern: a minute's pause, up to three tries).
+    const drawWithDoors = async (call, wants) => {
+      let r = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        r = await withdrawWithRecovery(call, agent, wants);
+        if (r.ok || !RETRYABLE.test(String(r.why ?? ''))) return r;
+        log(`draw attempt ${attempt} refused at the passage (${r.why}) -- waiting a minute`);
+        await sleep(60_000);
+      }
+      return r;
+    };
+
+    const drawLap = i => verify(async ({ call }) => {
+      S.drawn.add(i);
+      if (S.done) return true;
+      S.lap++;
+      // The snapshot, once, before anything comes out of a chest.
+      if (!S.own) {
+        const inv = await inventory(call);
+        const eq = await call('equipment', { agent }, 30_000).catch(() => null);
+        if (!inv || !eq || eq.known === false) { finish('the pack or the equipment could not be read before the first draw'); return { ok: false, why: S.done }; }
+        S.worn = new Set((eq.equipped ?? eq.items ?? []).map(e => Number(e?.id)).filter(n => n > 0));
+        S.wornNames = await equippedNames(call);
+        S.own = countBy(inv, S.worn);
+        S.purse0 = purseOf(inv);
+        log(`own kit snapshot: worn ${S.wornNames.join(', ') || 'nothing'}; purse ${S.purse0}`);
+      }
+      // Anything still carried from a failed put-back goes in first.
+      if (S.carry.length) S.carry = await putBack(call, S.carry);
+      // READ THE CHESTS. hall_withdraw records every chest it can see at the end of every call (Autopilot.hallWithdraw), so
+      // `wants: []` is a pure read; after lap 1 the previous lap's draw and put-back already left the cache current.
+      if (S.lap === 1) {
+        const rd = await hallWithdrawRetrying(call, { agent, wants: [] }, 620_000, { retries: 2, pauseMs: 60_000 })
+          .catch(e => ({ ok: false, why: e.message }));
+        if (!rd?.ok) log(`chest read refused (${rd?.why ?? '?'}): planning from the cache as it stands`);
+      }
+      const plan = planHall({ hall, inputs: await hallInputs({ hall }), keep, sellAt: p.sell_at || null, setAside: S.setAside });
+      const cands = [...plan.sell, ...plan.drop];
+      if (!cands.length) { finish(`nothing left to draw (${plan.excluded.set_aside.length ? 'only known magic/unsold pieces remain' : 'the chests hold no candidate'})`); return true; }
+      const row = (await call('fleet', {}, 60_000).catch(() => null))?.fleet?.find(r => r.agent === agent);
+      const lap = planLap({ candidates: cands, room: freeRoom(row), reserve: weaponReserveSize(),
+                            weigh: inputs0.weigh, extra: S.setAside, maxPieces });
+      if (!lap.take.length) {
+        finish(lap.why ?? (lap.blocked.length ? `nothing fits: ${lap.blocked.map(b => `${b.item} (${b.why})`).join('; ')}`
+                                              : 'the pack has no room beyond the weapon reserve'));
+        return true;
+      }
+      log(`lap ${S.lap}: drawing ${lap.take.map(t => `${t.amount} ${t.item}`).join(', ')}`);
+      const before = await inventory(call);
+      const r = await drawWithDoors(call, lap.take.map(t => ({ item: t.item, amount: t.amount })));
+      const after = await inventory(call);
+      // A CURSED PIECE WIELDS ITSELF ON ENTERING THE PACK (item.kod:508-514). Nothing the fleet deposits can be cursed (it
+      // would have been stuck in the depositor's hand), but a changed hand after a draw is checked rather than assumed.
+      const wornNow = await equippedNames(call);
+      if (wornNow && S.wornNames && wornNow.join('|') !== S.wornNames.join('|')) {
+        finish(`THE EQUIPPED SET CHANGED DURING A DRAW (${S.wornNames.join(', ')} -> ${wornNow.join(', ')}): a cursed piece may have ` +
+               'wielded itself. Stopping; check the runner by hand (town.uncurse in docs/m59-economy.md lifts one)');
+        return { ok: false, why: S.done };
+      }
+      if (!before || !after) { S.failedLaps++; log('the pack could not be read around the draw'); return true; }
+      const { rows, renumbered } = drawnRows({ before, after, names: lap.take.map(t => t.item), own: S.own, worn: S.worn });
+      if (renumbered) log('ids moved during the draw (a server save?): the selection is capped by what the pack gained');
+      if (!rows.length) {
+        S.failedLaps++;
+        log(`nothing arrived (${r.why ?? 'no reason given'}); ${S.failedLaps} empty lap(s)`);
+        if (S.failedLaps >= 3) finish(`three laps drew nothing; last: ${r.why ?? '?'}`);
+        return true;
+      }
+      S.failedLaps = 0;
+      const back = [];
+      for (const o of rows) {
+        bump(S.tally, o.name, 'drawn');
+        const v = classifyPiece(o, await lookAt(call, o.id));
+        if (v.verdict === 'cursed') { finish(`${o.name} #${o.id} is graded CURSED: stopping`); continue; }
+        if (v.verdict === 'magic' || v.verdict === 'unknown') { back.push({ id: o.id, name: o.name, verdict: v.verdict, why: v.why }); continue; }
+        const buys = buyer.cls ? inputs0.willBuy(buyer.cls, o.name).buys : null;
+        if (v.verdict === 'conjured' || buys === false) S.toDrop.push({ id: o.id, name: o.name, why: v.verdict === 'conjured' ? v.why : `${buyer.merchant} refuses it by rule` });
+        else S.toSell.push({ id: o.id, name: o.name });
+      }
+      for (const x of back) log(`${x.name} #${x.id}: ${x.verdict.toUpperCase()} (${x.why}) -> back into the chests`);
+      const magic = back.filter(x => x.verdict === 'magic'), unknown = back.filter(x => x.verdict === 'unknown');
+      S.carry.push(...await putBack(call, [...magic, ...unknown]));
+      return true;
+    }, 'draw a lap, classify each piece, put the magic back');
+
+    const sellLap = () => verify(async ({ call }) => {
+      const unsold = [];
+      for (const x of S.toSell.splice(0)) {
+        const inv0 = await inventory(call);
+        if (!inv0?.some(o => Number(o.id) === Number(x.id))) { log(`${x.name} #${x.id} is no longer in the pack -- not offered`); continue; }
+        const s = await call('sell', { agent, to: buyer.merchant, items: [Number(x.id)], confirm: true }, 120_000).catch(e => ({ error: e.message }));
+        const inv1 = await inventory(call);
+        const gone = inv1 && !inv1.some(o => Number(o.id) === Number(x.id));
+        const got = inv1 ? purseOf(inv1) - purseOf(inv0) : 0;
+        if (gone && got > 0) { bump(S.tally, x.name, 'sold'); S.tally.earned += got; }
+        else if (gone) { bump(S.tally, x.name, 'sold'); S.tally.given_away.push(`${x.name} #${x.id} to ${buyer.merchant}`); log(`${x.name} LEFT THE PACK AND NO MONEY CAME BACK`); }
+        else { unsold.push({ ...x, why: s?.error ?? s?.why ?? s?.said ?? 'the merchant did not take it' }); }
+      }
+      if (unsold.length) log(`${buyer.merchant} would not take ${unsold.map(x => x.name).join(', ')}`);
+      if (dropUnsellable) S.toDrop.push(...unsold);
+      else S.unsold = [...(S.unsold ?? []), ...unsold.map(x => ({ ...x, verdict: 'unsold' }))];
+      S.at = buyer.room;
+      return true;
+    }, 'sell each mundane piece, judged by the pack and the purse');
+
+    const dropLap = () => verify(async ({ call }) => {
+      for (const x of S.toDrop.splice(0)) {
+        await call('act', { agent, verb: 'drop', target: Number(x.id) }, 30_000).catch(() => null);
+        const inv = await inventory(call);
+        if (inv && !inv.some(o => Number(o.id) === Number(x.id))) { bump(S.tally, x.name, 'dropped'); log(`dropped ${x.name} (${x.why})`); }
+        else { S.unsold = [...(S.unsold ?? []), { ...x, verdict: 'unsold' }]; log(`${x.name} #${x.id} would not drop -- it goes back to the hall at the end`); }
+      }
+      S.at = dropRoom;
+      return true;
+    }, 'drop what the buyer will not take, outside the hall');
+
+    const steps = [];
+    for (let i = 0; i < laps; i++) {
+      // A LAP WHOSE DRAW NEVER RAN had its walk to the hall fail (an optional walk skips the steps that needed the room).
+      // Counted here, idempotently (a retried walk resolves its destination again), and three of them end the run.
+      steps.push({ ...walk(() => {
+        if (i > 0 && !S.done && !S.drawn.has(i - 1)) { S.missed.add(i - 1); if (S.missed.size >= 3) finish('three walks to the hall failed'); }
+        return S.done ? (S.at ?? buyer.room) : hall;
+      }, { candidates: [hall, buyer.room, dropRoom], why: `lap ${i + 1}: the guild chests` }), optional: true });
+      steps.push(drawLap(i));
+      steps.push({ ...walk(() => (S.done && S.at != null ? S.at : buyer.room), { candidates: [buyer.room, dropRoom], why: `lap ${i + 1}: ${buyer.merchant}` }), optional: true });
+      steps.push(sellLap());
+      if (dropRoom !== buyer.room)
+        steps.push({ ...walk(() => (S.toDrop.length ? dropRoom : (S.at ?? buyer.room)), { candidates: [dropRoom, buyer.room], why: `lap ${i + 1}: a street to drop in` }), optional: true });
+      steps.push(dropLap());
+    }
+    // THE END: what could not go back or be sold, and the proceeds, into the chests.
+    const needHall = () => S.carry.length || (S.unsold ?? []).length || (proceeds === 'hall' && S.tally.earned > 0);
+    steps.push({ ...walk(() => (needHall() ? hall : (S.at ?? buyer.room)), { candidates: [hall, buyer.room, dropRoom], why: 'the proceeds and the leftovers into the chests' }),
+                 optional: true, always: true });
+    steps.push({ ...verify(async ({ call }) => {
+      if (!needHall()) return true;
+      const pieces = [...S.carry, ...(S.unsold ?? [])];
+      const inv = await inventory(call);
+      const purse = inv ? purseOf(inv) : null;
+      const earned = proceeds === 'hall' ? S.tally.earned : 0;
+      // DEPOSIT THE PURSE, DRAW BACK WHAT WAS THE RUNNER'S (the chalice hand-in's pattern, autopilot/chalice.mjs): a
+      // deposit takes a whole stack, so the earnings alone cannot be put in.
+      const drawBack = earned > 0 && purse != null ? Math.max(0, purse - earned) : 0;
+      const deposit = [...pieces.map(x => `id:${x.id}`), ...(earned > 0 ? ['shilling'] : [])];
+      const r = await hallWithdrawRetrying(call, { agent, wants: drawBack > 0 ? [{ item: 'shilling', amount: drawBack }] : [], deposit }, 620_000,
+                                           { retries: 2, pauseMs: 60_000 }).catch(e => ({ ok: false, why: e.message }));
+      const inv2 = await inventory(call);
+      const still = new Set((inv2 ?? []).map(o => Number(o.id)));
+      for (const x of pieces) bump(S.tally, x.name, inv2 && !still.has(Number(x.id)) ? fieldOf(x) : 'carried');
+      if (earned > 0) {
+        const p2 = inv2 ? purseOf(inv2) : null;
+        S.tally.notes.push(p2 == null ? `proceeds: deposit sent (${r?.ok ? 'ok' : r?.why}), purse unread`
+          : `proceeds: purse ${purse} -> ${p2} (deposited ${purse - p2} of ${earned} earned${r?.ok ? '' : `; ${r?.why}`})`);
+      }
+      return true;
+    }, 'leftovers and proceeds into the chests'), optional: true, always: true });
+    steps.push({ ...verify(async () => {
+      if (!S.done) S.done = `ran out of laps (${laps})`;
+      const end = await hallInputs({ hall }).catch(() => null);
+      const left = end ? planHall({ hall, inputs: end, keep, sellAt: p.sell_at || null, setAside: S.setAside }) : null;
+      console.log(`  ${agent}: HALL-SELL-MUNDANE ${hall} REPORT (${S.done}; ${S.lap} lap(s))\n${formatTally(S.tally)}` +
+        (proceeds === 'keep' ? `\n  proceeds kept by ${agent}` : '') +
+        (S.tally.notes.length ? `\n  ${S.tally.notes.join('\n  ')}` : '') +
+        (left ? `\n  LEFT IN THE CHESTS (last reading):\n${formatPlan(left).split('\n').slice(1).map(l => `  ${l}`).join('\n')}` : ''));
+      return true;
+    }, 'the report'), always: true });
+    if (Number(p.home) > 0) steps.push({ ...walk(Number(p.home), { why: 'home' }), always: true });
+    return steps;
+  },
+};

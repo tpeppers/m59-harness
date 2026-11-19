@@ -2057,6 +2057,13 @@ the records it describes.
   against a hundred million banked and a three-digit roster without waiting months for
   them, and the staleness line is pinned both ways — present when a balance is dated, and
   ABSENT when none is, because a warning that always fires is one nobody reads. Offline) and
+  `node tools/m59-hall-sell-test.mjs` (87 — **the `hall-sell-mundane` errand's pure half**: the operator's keep list
+  (bows, plate armour, helms) and the not-rebuyable filter, a buyer that refuses a class by rule planning a drop and an
+  unknown rule offering, a drawn piece proved mundane ONLY by a normal grade plus a look text for the same id (unidentified,
+  attribute grades, timed attributes in the look, a missing grade, a missing look and a look for another id all stay out
+  of the sale), lap sizing that keeps the weapon reserve free and asks for extra pieces of a name known to hide magic ones,
+  the runner's own kit as a count floor through a mid-lap renumbering, and the errand compiled against a fixture cache.
+  Offline) and
   `node tools/m59-buyers-test.mjs` (38 — **what a merchant will actually buy**: that a gem
   is also a reagent and the apothecaries' exclusion turns on it, that Marion's smith takes
   no body armour, that an exclusive rule excludes a sibling of the same family, and above
