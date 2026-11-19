@@ -1610,7 +1610,10 @@ export class M59Client {
       // save; with a stale id the server finds no such spell in plSpells and bails out SILENTLY -- no line, no mana. Prod
       // 2026-10-27: an island rider's first rescue after a crossing was swallowed that way, and the ride timed out waiting
       // for a landing that was never cast.
-      try { this.requestInventory(); this.roomContents(); this.requestSpells(); this.requestSkills(); }
+      // AND WHAT IS ON US. GarbageCollectingDone sends BP_INVALIDATE_DATA (user.kod InvalidateData), which empties the
+      // enchantment list here, and the server re-sends it only when asked (BP_SEND_ENCHANTMENTS, user.kod 1385): after
+      // every save a poisoned body read as healthy until its next login, and every poison tick as an attack.
+      try { this.requestInventory(); this.roomContents(); this.requestSpells(); this.requestSkills(); this.requestEnchantments(); }
       catch (e) { this.log?.(`post-save re-read failed: ${e.message}`); }
     };
     if (!jitter) { run(); return; }
@@ -1620,8 +1623,11 @@ export class M59Client {
   requestSpells()       { this.send(BP.SEND_SPELLS); }
   requestSkills()       { this.send(BP.SEND_SKILLS); }
   // Native RequestEnchantments(ENCHANT_PLAYER): the type byte is required.
+  // The reply is the WHOLE player list, one ADD per enchantment (player.kod SendEnchantmentIcons), so the player entries
+  // are dropped first: counted entries would otherwise double on every re-read.
   requestEnchantments() {
     this.enchantmentsRequestedAt = Date.now();
+    for (const [id, e] of this.enchantmentsById ?? []) if (e?.type === 1) this.enchantmentsById.delete(id);
     this.send(BP.SEND_ENCHANTMENTS, u8b(1));
   }
   // WHO ARE WE. The reply is BP_PLAYER, whose handler re-assigns `selfId` and then
@@ -2592,9 +2598,19 @@ export class M59Client {
         if (!this.check('ADD_ENCHANTMENT', res)) break;
         const o = res.object;
         this.enchantmentObservations.add(res.type,o,this.rsc.get(o.nameRsc),Date.now());
+        // A PLAYER ENCHANTMENT IS COUNTED, NOT SET. The id the server names is the SPELL object's, not the enchantment's
+        // (user.kod ShowAddEnchantment / ShowRemoveEnchantment send `what`, the spell), and a second black-spider bite
+        // starts a second enchantment from the same Poison object (poison.kod MakePoisoned -> StartEnchantment; strength
+        // stacks, player.kod AddPoison). Each entry is shown once and removed once (player.kod StartEnchantment,
+        // EnchantmentTimer, RemoveEnchantment). Kept as a set, the FIRST poison to end erased the ailment while the second
+        // still drained, and the next tick read as "something is hitting us": Waldorf (t4), 2026-11-19, room 579 -- walked
+        // off a square nothing could reach at 9 health and was bitten to death. `count` is how many are on us; `at` the
+        // first, `last_at` the newest. Room icons (type 2) are re-sent on every room-contents (user.kod 2614) and stay a set.
+        const prior = this.enchantmentsById.get(o.id), now = Date.now();
+        const count = res.type === 1 && prior ? (prior.count ?? 1) + 1 : 1;
         this.enchantmentsById.set(o.id, {
           id: o.id, type: res.type, nameRsc: o.nameRsc,
-          name: this.rsc.get(o.nameRsc) ?? null, at: Date.now(),
+          name: this.rsc.get(o.nameRsc) ?? null, at: prior && res.type === 1 ? prior.at : now, last_at: now, count,
         });
         this.emit('enchantment', { added: this.enchantmentsById.get(o.id) });
         break;
@@ -2604,8 +2620,10 @@ export class M59Client {
         if (!this.check('REMOVE_ENCHANTMENT', res)) break;
         this.enchantmentObservations.remove(res.type,res.id,Date.now());
         const gone = this.enchantmentsById.get(res.id) ?? { id: res.id, type: res.type };
-        this.enchantmentsById.delete(res.id);
-        this.emit('enchantment', { removed: gone });
+        const remaining = Math.max(0, (gone.count ?? 1) - 1);
+        if (remaining > 0) this.enchantmentsById.set(res.id, { ...gone, count: remaining });
+        else this.enchantmentsById.delete(res.id);
+        this.emit('enchantment', { removed: gone, remaining });
         break;
       }
 

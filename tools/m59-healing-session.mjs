@@ -133,14 +133,29 @@ export function mayLogoff(agent, { afterRecovery = false, dir = healingDir(), no
   if (afterRecovery) return recoveredAfterLogoff(s, now);
   return !s || !(s.logoffs >= 1);
 }
-/** Record the logoff, opening the session if none is open. `cooperative`: a fleet-mate's distraction logoff. */
-export function noteLogoff(agent, { why = null, room = null, cooperative = false, dir = healingDir(), now = Date.now() } = {}) {
+// PROJECTED DEATH OUTRANKS THE ONE-LOGOFF RULE -- ONCE. The rule exists to stop a logoff LOOP (every poison tick re-armed
+// one, and every logoff adds time to a harmful enchantment); it was never meant to forbid the last exit. Waldorf (t4),
+// 2026-11-19, Ancient Place: his one logoff spent at 112 health, the poison took him to 9 on the spot, and when the
+// shelter stopped holding nothing could log him off again. So a body that is POISONED AND REACHED, with health (or health
+// less the poison still to come) at its flee line or one blow from death (m59-poison.mjs poisonExitVerdict), may log off
+// a second time in the session -- once. `overrides` counts it; a third logoff is never granted, and the session still
+// ends only at full health. The override is recorded with its reason.
+export const LOGOFF_OVERRIDES_PER_SESSION = 1;
+/** May this body take the projected-death override logoff? Only inside a spent session that has not used it. */
+export function mayOverrideLogoff(agent, { dir = healingDir(), now = Date.now() } = {}) {
+  const s = readSession(agent, { dir, now });
+  return !!s && s.logoffs >= 1 && (s.overrides ?? 0) < LOGOFF_OVERRIDES_PER_SESSION;
+}
+/** Record the logoff, opening the session if none is open. `cooperative`: a fleet-mate's distraction logoff.
+ *  `override`: the projected-death override (mayOverrideLogoff), with its reason. */
+export function noteLogoff(agent, { why = null, room = null, cooperative = false, override = null, dir = healingDir(), now = Date.now() } = {}) {
   if (!named(agent)) return null;
   const prior = readSession(agent, { dir, now });
   const newEpisode = cooperative && recoveredAfterLogoff(prior, now);
   const s = newEpisode || !prior ? { started_at: now, logoffs: 0 } : prior;
   s.logoffs = (s.logoffs ?? 0) + 1; s.last_logoff_at = now; s.why = why; s.room = room;
   if (cooperative) s.cooperative = true;
+  if (override && s.logoffs > 1) { s.overrides = (s.overrides ?? 0) + 1; s.override_why = String(override); s.override_at = now; }
   writeSession(agent, s, dir);
   return s;
 }

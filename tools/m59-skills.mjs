@@ -2582,6 +2582,13 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = 0.4,
   // How much poison has taken during this rest. Reported rather than acted on: a rest that
   // is not winning still ends on its own leash, and the caller deserves to know which.
   let poisonDrain = 0;
+  // WHICH FALL WAS THE POISON, when the keeper keeps a watch on this session (m59-poison.mjs PoisonWatch, sampled by the
+  // 500 ms watchdog and here). Without it, "poisoned" was read off the ailment list alone, both ways wrong: every fall
+  // while the icon showed was excused (a spider biting a poisoned body on a leaking square was never an interruption),
+  // and the first fall after the icon went was an attack (a second stacked poison still draining). Waldorf (t4),
+  // 2026-11-19: that second reading walked him off a square nothing could reach at 9 health.
+  const watch = s.poisonWatch ?? null;
+  let readAt = now();
   try {
     if((vitalFrac(v,'health')??1)<health){
       const {turnAtProvedRefuge}=await import('./m59-refuge-activation.mjs');
@@ -2591,6 +2598,8 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = 0.4,
            !(typeof shouldCancel === 'function' && shouldCancel())) {
       await wait(3000);
       v = await read();
+      const from = readAt; readAt = now();
+      if (watch) { try { watch.sampleClient(c, readAt); } catch { /* the ailment rule below still answers */ } }
       const hp = v?.health?.value ?? null;
       // Poison can coexist with a skeleton hitting us. Positive server attack
       // evidence wins even when regeneration masks the net health loss.
@@ -2610,6 +2619,19 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = 0.4,
           // poisoned and no attack was observed. Never use the ailment to erase
           // the independent incoming-hit evidence checked above.
           const ailing = c.ailments?.() ?? [];
+          if (watch) {
+            const seen = watch.attribute(from, readAt);
+            if (seen.attack > 0) {
+              interrupted = `took ${seen.attack} damage while resting, off the poison's clock — something is hitting us`;
+              break;
+            }
+            if (seen.poison > 0) {
+              poisonDrain += peak - hp;
+              peak = hp;
+              continue;
+            }
+            // Nothing attributed in the window (the fall predates the watch): the ailment rule below decides.
+          }
           if (ailing.length) {
             poisonDrain += peak - hp;
             peak = hp;                 // measure the next fall from here, not from before it

@@ -251,6 +251,7 @@ import { CooperativePart } from './autopilot/cooperative.mjs';
 import { GearUpkeepPart } from './autopilot/gear-upkeep.mjs';
 import { RetreatPart } from './autopilot/retreat.mjs';
 import { NeedlePart } from './autopilot/needle.mjs';
+import { PoisonExitPart } from './autopilot/poison-exit.mjs';
 import { survivalOffOf } from './m59-hazards.mjs';
 
 
@@ -4297,6 +4298,7 @@ export class Autopilot {
   // @autopilot-part ./autopilot/gear-upkeep.mjs#1
   // @autopilot-part ./autopilot/retreat.mjs#1
   // @autopilot-part ./autopilot/needle.mjs#1
+  // @autopilot-part ./autopilot/poison-exit.mjs#1
 }
 installParts(Autopilot, [
   HuntSetupPart,
@@ -4345,6 +4347,7 @@ installParts(Autopilot, [
   GearUpkeepPart,
   RetreatPart,
   NeedlePart,
+  PoisonExitPart,
 ]);
 
 // ONE WALL EACH.

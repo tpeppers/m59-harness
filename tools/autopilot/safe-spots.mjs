@@ -529,14 +529,24 @@ export class SafeSpotsPart {
     if (d.retry_at && Date.now()<d.retry_at) return true;
     if (d.status==='recovering') {
       if (this.checkFreeze()) return true;
+      // POISONED AND REACHED: THE SHELTER WILL NOT HOLD (autopilot/poison-exit.mjs). Asked before anything here sits the
+      // body down, because this branch ENDS THE PASS before the survival ladder: Waldorf (t4), 2026-11-19, rested 8 s at a
+      // time from 112 to 10 health while the flee line (45%) and the doomed rung never ran. Not exposed, the verdict is
+      // `shelter` and nothing changes (the operator's rule); exposed with no health to spare, the exits run in order, and
+      // with none left this returns false so the ladder -- fight back, the flee line, the doomed rung -- gets this pass.
+      const poison=this.poisonExitState?.(v);
+      if(poison?.act==='exit') return await this.takePoisonExit(poison,d);
       if (!this.currentRecoveryWall()) {
         chooseSurvivalDecision(s,this.replacementSurvivalChoice('recovery is no longer at a safe wall',d),
           {because:'recovery position changed'});return true;
       }
       this.doing='recovering';
       const generation=s.movementGeneration,client=s.client;
+      // A poisoned rest also stops the moment the verdict turns to `exit` (checked on restUntil's 3 s reads), rather than
+      // sitting out its 8 s leash with something biting.
       const cancelled=()=>currentSurvivalDecision(s)?.id!==d.id || s.client!==client
-        || s.movementWasCancelled?.(generation) || !this.currentRecoveryWall();
+        || s.movementWasCancelled?.(generation) || !this.currentRecoveryWall()
+        || (poison?.act&&poison.act!=='none'&&this.poisonExitState?.()?.act==='exit');
       const progress=this._recoveryHealthProgress;
       if(progress?.id!==d.id || progress.hp!==v?.health?.value)
         this._recoveryHealthProgress={id:d.id,hp:v?.health?.value,at:Date.now()};

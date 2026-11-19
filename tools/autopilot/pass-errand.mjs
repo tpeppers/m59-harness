@@ -370,7 +370,10 @@ export class PassErrandPart {
     // poison ends and healing occurs afterwards, not to flee through it and risk low-health travel. Shelter in place."
     // Health climbs between poison ticks and would release the hold at full; it is not released until the poison is gone,
     // and then the ordinary floor below makes it heal before it leaves.
-    if (poisonedNow(this.s?.client)) {
+    // A stack still ticking after its icon went counts (m59-poison.mjs PoisonWatch.ticking): two black-spider bites are one
+    // icon and two enchantments, and the first to end erased the icon. When the wall stops holding, the poison exit decides
+    // (autopilot/poison-exit.mjs), not this.
+    if (poisonedNow(this.s?.client) || this.s?.poisonWatch?.ticking?.(Date.now(), false)) {
       if (!this._poisonHoldSaid) { this._poisonHoldSaid = true;
         this.note('keeping the wall while poisoned', { why: 'shelter in place until the poison ends, then heal, then go on' }); }
       return false;

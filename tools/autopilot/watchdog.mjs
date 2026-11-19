@@ -17,6 +17,7 @@ import { traceSurvival } from '../m59-survival-trace.mjs';
 import * as watchdog from '../m59-watchdog.mjs';
 import { GRIND_ALWAYS_MS, GRIND_ROWS_PER_HOUR, INERT_RESCUE_MS, PULSE_MOVEMENT_SAMPLES, PULSE_MS, PULSE_SAMPLES, WATCHDOG_BLOCKED_MS, WATCHDOG_FRAME_MS, WATCHDOG_HEALTHY_CANCEL_MS, WATCHDOG_MS, WATCHDOG_PINNED_SQUARES, WEDGE_LADDER_MS, pct } from '../m59-autopilot.mjs';
 import { survivalOffOf } from '../m59-hazards.mjs';
+import { PoisonWatch } from '../m59-poison.mjs';
 
 export class WatchdogPart {
   // @part 1
@@ -438,6 +439,9 @@ export class WatchdogPart {
     const lostThisTick = (hp?.value != null && w.lastHealth != null && hp.value < w.lastHealth)
       ? w.lastHealth - hp.value : 0;
     w.lastHealth = hp?.value ?? null;
+    // 1a'. WHICH FALL WAS THE POISON (m59-poison.mjs PoisonWatch). On the session, because a poison outlives the socket.
+    // Memory only: the pushed vitals, the ailment list and the newest messages. restUntil and the poison exit read it.
+    try { (s.poisonWatch ??= new PoisonWatch()).sampleClient(c, now); } catch (e) { w.lastError = e.message; }
     // 1b. THE POSITION PULSE. See PULSE_MS.
     if (now - w.lastPulseAt >= PULSE_MS) { w.lastPulseAt = now; this.pulsePosition(now, hp); }
     // Keep evidence fresh, but give no action edict a turn during a valid freeze.

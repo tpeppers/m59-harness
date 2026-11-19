@@ -11,7 +11,7 @@
 // 14 methods: checkFreeze, playerThreatPresent, passCooperative, recordCooperativeKill, tryOceanCooperativeEscape,
 //   fleetLogoff, resumeCooperativeReturn, playDead, spentAndCornered, sessionSpotHere, logoffDeclined, playDeadObserved,
 //   askForHelp, restockReagents
-import { closeIfHealed, mayLogoff, noteLogoff, SPENT_EXIT_RETRY_MS, spentLogoffReplacement } from '../m59-healing-session.mjs';
+import { closeIfHealed, mayLogoff, mayOverrideLogoff, noteLogoff, readSession, SPENT_EXIT_RETRY_MS, spentLogoffReplacement } from '../m59-healing-session.mjs';
 import { abortPreparingCooperativeLogoff, configureCooperativeLogoff, cooperativeAssist, cooperativeReturnRefuge, oceanRockThreats, requestCooperativeLogoff } from '../m59-cooperative-logoff.mjs';
 import { isFood } from '../m59-items.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
@@ -256,6 +256,7 @@ export class CooperativePart {
     // log-to-lose-aggro code once per healing session on a single safe spot until healed full". Any cause. After the one
     // logoff, the body keeps its spot and heals: a second logoff here (a poison tick re-armed it on every tick) only adds
     // 3 s to a harmful enchantment. The session is persisted, so a replacement keeper is held to it too.
+    let override=null;
     {
       const me=String(this.s?.name??''),h=this.s.client?.vitals?.()?.health;
       closeIfHealed(me,{hp:h?.value,max:h?.max});
@@ -265,6 +266,17 @@ export class CooperativePart {
           catch(e) { this.note('cooperative logoff unavailable',{why:e.message}); }
           if (!sameLife()) return false;
         }
+        // PROJECTED DEATH OUTRANKS THE ONE-LOGOFF RULE, ONCE (m59-healing-session.mjs mayOverrideLogoff). Asked here, so
+        // every rung that reaches for the logoff -- the flee line, the doomed rung, the recovery dispatcher, the poison
+        // exit -- sees through a spent session when the body is poisoned and reached with no health to spare. Waldorf.
+        override=mayOverrideLogoff(me)?(this.poisonOverrideReason?.()??null):null;
+        if(override){
+          this.note('LOGOFF OVERRIDE: projected death outranks the one-logoff rule',{why,override,
+            rule:'one play-dead logoff per healing session, except once when poisoned, reached and out of health to spare',
+            session:readSession(me)});
+        }
+      }
+      if(!mayLogoff(me)&&!override){
         if(!this._oneLogoffSaid){this._oneLogoffSaid=true;
           this.note('not logging off again this healing session',{why,
             rule:'one play-dead logoff per healing session, until healed to full; keep the spot and heal'});}
@@ -393,7 +405,7 @@ export class CooperativePart {
     updateSurvivalDecision(s,d.id,{status:'active',activated_at:Date.now(),path:[],path_length:0,
       path_source:'stationary logoff/reconnect',selected_at:Date.now()});
     let did=false;
-    try { did=await this.playDeadObserved(why,d.id); }
+    try { did=await this.playDeadObserved(why,d.id,{override}); }
     catch(e) { this.note('play dead failed',{why:e.message}); }
     if (!did && !sameLife()) return false;
     if(currentSurvivalDecision(s)?.id===d.id) {
@@ -491,7 +503,7 @@ export class CooperativePart {
     return out;
   }
 
-  async playDeadObserved(why, decisionId) {
+  async playDeadObserved(why, decisionId, { override = null } = {}) {
     const s = this.s;
     const client = s.client, room = s.world?.room?.num, life = s.lifeBoundary ?? 0;
 
@@ -641,7 +653,7 @@ export class CooperativePart {
       Number.isSafeInteger(bodyId) && Number.isSafeInteger(roomId) &&
       before?.value > 0 && before.value < before.max && client.ailments?.()?.length === 0;
     this._safeLogoffRecovery = null;
-    const session = noteLogoff(String(s.name ?? ''), { why, room }); // the one this session
+    const session = noteLogoff(String(s.name ?? ''), { why, room, override }); // the one this session (or its one override)
     const came = await this.reconnect('logging off rather than dying');
     if (!came.ok) {
       this.note('reconnect after logoff failed', { why: came.why });

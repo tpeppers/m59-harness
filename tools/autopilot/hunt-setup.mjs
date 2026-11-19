@@ -162,6 +162,10 @@ export class HuntSetupPart {
       let ailments = [];
       try { ailments = c.ailments?.() ?? []; } catch { ailments = []; }
       input.ailing = ailments.length ? [...new Set(ailments.map(a => String(a?.name ?? a ?? 'ailing').trim().toLowerCase()))].join(' and ') : null;
+      // AND A POISON STILL TICKING AFTER ITS ICON WENT (m59-poison.mjs PoisonWatch). Waldorf (t4), 2026-11-19: the first of
+      // two stacked poisons ended at 10/146, the ailment list emptied, and this verdict turned ON again at 7% health while
+      // the second stack still drained -- "rest below 34%, break off below 25%" for a body one blow from death.
+      if (!input.ailing && s?.poisonWatch?.ticking?.(Date.now(), false)) input.ailing = 'poison still ticking after its icon went';
       input.pvp = this.overmatchPvp();
       let spawns = null;
       try { spawns = loadSpawns(SPAWN_FILE); } catch { spawns = null; }
