@@ -30,6 +30,7 @@ import { FarmStrategyEngine } from '../m59-strategy-engine.mjs';
 import { touchSpellSpec } from '../m59-touchspell.mjs';
 import { MIN_FIGHT_VIGOR, ORDINARY_VIGOR_FLOOR, pct, reachableFightFloor, reagentTargetFor, REST_VIGOR_CAP, restVigorCapOf, SPAWN_FILE, STARVED_FIGHT_VIGOR, STRATEGIES, VIGOR_CAP } from '../m59-autopilot.mjs';
 import { OVERMATCH_VIGOR_MARGIN, overmatchVerdict } from '../m59-overmatch.mjs';
+import { poisonersAmong } from '../m59-poison.mjs';
 import { secondWindVerdict } from '../m59-second-wind.mjs';
 import { loadSpawns } from '../m59-spawns.mjs';
 
@@ -192,6 +193,8 @@ export class HuntSetupPart {
       }
       input.visibleLevels = visibleLevels;
       input.visibleUnknown = visibleUnknown;
+      // Reported, never a reason to be off (m59-overmatch.mjs: a room whose spawns poison).
+      input.poisoners = poisonersAmong(Array.isArray(table) ? table.map(x => x?.creature) : []);
     }
     const verdict = overmatchVerdict(input);
     // ONE NOTE ON EACH EDGE, never one a pass: this is asked dozens of times a second.

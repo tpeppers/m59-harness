@@ -130,6 +130,10 @@ export class DeathPart {
         ...(this.overmatchLast ? { overmatch: { ms_before: capturedAt - this.overmatchLast.at, room: this.overmatchLast.room,
           ratio: this.overmatchLast.ratio, prey_level: this.overmatchLast.prey_level,
           rest_below: this.overmatchLast.rest_below, flee_below: this.overmatchLast.flee_below } } : {}),
+        // WHAT THE POISON WATCH KNEW (m59-poison.mjs): ticking, the tick, the last attack, each recent fall attributed,
+        // and the last shelter verdict (autopilot/poison-exit.mjs). Absent for a body never poisoned.
+        ...(this.s?.poisonWatch?.anchor || this._poisonVerdict ? { poison: { watch: this.s?.poisonWatch?.status?.(capturedAt) ?? null,
+          verdict: this._poisonVerdict ?? null } } : {}),
       },
       // WAS THE KEEPER LOOKING, AND COULD IT HEAR? (prod 2026-10-26: nine deaths "stalled" with a flat health trail.)
       // last_frame_age_ms large: frames stopped, so the trail is old and the keeper was not looking (see watchdog).

@@ -45,6 +45,16 @@ export const POISON_EXPOSED_MS = 12_000;
 // A hit message this close to a fall is that fall's cause (the message and the health push are separate packets).
 const HIT_BEFORE_MS = 2_500, HIT_AFTER_MS = 600;
 
+// THE MONSTERS WHOSE BITE POISONS (kod HitSideEffect -> Poison MakePoisoned): name -> chance, a tick, how long.
+//   black spider   dethspid.kod  1 in 10, 5 a tick, 180 s     spider        spider.kod   1 in 30, 2 a tick, 180 s
+//   queen spider   spdrquen.kod  1 in 15, 2 a tick, 30 s      dusk rat      duskrat.kod  1 in 6, 10 a tick, 30 s
+// (strength / 1000 per tick, integer division: player.kod PoisonTimer). Poison fog and arsenic are a caster's and an
+// item's, not a spawn's.
+export const POISONERS = Object.freeze(['black spider', 'spider', 'queen spider', 'dusk rat']);
+/** The poisoners among a list of creature names (a room's spawn table, what is in sight), lower case, de-duplicated. */
+export const poisonersAmong = names => [...new Set((Array.isArray(names) ? names : [])
+  .map(n => String(n ?? '').trim().toLowerCase()).filter(n => POISONERS.includes(n)))];
+
 /** Is this client poisoned now? The ailment enchantment the server pushes, by name. */
 export function poisonedNow(c) {
   try { return (c?.ailments?.() ?? []).some(e => /poison|venom/i.test(String(e?.name ?? e ?? ''))); } catch { return false; }

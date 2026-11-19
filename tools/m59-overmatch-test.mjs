@@ -105,6 +105,21 @@ test('verdict: what can STAND in the room decides, not what is hunted', () => {
   assert.equal(cv({ maxHealth: 150, visibleLevels: [75] }).active, true);
 });
 
+test('verdict: a room whose spawns poison stays overmatched and says which; a poison still ticking keeps it off (Waldorf, 2026-11-19)', async () => {
+  const { poisonersAmong } = await import('./m59-poison.mjs');
+  // The Ancient Place, 579: level-75 black spiders, level-45 orcs, a non-huntable level-60 and level-75. 146 health.
+  const poisoners = poisonersAmong(['black spider', 'orc', 'Black Spider', 'troll']);
+  assert.deepEqual(poisoners, ['black spider']);
+  const v = overmatchVerdict({ policy: 'auto', farming: true, maxHealth: 146, roomLevels: [75, 45, 60, 75], poisoners });
+  assert.equal(v.active, true, 'poison cannot kill (player.kod PoisonTimer clamps at 1): the poison exit answers it, not this');
+  assert.deepEqual(v.poisoners, ['black spider'], 'but the verdict says a poisoner can stand here');
+  const ticking = overmatchVerdict({ policy: 'auto', farming: true, maxHealth: 146, roomLevels: [75, 45], poisoners,
+    ailing: 'poison still ticking after its icon went' });
+  assert.equal(ticking.active, false, 'the lingering stack keeps it off: it came back on at 10/146 mid-drain');
+  assert.match(ticking.why, /^poison still ticking after its icon went: the ordinary ladder/);
+  assert.deepEqual(overmatchVerdict({ policy: 'auto', farming: true, maxHealth: 146, roomLevels: [75] }).poisoners, []);
+});
+
 test('verdict: every inactive answer says why in one sentence', () => {
   const cases = [
     [{ policy: 'off' }, /overmatch is off for this character/],

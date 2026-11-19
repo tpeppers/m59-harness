@@ -328,6 +328,16 @@ export class StatusPart {
             spent_rest_since: this.spentRestSince ?? null };
         } catch { return null; }
       })(),
+      // POISON (m59-poison.mjs, autopilot/poison-exit.mjs): `watch` is what the poison watch knows (ticking, the tick size,
+      // the last tick and attack, the newest falls with their attribution); `verdict` the last shelter verdict (shelter /
+      // respond / exit, with the line, the projected floor and the exits); `tried` when each exit was last attempted.
+      poison: (() => {
+        try {
+          const w = this.s?.poisonWatch;
+          if (!w && !this._poisonVerdict) return null;
+          return { watch: w?.status?.() ?? null, verdict: this._poisonVerdict ?? null, tried: this._poisonExitTried ?? null };
+        } catch { return null; }
+      })(),
       // THE WEAPON RESERVE (m59-weapon-reserve.mjs): whether a replacement weapon's room is being kept free (`in_force`,
       // or `waived` by a usable spare), the free space against it, the last pickup left for it, and what the unarmed
       // remedy last did (`remedy`: armed / room / blocked / held, with what it dropped and what stayed).

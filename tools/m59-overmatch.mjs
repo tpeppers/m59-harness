@@ -55,6 +55,19 @@
 // Everything that is not farming is untouched: a journey keeps its own lines (travel_guard, travelHoldBelow), death
 // recovery still rests to whole, and poison still shelters in place.
 //
+// A ROOM WHOSE SPAWNS POISON IS NOT A REASON TO TURN IT OFF. Decided 2026-11-19 after Waldorf (t4, 146 health) died in
+// the Ancient Place (579: level-75 black spiders) with this verdict on until the poisoning; the prod stopgap was a
+// per-strategy 'off' for the spider rooms. The black spider, the spider, the queen spider and the dusk rat poison
+// (m59-poison.mjs POISONERS), and poison CANNOT KILL (player.kod PoisonTimer clamps at 1). What killed him was not the
+// lines this verdict sets: once poisoned it was already off (`ailing`) and the ordinary ladder had him; the poison took
+// him to 9 on a square nothing could reach, and then a stacked poison's vanished icon made a tick read as an attack and
+// walked him off it, with the one-logoff rule forbidding the last exit. Those are fixed where they arise (m59-client.mjs
+// counts a stacked poison; m59-poison.mjs PoisonWatch tells a tick from a bite; autopilot/poison-exit.mjs takes the best
+// exit from a shelter that is being reached, the logoff included once). Turning overmatch off wherever a poisoner can
+// stand would give back the yield in every spider room for a risk now answered at its seam. So the verdict only SAYS
+// which poisoners can stand here (`poisoners`, on the status and in the journal), and `ailing` covers a poison still
+// ticking after its icon went, so it cannot come back on mid-drain (it did: at 10/146). The per-strategy 'off' can go.
+//
 // THE POLICY: `overmatch`, from the broker's `overmatch`:
 //   'auto' (default)   on when the predicate holds
 //   true / 'on'        on whenever farming, whatever the prey (still off while held, recovering, poisoned or in PvP)
@@ -176,12 +189,13 @@ const levelsOf = list => (Array.isArray(list) ? list : []).map(Number).filter(n 
  *   recovering      resting to whole after a death
  *   ailing          null/false, or the poison or disease on the body: the ordinary ladder shelters and mends it first
  *   pvp             null/false, or what makes this a player-versus-player moment
+ *   poisoners       names of poisoning creatures that can stand here: REPORTED, never a reason to be off (see above)
  * Returns { active, mode, why, ratio, prey_level, prey_ratio_wanted, rest_below, resume_above, flee_below,
- *           wall_at_attackers }. Every inactive verdict says why in one sentence.
+ *           wall_at_attackers, poisoners }. Every inactive verdict says why in one sentence.
  */
 export function overmatchVerdict({ policy, farming = false, held = null, maxHealth = null, roomLevels = null,
                                    roomUnknown = [], visibleLevels = [], visibleUnknown = [], recovering = false,
-                                   ailing = null, pvp = null } = {}) {
+                                   ailing = null, pvp = null, poisoners = [] } = {}) {
   let p;
   try { p = normOvermatch(policy); }
   catch (e) {
@@ -195,9 +209,10 @@ export function overmatchVerdict({ policy, farming = false, held = null, maxHeal
   const health = Number(maxHealth);
   const knownHealth = Number.isFinite(health) && health > 0;
   const ratio = preyLevel && knownHealth ? +(health / preyLevel).toFixed(2) : null;
+  const poison = [...new Set((Array.isArray(poisoners) ? poisoners : []).filter(Boolean).map(String))];
   const base = { mode: p.mode, ratio, prey_level: preyLevel, prey_ratio_wanted: p.preyRatio,
                  rest_below: p.restBelow, resume_above: p.resumeAbove, flee_below: p.fleeBelow,
-                 wall_at_attackers: p.wallAtAttackers };
+                 wall_at_attackers: p.wallAtAttackers, poisoners: poison };
   const no = why => ({ active: false, why, ...base });
   if (p.mode === 'off') return no('overmatch is off for this character');
   if (!farming) return no('not farming');
