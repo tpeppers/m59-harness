@@ -23,17 +23,23 @@
 //                        ObjectDesired rules) says whether that smith takes the item. One that refuses it by rule is
 //                        planned as a DROP rather than walked to a counter: Quintor refuses nerudite (jssmith.kod:93).
 //
-// AND THE FIFTH, WHICH NO CACHE CAN ANSWER: IS THIS PIECE MAGIC? The chest cache stores {id, name, amount}
-// (refreshChestCache), so an unidentified long sword in a chest is a long sword. A piece drawn into the pack carries its
-// rarity grade (GetRarity, item.kod:715-756: unidentified 100, cursed 200, attributes 1/2/4), and its look text carries
-// what a grade cannot: a TIMED attribute (enchanted, glowing, holy, fiery, shrouded...) inherits GetRarityCountModifier 0
-// (itematt.kod:587), so a dedicated long sword grades `normal`. classifyPiece reads both, and anything it cannot read is
-// `unknown`, which is returned to the chests with the magic: an unread item is not a mundane item.
+// AND THE FIFTH: IS THIS PIECE MAGIC? Asked TWICE. First IN THE CHEST: every object in a container comes with its rarity
+// grade (GetRarity, item.kod:715-756: unidentified 100, cursed 200, attributes 1/2/4), the chest reading keeps it per
+// object (gradedRow, m59-items.mjs), and only a NORMAL-graded piece is ever a candidate -- uncommon, rare, legendary,
+// unidentified, cursed and UNKNOWN (a reading with no grade) stay in the chest, counted per name and grade in the plan.
+// Until 2026-11-19 the reading kept names only: hall-sell asked for "short sword" by name, the chest handed over an
+// unidentified one, and it wielded itself in Animal's hand, cursed (hall 714, 05:34Z). So the draw is BY ID, of pieces
+// picked from a fresh reading taken in the same visit (selectIds), and the keeper refuses an id a save has renumbered.
+// Then IN THE PACK, as defence in depth: the look text carries what a grade cannot -- a TIMED attribute (enchanted,
+// glowing, holy, fiery, shrouded...) inherits GetRarityCountModifier 0 (itematt.kod:587), so a dedicated long sword
+// grades `normal`. classifyPiece reads both, and anything it cannot read is `unknown`, which goes back to the chests.
 //
 // PURE except `planHall`/the CLI, which read the cache and the catalogues and write nothing.
 import { readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { gradeOf } from './m59-items.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const norm = s => String(s ?? '').toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim();
@@ -108,25 +114,46 @@ export function buyerFor(hall, { sellAt = null, merchants = [] } = {}) {
 
 // ------------------------------------------------------------------ the candidates
 /**
- * chests: [{slot, items: [{name, amount}]}]   (StorageCache.allChests rows for ONE hall)
+ * chests: [{slot, items: [{name, amount, rarity?, rarity_name?}]}]   (StorageCache.allChests rows for ONE hall, or a
+ *          fresh hall_withdraw `contents` reading)
  * sellers: Map(nameLower -> [{merchant, room}])   (m59-chest-evict sellersByItem)
  * fileOf(name) -> planner.json kod path or null;  buys(name) -> true | false | null  (the buyer's willBuy)
- * setAside: {nameLower: n} pieces of that name known to be in the chests and NOT for sale (returned magic, unknown,
- *           unsold) -- subtracted, so a later lap does not plan the same piece again.
- * Returns { sell: [{item, amount, unit}], drop: [...], excluded: {kept, not_rebuyable, not_gear, set_aside}, total }.
+ * setAside: {nameLower: n} NORMAL-graded pieces of that name known to be in the chests and NOT for sale (returned for a
+ *           look-text attribute, unknown, unsold) -- subtracted, so a later lap does not plan the same piece again.
+ * ONLY A NORMAL GRADE IS A CANDIDATE. Rows are counted per NAME AND GRADE (eight long swords of mixed grades are not one
+ * row), and every non-normal or unknown grade is `excluded.graded` with its reason: left in the chest, never drawn.
+ * Returns { sell: [{item, amount, unit}], drop: [...], excluded: {kept, not_rebuyable, not_gear, set_aside, graded}, total }.
  */
 export function selectCandidates({ chests = [], keep = DEFAULT_KEEP, sellers = new Map(), fileOf = () => null,
                                    buys = () => null, setAside = {} } = {}) {
-  const counts = new Map();
+  const counts = new Map(), graded = new Map();
   for (const ch of chests) for (const it of ch.items ?? []) {
     const k = norm(it.name);
     if (!k) continue;
+    const n = Number(it.amount) > 0 ? Number(it.amount) : 1;
+    const g = gradeOf(it);
+    if (g !== 'normal') {
+      const gk = `${k}\u0000${g}`;
+      const gp = graded.get(gk) ?? { k, name: it.name, grade: g, amount: 0 };
+      gp.amount += n;
+      graded.set(gk, gp);
+      continue;
+    }
     const prev = counts.get(k) ?? { name: it.name, amount: 0 };
-    prev.amount += Number(it.amount) > 0 ? Number(it.amount) : 1;
+    prev.amount += n;
     counts.set(k, prev);
   }
   const sell = [], drop = [];
-  const excluded = { kept: [], not_rebuyable: [], not_gear: 0, set_aside: [] };
+  const excluded = { kept: [], not_rebuyable: [], not_gear: 0, set_aside: [], graded: [] };
+  // THE GRADED PIECES, by name and grade, said out loud. Only gear is listed (a stack of herbs with no grade is not news).
+  for (const { name, grade, amount } of [...graded.values()].sort((a, b) => a.k.localeCompare(b.k) || a.grade.localeCompare(b.grade))) {
+    const kind = gearKind(fileOf(name));
+    if (!kind) { excluded.not_gear++; continue; }
+    if (isKept(name, keep)) { excluded.kept.push({ item: name, amount, kind, grade }); continue; }
+    excluded.graded.push({ item: name, amount, kind, grade,
+      why: grade === 'unknown' ? 'no grade recorded for it (a reading from before chests carried grades): left in the chest'
+                               : `graded ${grade}: left in the chest` });
+  }
   for (const [k, { name, amount }] of [...counts].sort((a, b) => a[0].localeCompare(b[0]))) {
     const kind = gearKind(fileOf(name));
     if (!kind) { excluded.not_gear++; continue; }
@@ -233,6 +260,59 @@ export function planLap({ candidates = [], room = null, reserve = { weight: 0, b
   return { take, blocked, room_left: { weight: w, bulk: b } };
 }
 
+// ------------------------------------------------------------------ which objects, by id, from a fresh reading
+/**
+ * Does a fresh hall_withdraw reading carry grades at all? A keeper from before graded chest rows answers every row with
+ * `rarity: null` (or no field); then nothing in it can be called mundane and the lap is refused.
+ */
+export const readingHasGrades = (contents = []) =>
+  contents.some(ch => (ch.items ?? []).some(r => r?.rarity !== null && r?.rarity !== undefined && Number.isFinite(Number(r.rarity))));
+
+/** A hall_withdraw `contents` reading as planHall's `chests`. */
+export const contentsAsChests = (contents = [], at = null) =>
+  contents.map(ch => ({ slot: ch.slot, items: ch.items ?? [], observed_at: at }));
+
+/**
+ * THE IDS TO DRAW: for each `take` row, that many objects of that name graded NORMAL in the FRESH reading `contents`
+ * (ids from hall_withdraw's own reply, stamped `chest_ids_as_of`; never from the cache, which keeps none). `skipIds` are
+ * objects this run already put back (a look-text attribute, unread): not asked for again while their id stands.
+ * Returns { wants: [{id, item, grade: 'normal'}], missing: [{item, wanted, found}] }.
+ */
+export function selectIds({ contents = [], take = [], skipIds = new Set() } = {}) {
+  const used = new Set(), wants = [], missing = [];
+  for (const t of take) {
+    const k = norm(t.item);
+    let n = 0;
+    for (const ch of contents) for (const r of ch.items ?? []) {
+      if (n >= t.amount) break;
+      const id = Number(r?.id);
+      if (!(id > 0) || used.has(id) || skipIds.has(id) || norm(r.name) !== k || gradeOf(r) !== 'normal') continue;
+      used.add(id); n++;
+      wants.push({ id, item: r.name, grade: 'normal' });
+    }
+    if (n < t.amount) missing.push({ item: t.item, wanted: t.amount, found: n });
+  }
+  return { wants, missing };
+}
+
+/**
+ * The rows an ID draw added: `took` is the keeper's took_ids ([{id, name, grade}], each already checked in the pack by
+ * id, name and grade). Re-read here: a row is a drawn piece only if it is in `after`, was not in `before`, and still
+ * carries the drawn name. One that is there under ANOTHER name is `mismatched` (a handle renumbered between the keeper's
+ * check and this read) and goes back unsold. Returns { rows, mismatched: [{id, name, expected}] }.
+ */
+export function idDrawnRows({ before = [], after = [], took = [] } = {}) {
+  const had = new Set(before.map(o => Number(o.id)));
+  const rows = [], mismatched = [];
+  for (const t of took) {
+    const o = after.find(x => Number(x.id) === Number(t.id));
+    if (!o || had.has(Number(o.id))) continue;
+    if (t.name && norm(o.name) !== norm(t.name)) { mismatched.push({ id: o.id, name: o.name, expected: t.name }); continue; }
+    rows.push(o);
+  }
+  return { rows, mismatched };
+}
+
 // ------------------------------------------------------------------ what this lap's draw put in the pack
 /**
  * The rows the draw ADDED, by id: in `after`, named like a drawn item, and not in `before`. Ids are handles (renumbered
@@ -307,7 +387,12 @@ export function formatPlan(plan) {
   if (plan.excluded.kept.length) out.push(`  kept: ${plan.excluded.kept.map(r => `${r.amount} ${r.item}`).join(', ')}`);
   if (plan.excluded.not_rebuyable.length) out.push(`  not rebuyable (no merchant sells it, left in the chests): ${plan.excluded.not_rebuyable.map(r => `${r.amount} ${r.item}`).join(', ')}`);
   if (plan.excluded.set_aside.length) out.push(`  set aside (known magic/unsold): ${plan.excluded.set_aside.map(r => `${r.amount} ${r.item}`).join(', ')}`);
-  out.push(`  ${plan.total} piece(s) planned; each is classified in the pack before it is sold, and magic or unread ones go back.`);
+  if (plan.excluded.graded?.length) {
+    const n = plan.excluded.graded.reduce((s, r) => s + r.amount, 0);
+    out.push(`  left in the chests by grade (${n} piece(s), never drawn): ${plan.excluded.graded.map(r => `${r.amount} ${r.item} (${r.grade})`).join(', ')}`);
+  }
+  out.push(`  ${plan.total} piece(s) planned, normal grade only; drawn by id from a fresh reading, then classified in the pack before ` +
+           'they are sold, and magic or unread ones go back.');
   return out.join('\n');
 }
 

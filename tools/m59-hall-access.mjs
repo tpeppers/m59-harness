@@ -100,19 +100,37 @@ export async function hallWithdrawRetrying(call, args, timeoutMs = 620_000, { re
  * @returns {{ ok, took, short, why, attempts, arrived: {item: n} }} — `arrived` is read off the pack,
  *          which is the evidence; `took` is the keeper's own account.
  */
-export async function withdrawWithRecovery(call, agent, wants, { retries = 1, pauseMs = 15_000, sleepFn = sleep, recovery = {} } = {}) {
+// A want that names ONE OBJECT ({id} or "id:N") rather than an item by name.
+export const isIdWant = w => (w && typeof w === 'object' && w.id != null) || /^id:\d+$/i.test(String(w ?? ''));
+const idOfWant = w => Number(typeof w === 'object' ? w.id : /^id:(\d+)$/i.exec(String(w))?.[1]);
+
+/**
+ * `wants` may mix names ({item, amount}) and objects ({id, item?, grade?}); an id want needs `chestIdsAsOf`, the
+ * `chest_ids_as_of` stamp of the hall_withdraw reply whose `contents` it was picked from (the keeper refuses it when a
+ * server save has begun since: `chest_ids_stale`, and that is NOT retried here -- the ids are void, so re-read and
+ * re-select). `arrived` counts the names; `arrived_ids` lists the requested ids that are now in the pack and were not.
+ */
+export async function withdrawWithRecovery(call, agent, wants, { retries = 1, pauseMs = 15_000, sleepFn = sleep, recovery = {}, chestIdsAsOf = null } = {}) {
   const before = await call('inventory', { agent }, 60_000).catch(() => null);
   let r = null, attempts = 0;
+  const args = { agent, wants, ...(chestIdsAsOf ? { chest_ids_as_of: chestIdsAsOf } : {}) };
   for (; attempts <= retries; attempts++) {
     if (attempts) await pauseBefore(call, agent, r?.why ?? r?.error, { pauseMs, sleepFn, recovery });
-    r = await call('hall_withdraw', { agent, wants }, 620_000).catch(e => ({ ok: false, why: e?.message ?? String(e) }));
-    if (r?.ok || !PASSAGE_REFUSAL.test(String(r?.why ?? ''))) break;
+    r = await call('hall_withdraw', args, 620_000).catch(e => ({ ok: false, why: e?.message ?? String(e) }));
+    if (r?.ok || r?.chest_ids_stale || !PASSAGE_REFUSAL.test(String(r?.why ?? ''))) break;
   }
   const after = await call('inventory', { agent }, 60_000).catch(() => null);
-  const arrived = Object.fromEntries(wants.map(w => [w.item, Math.max(0, countIn(after, w.item) - countIn(before, w.item))]));
-  const gotAny = Object.values(arrived).some(n => n > 0);
+  const named = wants.filter(w => !isIdWant(w));
+  const arrived = Object.fromEntries(named.map(w => [w.item, Math.max(0, countIn(after, w.item) - countIn(before, w.item))]));
+  const had = new Set((before?.items ?? []).map(i => Number(i.id)));
+  const now = new Set((after?.items ?? []).map(i => Number(i.id)));
+  const arrivedIds = wants.filter(isIdWant).map(idOfWant).filter(id => now.has(id) && !had.has(id));
+  const gotAny = Object.values(arrived).some(n => n > 0) || arrivedIds.length > 0;
   return { ok: !!r?.ok && gotAny, took: r?.took ?? {}, short: r?.short ?? {}, arrived,
-           why: r?.ok ? (gotAny ? null : 'the keeper reported a draw but nothing arrived in the pack') : (r?.why ?? r?.error ?? 'no reason given'),
+           ...(wants.some(isIdWant) ? { arrived_ids: arrivedIds, took_ids: r?.took_ids ?? [], short_ids: r?.short_ids ?? [],
+                                         refused_ids: r?.refused_ids ?? [], returned_ids: r?.returned_ids ?? [],
+                                         stopped: r?.stopped ?? null, chest_ids_stale: !!r?.chest_ids_stale } : {}),
+           why: r?.ok ? (gotAny ? (r?.stopped ?? null) : (r?.stopped ?? 'the keeper reported a draw but nothing arrived in the pack')) : (r?.why ?? r?.error ?? 'no reason given'),
            attempts: Math.min(attempts + 1, retries + 1) };
 }
 
