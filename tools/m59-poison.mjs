@@ -94,7 +94,12 @@ export class PoisonWatch {
     }
     const top = events[events.length - 1];
     if (top?.seq != null) this.hitSeq = top.seq;
-    return this.sample({ at: now, hp, poisoned: poisonedNow(c), addedAt: poisonAddedAt(c), client: c });
+    // WHEN the health arrived, not when we looked: the clock test is against the server's 10 s timer, and a reader that
+    // looks every 3 s would otherwise date a tick up to 3 s late. The push time when it is no later than now.
+    let pushed = null;
+    try { pushed = Number(c.statsById?.get?.('health')?.observed_at); } catch { pushed = null; }
+    const at = Number.isFinite(pushed) && pushed <= now && now - pushed < POISON_TICK_MS ? pushed : now;
+    return this.sample({ at, hp, poisoned: poisonedNow(c), addedAt: poisonAddedAt(c), client: c });
   }
 
   /** One reading. A new client (a reconnect) restarts the poison's clock: UserLogonHook creates a fresh PoisonTimer. */
