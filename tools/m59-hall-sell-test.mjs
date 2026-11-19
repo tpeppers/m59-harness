@@ -181,12 +181,14 @@ try {
   let steps;
   try { steps = await script.steps({ agents: 't10', agent: 't10', hall: 714, laps: 3, keep: '', sell_at: '', drop_unsellable: 'yes', drop_room: 0, proceeds: 'hall', max_pieces: 20, home: 0 }); }
   finally { console.log = log; }
-  eq(steps.length, 3 * 5 + 3, 'five steps a lap (walk, draw, walk, sell, drop) and three at the end');
+  eq(steps.length, 1 + 3 * 5 + 3 + 1, 'lift the orders, five steps a lap (walk, draw, walk, sell, drop), three at the end, restore the orders');
   ok(steps.filter(s => s.do === 'walk' && typeof s.to === 'function').every(s => Array.isArray(s.candidates) && s.candidates.includes(113)),
      'every run-time walk declares its candidate rooms');
-  eq(steps[0].to(), 714, 'the first lap walks to the hall');
-  eq(steps[2].to(), 113, 'then to the smith');
-  ok(steps.at(-1).always && steps.at(-2).always, 'the leftovers/proceeds and the report always run');
+  ok(steps[0].do === 'verify' && !steps[0].always, 'the first step lifts the runner\'s confinement (2026-11-19: confined runners skipped every walk)');
+  eq(steps[1].to(), 714, 'the first lap walks to the hall');
+  eq(steps[3].to(), 113, 'then to the smith');
+  ok(steps.at(-1).always && steps.at(-1).do === 'verify', 'the runner\'s orders are restored whatever happened');
+  ok(steps.at(-2).always && steps.at(-3).always, 'the leftovers/proceeds and the report always run');
   await assert.rejects(script.steps({ agents: 't10,t11', agent: 't10', hall: 714 }), /ONE runner/); n++;
   await assert.rejects(script.steps({ agents: 't10', agent: 't10', hall: 715 }), /no known nearest buyer/); n++;
 } finally { delete process.env.M59_STORAGE_DIR; rmSync(dir, { recursive: true, force: true }); }
