@@ -1042,4 +1042,40 @@ and healing occurs afterwards, not to flee through it and risk low-health travel
   walls at 140 of 150 health. `Autopilot.overmatchRested` is the one answer all three read for an
   [overmatched](m59-policy.md#overmatch-a-farmer-far-stronger-than-its-prey-fights-in-the-open-and-does-not-stop--overmatch)
   farmer; for everybody else the three numbers are still three, and the first is still the one that binds.
-  `m59-overmatch-test.mjs` (34).
+  `m59-overmatch-test.mjs` (35).
+- **A SHELTER THAT IS BEING REACHED IS NOT A SHELTER, AND PROJECTED DEATH OUTRANKS THE ONE-LOGOFF RULE -- ONCE.**
+  Waldorf (t4, 146 max health), Ancient Place 579, 2026-11-19 04:11Z, killed by a black spider. Two stacked black-spider
+  poisons (two bites, 10 a tick), the session's one logoff spent at 112 on a wall, then 112 -> 10 on that square, which
+  nothing could reach: correct. But three things were wrong, and together they killed him:
+  1. **The client forgot the second poison.** `BP_ADD_ENCHANTMENT` / `BP_REMOVE_ENCHANTMENT` name the SPELL object
+     (`user.kod` ShowAddEnchantment / ShowRemoveEnchantment send `what`), and every poisoning comes from the one Poison
+     object (`poison.kod` MakePoisoned -> StartEnchantment; strength stacks in `player.kod` AddPoison). Kept as a set,
+     the first stack to end ("The poison abates somewhat.") erased the ailment while the second still drained 5 a tick.
+     `m59-client.mjs` now COUNTS player enchantments (`count`, `at`, `last_at`); a full re-read starts from empty; and
+     the post-save re-read asks for them again, because `BP_INVALIDATE_DATA` after every save emptied the list and
+     nothing re-requested it until the next login.
+  2. **A tick was read as an attack, and the attack reading moved him.** With the icon gone, `restUntil`'s next fall
+     was "took 4 damage while resting -- something is hitting us"; the replacement decision walked him off the square
+     at 9 health into four black spiders. `m59-poison.mjs` `PoisonWatch` (on the session, sampled by the 500 ms
+     watchdog and by `restUntil`) attributes every fall: on the poison's own 10 s clock (`player.kod` PoisonTimer) and
+     no bigger than the last tick is the poison, icon or not; off the clock, bigger, or beside a hit message is an
+     attack -- poisoned or not, so a bite on a poisoned body now interrupts a rest too (it used to be excused for as
+     long as the icon showed).
+  3. **Nothing could take him out once the shelter failed.** The recovery dispatcher (`continueSurvivalDecisionStep`,
+     status `recovering`) rested him 8 s at a time and ended every pass before the ladder: 15 passes in 150 s, every
+     frame `stage: continueSurvivalDecision`, so the flee line (45%) and the doomed rung never ran -- and had they, both
+     call `playDead`, which the spent session refused. Now every pass of a poisoned recovery asks `poisonExitVerdict`
+     first (`autopilot/poison-exit.mjs`): **shelter** when nothing can reach the square (a geometric wall, nothing in
+     reach, no attack for 12 s) -- the operator's rule, unchanged, no logoff; **respond** when reached with health to
+     spare (the spot is recorded as failed and the ordinary replacement moves it; fight-back answers the biter);
+     **exit** when reached and health, or health less the poison still to come (bounded by 180 s a stack, clamped at
+     1), is at the flee line or within one blow of the strongest thing in reach (observed, or `levelBlow` from
+     `monster.kod` GetDamage): cure poison (spell), a cure poison potion (fresh LOOK, never a spoiled one), a heal, the
+     play-dead logoff **even in a spent session -- once** (`mayOverrideLogoff`, recorded as `overrides` /
+     `override_why` in the session file and journalled `LOGOFF OVERRIDE`), then out by the nearest permitted exit
+     (`leave_room`; the inn walk is `retreatToSafety`, off on this fleet). Nothing left: the dispatcher returns false
+     and the ladder runs. `playDead` asks the same verdict, so the flee line and the doomed rung see through a spent
+     session too. Never a third logoff in a session. `m59-poison-exit-test.mjs` (54).
+  Live: the journal says `POISONED AND REACHED: the shelter will not hold`, `poison exit: ...`, `LOGOFF OVERRIDE:
+  projected death outranks the one-logoff rule`; `autopilot status` carries `poison: { watch, verdict, tried }`; a
+  postmortem's `vitals.poison` the watch and the last verdict.

@@ -320,7 +320,7 @@ walking hurt characters straight past the only free healing on the road.
 ## OVERMATCH: A FARMER FAR STRONGER THAN ITS PREY FIGHTS IN THE OPEN AND DOES NOT STOP — `overmatch`
 
 ```bash
-node tools/m59-overmatch-test.mjs       # 34, offline
+node tools/m59-overmatch-test.mjs       # 35, offline
 ```
 
 Operator, 2026-11-17/18: *"Characters seem to rest far more than needed, especially when farming creatures significantly
@@ -353,6 +353,14 @@ sight, or in a room whose table can spawn one (the Mausoleum's shadow mummy; a t
 or in a room with no spawn table. It is also off while the body is not the farm's: travelling or on an errand (a
 journey keeps its own lines), a faculty leased away, recovering from a death, poisoned or diseased, or within five
 minutes of a player's blow. Every inactive verdict says why in one sentence.
+
+**A room whose spawns poison does not turn it off** (decided 2026-11-19, after Waldorf died to black spiders in the
+Ancient Place with the verdict on until the poisoning). Poison cannot kill (player.kod PoisonTimer clamps at 1); the
+verdict is already off while any poison is on the body, including a stack still ticking after its icon went; and what
+killed him -- a vanished icon reading a tick as an attack, and a reached shelter with no exit left -- is fixed where it
+arises ([the poison exit](m59-keeper.md#poison-shelter-in-place)). The verdict reports `poisoners` (the black spider,
+spider, queen spider and dusk rat that can stand in the room) and stays on. The per-strategy `overmatch: 'off'` the spider
+rooms were given as a stopgap can be removed once this is deployed.
 
 1.8 and not 2: the operator counts Kermit (143), Lew (146), Rizzo (148) and Piggy (149) as overmatched against level 75,
 which is 1.91 to 1.99.

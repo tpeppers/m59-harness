@@ -734,6 +734,7 @@ Keepers, deaths and the numbers on the board — [`docs/m59-keeper.md`](docs/m59
 - "Was the keeper up" is the wrong question: it usually was, and 81% of the time it was BLIND.
 - The keeper is a long-await machine; the 500ms watchdog is the only thing watching during one, and it interrupts rather than decides.
 - A counter that lives on the keeper is not a rate — keepers restart about once a minute.
+- Poison cannot kill, so sheltering in place is right ONLY while nothing can reach the spot. Two stacked poisons are ONE icon (the id is the spell's), and a tick is told from a bite by the poison's 10 s clock, never by the icon. Reached with no health to spare, the keeper takes the best exit — the logoff once more even in a spent healing session. Waldorf, 2026-11-19.
 - "You suddenly feel a little tougher." is the only announcement of the only thing this fleet is for.
 - A keeper earning nothing looks exactly like a healthy one; that is what `yieldCheck` is for, and it was off for a year because `purpose` was missing from a schema.
 - A character can be spoken for, and the board has to say so — ask `isTakeable(committed)`, never `!committed`.

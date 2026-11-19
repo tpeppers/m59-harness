@@ -274,6 +274,11 @@ function pilot({ hp = 80, poisoned = true, near = [], wallOk = false, attackAt =
   ok('the keeper\'s verdict at 80/146 with a spider biting: exit, override first', v.act === 'exit' && v.exits[0] === 'logoff_override',
      JSON.stringify(v.exits));
   ok('playDead is offered the override with the verdict\'s reason', /poisoned and reached/.test(reached.poisonOverrideReason() ?? ''));
+  const arrived = pilot({ name: 'arrived-k', hp: 40, near: [], wallOk: true, attackAt: Date.now() - 4000 });
+  arrived.hold = { row: 20, col: 36, takenAt: Date.now() - 1000 };
+  ok('the bites that drove a body to its wall do not condemn the wall it reached: shelter', arrived.poisonExitState().act === 'shelter');
+  arrived.s.poisonWatch.hitAt = Date.now() - 200;
+  ok('a bite taken ON the wall does: exit', arrived.poisonExitState().act === 'exit');
   const calm = pilot({ name: 'calm-k', hp: 80, poisoned: false, near: [spider], attackAt: Date.now() - 2000 });
   ok('not poisoned: the verdict is none, and nothing here changes the ordinary ladder', calm.poisonExitState().act === 'none'
      && calm.poisonOverrideReason() === null);

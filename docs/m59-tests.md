@@ -384,12 +384,13 @@ through a nested shelter order.
   ratio; `eat` keeps meals; and on a fake keeper in the cave, `fightFloor()` is 0 and `provision()` eats nothing, while
   an overmatched farmer WITHOUT the skill is not second-wind farming and has the ordinary floor (20).
 
-- `m59-overmatch-test.mjs` (34): the predicate one farmer in three is run on. **The normal form** (auto by default;
+- `m59-overmatch-test.mjs` (35): the predicate one farmer in three is run on. **The normal form** (auto by default;
   either spelling of each key) and its refusals, each with its reason: an unknown key, a ratio under 1,
   `flee_below` not under `rest_below`, `rest_below` not under `resume_above`, a fractional `wall_at_attackers`, both
   spellings of one key disagreeing; a strategy file may say mode, ratio and the crowd wall and is refused the three
   health lines. **The verdict:** Kermit (143) against Castle Victoria's level 75 is on at 1.8 and off at second wind's
-  2; the comparison is exact, never the rounded ratio (134.9 rounds to 1.8 and is under it); what can STAND in the room
+  2; a room whose spawns poison (the Ancient Place's black spiders) stays on and names its `poisoners`, and a poison still
+  ticking after its icon went keeps it off; the comparison is exact, never the rounded ratio (134.9 rounds to 1.8 and is under it); what can STAND in the room
   decides (150 against trolls and the stone troll, 150 in the Sewers with its level-105 lupogg, 40 against level 50 are
   all off; a troll walking into view turns it off); every inactive answer -- off, not farming, held, health unknown,
   recovering, poisoned, PvP, no spawn table, a table that can spawn a creature of unknown level, an unknown creature
@@ -695,6 +696,16 @@ through a nested shelter order.
 - `m59-poison-test.mjs` (11): poison is sheltered in place. A poisoned keeper takes the nearest safe spot, not one
   forward on the route; the hold is kept until the poison ends and then healed at; a poisoned relog stays out long enough
   for the old poison timer to stop.
+- `m59-poison-exit-test.mjs` (54): Waldorf, Ancient Place 579, 2026-11-19. Two black-spider bites are one ailment counted
+  twice, and the first to end leaves the body poisoned (the client used to erase it); a full re-read cannot double the
+  count and the post-save re-read asks for enchantments again. `PoisonWatch` calls every tick on the poison's 10 s clock
+  the poison -- after the icon went too -- and a fall off the clock, a bigger one or one beside a hit message an attack,
+  poisoned or not; a reconnect restarts the clock. The verdict: his real square (a wall, nothing in reach) SHELTERS with
+  no logoff; 80/146 with a spider biting and the logoff spent EXITS before the flee line, by the override logoff and then
+  the room's exit; cure, potion, heal, logoff, leave in that order; health to spare RESPONDS. Forty triggers give two
+  logoffs (the one and its one override), never a loop. `restUntil` is not interrupted by a tick after the icon went and
+  is by a bite while poisoned. The dispatcher asks the verdict before it sits a body down; `playDead` is offered the
+  override only when the verdict says exit; `takePoisonExit` tries each exit once, then hands the pass to the ladder.
 - `m59-healing-session-test.mjs` (34): one play-dead logoff per healing session. Forty doomed triggers give one
   logoff; the session closes only at full health and then allows one more; a new keeper process reads the spent logoff
   from disk; `playDead`, a broken rest and a breakout all decline inside a spent session, keep the hold and take no new

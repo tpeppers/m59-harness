@@ -80,11 +80,18 @@ export class PoisonExitPart {
     try { cure = !!affordablePoisonCure(c); } catch { cure = false; }
     try { heal = Number.isFinite(hp) && hp < max && !!affordableHeal(c, { allow }); } catch { heal = false; }
     try { potion = !!this.curePotionInPack?.(); } catch { potion = false; }
+    // ON A WALL, ONLY A BLOW TAKEN SINCE ARRIVING ON IT (or since the last relog, which drops every attacker) says the
+    // wall is being reached: the bites that drove the body here say nothing about the square it reached.
+    let lastAttackAt = safeRoom ? null : (w?.lastAttackAt() ?? null);
+    if (lastAttackAt != null && wall?.ok === true) {
+      const since = Math.max(Number(this.hold?.takenAt) || 0, Number(this.rejoinedAt) || 0);
+      if (since && lastAttackAt <= since) lastAttackAt = null;
+    }
     const verdict = poisonExitVerdict({
       hp, max, poisoned,
       projection: w?.projection({ hp, now, poisoned: iconPoisoned, stacks: poisonStacks(c) }) ?? null,
       fleeAt, inReach: near.length, wallOk: wall ? wall.ok === true : null,
-      lastAttackAt: safeRoom ? null : (w?.lastAttackAt() ?? null), now, strongestHit,
+      lastAttackAt, now, strongestHit,
       can: { cure, heal, potion },
       logoff: { available: mayLogoff(me), overrideAvailable: mayOverrideLogoff(me) },
     });
