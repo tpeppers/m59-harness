@@ -77,7 +77,7 @@ import { combatWatchStore } from './m59-combat-watch-store.mjs';
 import { renderState } from './m59-world.mjs';
 import * as skills from './m59-skills.mjs';
 import { swingPace } from './m59-fight-cadence.mjs';
-import { FLEET_KEEP } from './m59-items.mjs';
+import { FLEET_KEEP, gradedRow } from './m59-items.mjs';
 import * as party from './m59-party.mjs';
 import * as war from './m59-war.mjs';
 import { chatterFor, fleetChatter } from './m59-chatter.mjs';
@@ -3337,7 +3337,8 @@ const server = createServer(async (req, res) => {
             }
             const wants = Array.isArray(args.wants) ? args.wants : [];
             json(await autopilot.hallWithdraw(wants, { stash: Array.isArray(args.stash) ? args.stash : null,
-                                                       deposit: Array.isArray(args.deposit) ? args.deposit : null })
+                                                       deposit: Array.isArray(args.deposit) ? args.deposit : null,
+                                                       chestIdsAsOf: args.chest_ids_as_of ?? null })
               .catch(e => ({ ok: false, why: e?.message ?? String(e) })));
             return;
           }
@@ -3498,8 +3499,9 @@ const server = createServer(async (req, res) => {
             // empty list for "it would not tell us" is the one answer that must never be
             // given: the caller caches it as the chest's contents.
             json({ target, answered: !!box,
-                   items: (box?.items ?? []).map(o => ({ id: o.id, name: o.name,
-                                                         amount: o.amount || 1 })),
+                   // WITH EACH OBJECT'S GRADE (gradedRow, m59-items.mjs): a chest says which piece is
+                   // unidentified, and a reader that keeps only the name draws it.
+                   items: (box?.items ?? []).map(gradedRow),
                    said: (w?.events ?? []).filter(e => e.text).map(e => String(e.text)).slice(0, 4) });
             return;
           }

@@ -55,12 +55,14 @@ const SELLERS = new Map([['long sword', [{ merchant: 'Izzio', room: 593 }]], ['n
   ['battle bow', [{ merchant: 'Ixla', room: 2003 }]], ['leather armor', [{ merchant: 'Quintor', room: 374 }]],
   ['plate armor', [{ merchant: 'Rook', room: 154 }]], ['small round shield', [{ merchant: 'Quintor', room: 374 }]],
   ['helm', [{ merchant: 'Izzio', room: 593 }]]]);
+// Graded rows (rarity 0 = normal), as chest readings carry them since 2026-11-19.
+const N = (name, amount = 1) => ({ name, amount, rarity: 0, rarity_name: 'normal' });
 const CHESTS = [
-  { slot: 'r18c2', items: [{ name: 'long sword', amount: 1 }, { name: 'long sword', amount: 1 }, { name: 'Long Sword', amount: 0 },
-                           { name: 'emerald', amount: 400 }, { name: 'battle bow', amount: 1 }, { name: 'mystic sword', amount: 1 }] },
-  { slot: 'r18c6', items: [{ name: 'leather armor', amount: 1 }, { name: 'nerudite sword', amount: 1 }, { name: 'plate armor', amount: 1 },
-                           { name: 'robes of the disciple', amount: 1 }, { name: 'small round shield', amount: 1 }, { name: 'helm', amount: 1 },
-                           { name: 'scimitar', amount: 1 }] },
+  { slot: 'r18c2', items: [N('long sword'), N('long sword'), N('Long Sword', 0),
+                           N('emerald', 400), N('battle bow'), N('mystic sword')] },
+  { slot: 'r18c6', items: [N('leather armor'), N('nerudite sword'), N('plate armor'),
+                           N('robes of the disciple'), N('small round shield'), N('helm'),
+                           N('scimitar')] },
 ];
 const sel = H.selectCandidates({ chests: CHESTS, sellers: SELLERS, fileOf: x => FILES[x.toLowerCase()] ?? null,
                                  buys: x => x === 'nerudite sword' ? false : true });
@@ -78,6 +80,46 @@ eq(aside.sell.map(r => [r.item, r.amount]), [['long sword', 1], ['nerudite sword
 eq(aside.excluded.set_aside, [{ item: 'leather armor', amount: 1 }, { item: 'long sword', amount: 2 }], 'and the plan says so, capped at what is there');
 const none = H.selectCandidates({ chests: CHESTS, sellers: SELLERS, fileOf: x => FILES[x.toLowerCase()] ?? null, buys: () => null });
 eq(none.drop.length, 0, 'CANNOT SAY IS NOT NO: an unknown buyer rule offers everything rather than dropping it');
+
+// ---- ONLY A NORMAL GRADE IS A CANDIDATE (2026-11-19, hall 714: an unidentified short sword drawn by name wielded itself)
+const fileOf = x => FILES[x.toLowerCase()] ?? null;
+const G = (name, rarity, extra = {}) => ({ name, amount: 1, ...(rarity === undefined ? {} : { rarity }), ...extra });
+const MIXED = [{ slot: 'r18c2', items: [G('long sword', 0), G('long sword', 100), G('long sword', 1), G('long sword', 2),
+                                        G('long sword', 4), G('long sword', 200), G('long sword', undefined), G('long sword', null),
+                                        G('leather armor', undefined, { rarity_name: 'uncommon' }), G('leather armor', 0)] }];
+const mx = H.selectCandidates({ chests: MIXED, sellers: SELLERS, fileOf, buys: () => true });
+eq(mx.sell.map(r => [r.item, r.amount]), [['leather armor', 1], ['long sword', 1]],
+   'eight long swords of mixed grades: ONE is a candidate (the normal one); a stack of one name does not collapse its grades');
+const byGrade = Object.fromEntries(mx.excluded.graded.map(r => [`${r.item}/${r.grade}`, r.amount]));
+eq(byGrade, { 'leather armor/uncommon': 1, 'long sword/cursed': 1, 'long sword/legendary': 1, 'long sword/rare': 1,
+              'long sword/uncommon': 1, 'long sword/unidentified': 1, 'long sword/unknown': 2 },
+   'every non-normal grade, and UNKNOWN (no grade recorded, or null), is excluded and counted per name and grade');
+ok(mx.excluded.graded.every(r => /left in the chest/.test(r.why)), 'each says it is left in the chest');
+ok(/graded unidentified: left in the chest/.test(mx.excluded.graded.find(r => r.grade === 'unidentified').why), 'in those words');
+ok(/no grade recorded/.test(mx.excluded.graded.find(r => r.grade === 'unknown').why), 'unknown says why');
+const oldCache = H.selectCandidates({ chests: [{ slot: 'r18c2', items: [{ name: 'long sword', amount: 1 }, { name: 'leather armor', amount: 1 }] }],
+                                      sellers: SELLERS, fileOf });
+eq(oldCache.total, 0, 'a cache reading from before chest rows carried grades plans NOTHING: unknown is never normal');
+const kg = H.selectCandidates({ chests: [{ slot: 'x', items: [G('battle bow', 100)] }], sellers: SELLERS, fileOf });
+ok(kg.excluded.kept.some(r => r.item === 'battle bow') && !kg.excluded.graded.length, 'a kept name stays "kept" whatever its grade');
+const fp = H.formatPlan({ hall: 714, chests: 1, oldest_reading: null, buyer: { merchant: 'X', room: 1, source: 's' }, keep: [], ...mx });
+ok(/left in the chests by grade \(8 piece\(s\), never drawn\).*1 long sword \(unidentified\)/.test(fp), 'the printed plan counts them', fp);
+
+// ---- the ids to draw, from a FRESH reading (ids are handles: never from the cache, never across a save)
+const FRESH = [{ slot: 'r18c2', items: [{ id: 51, name: 'short sword', amount: 1, rarity: 100 }, { id: 52, name: 'short sword', amount: 1, rarity: 0 },
+                                        { id: 53, name: 'short sword', amount: 1, rarity: 0 }, { id: 54, name: 'short sword', amount: 1 }] }];
+let si = H.selectIds({ contents: FRESH, take: [{ item: 'short sword', amount: 3 }] });
+eq(si.wants, [{ id: 52, item: 'short sword', grade: 'normal' }, { id: 53, item: 'short sword', grade: 'normal' }],
+   'only normal-graded ids, each carrying the name and grade the keeper must find');
+eq(si.missing, [{ item: 'short sword', wanted: 3, found: 2 }], 'and says the plan wanted more than the reading has');
+si = H.selectIds({ contents: FRESH, take: [{ item: 'short sword', amount: 3 }], skipIds: new Set([52]) });
+eq(si.wants.map(w => w.id), [53], 'a piece this run put back is not asked for again while its id stands');
+ok(H.readingHasGrades(FRESH) && !H.readingHasGrades([{ slot: 'x', items: [{ id: 1, name: 'long sword', rarity: null }] }]),
+   'a reading with no grade at all is recognised (and the errand refuses the lap)');
+const idr = H.idDrawnRows({ before: [{ id: 900, name: 'hammer' }], after: [{ id: 900, name: 'hammer' }, { id: 52, name: 'short sword' }, { id: 53, name: 'scimitar' }],
+                            took: [{ id: 52, name: 'short sword' }, { id: 53, name: 'short sword' }, { id: 900, name: 'hammer' }] });
+eq(idr.rows.map(r => r.id), [52], 'the drawn rows are the took_ids that arrived under their own name');
+eq(idr.mismatched, [{ id: 53, name: 'scimitar', expected: 'short sword' }], 'one under another name is a renumbered handle, sent back');
 
 // ---- the buyer
 eq(H.buyerFor(714).merchant, "Fehr'loi Qan", '714 sells to the Royal Blacksmith');
@@ -170,12 +212,15 @@ try {
   process.env.M59_STORAGE_DIR = dir;
   const { StorageCache } = await import('./m59-storage.mjs');
   const store = new StorageCache({ dir });
-  store.writeChest('r18c2', { room: 714, items: [{ id: 1, name: 'long sword', amount: 1 }, { id: 2, name: 'battle bow', amount: 1 },
-                                                 { id: 3, name: 'mystic sword', amount: 1 }, { id: 4, name: 'leather armor', amount: 1 }], by: 'test' });
+  store.writeChest('r18c2', { room: 714, items: [{ id: 1, name: 'long sword', amount: 1, rarity: 0 }, { id: 2, name: 'battle bow', amount: 1, rarity: 0 },
+                                                 { id: 3, name: 'mystic sword', amount: 1, rarity: 0 }, { id: 4, name: 'leather armor', amount: 1, rarity: 0 },
+                                                 { id: 5, name: 'long sword', amount: 1, rarity: 100 }], by: 'test' });
   const plan = H.planHall({ hall: 714, inputs: await H.hallInputs({ hall: 714 }) });
   ok(plan.sell.some(r => r.item === 'long sword') && plan.sell.some(r => r.item === 'leather armor'), 'the real catalogues: long sword and leather armour are sold at 714');
   ok(plan.excluded.kept.some(r => r.item === 'battle bow'), 'the battle bow is kept');
   ok(plan.excluded.not_rebuyable.some(r => r.item === 'mystic sword'), 'nobody sells a mystic sword: not a candidate');
+  ok(plan.sell.find(r => r.item === 'long sword')?.amount === 1 && plan.excluded.graded.some(r => r.item === 'long sword' && r.grade === 'unidentified'),
+     'through the real cache: the unidentified long sword is left in the chest, the plain one planned');
   const { script } = await import('./fleetscripts/hall-sell-mundane.mjs');
   const log = console.log; console.log = () => {};
   let steps;
@@ -189,6 +234,61 @@ try {
   eq(steps[3].to(), 113, 'then to the smith');
   ok(steps.at(-1).always && steps.at(-1).do === 'verify', 'the runner\'s orders are restored whatever happened');
   ok(steps.at(-2).always && steps.at(-3).always, 'the leftovers/proceeds and the report always run');
+  // ---- THE INCIDENT, DRIVEN: a chest with a plain and an unidentified short sword. A fake broker answers the lap's calls;
+  // the only thing ever asked of hall_withdraw is the plain one, by id, with the read's stamp.
+  const drive = async ({ rows, staleFirst = false } = {}) => {
+    let chest = rows.map(r => ({ ...r })), saves = 3, staleLeft = staleFirst ? 1 : 0;
+    const pack = [{ id: 900, name: 'hammer', amount: 0, rarity: 0 }], draws = [];
+    const call = async (tool, a) => {
+      if (tool === 'autopilot') return a.action === 'status' ? { mode: 'farm', policy: { confineRooms: [], townTrips: true } } : { ok: true };
+      if (tool === 'inventory') return { items: pack.map(x => ({ ...x })) };
+      if (tool === 'equipment') return { equipped: [{ id: 900, name: 'hammer' }] };
+      if (tool === 'fleet') return { fleet: [{ agent: 't10', pack: { max: 3000, weight: 200, bulk: 200 } }] };
+      if (tool === 'look_at') return { id: a.target, description: 'A short, sharp sword.' };
+      if (tool === 'hall_withdraw') {
+        const wants = a.wants ?? [];
+        if (!wants.length && !(a.deposit ?? []).length)
+          return { ok: true, contents: [{ slot: 'r18c2', chest_id: 2578, items: chest.map(x => ({ ...x })) }],
+                   chest_ids_as_of: { read_at: 1, saves_seen: saves, saving: false } };
+        draws.push(a);
+        if (staleLeft-- > 0) {        // a save renumbered everything between the read and the draw
+          saves++; chest = chest.map(x => ({ ...x, id: x.id + 100 }));
+          return { ok: true, took_ids: [], short_ids: wants.map(w => ({ id: w.id })), chest_ids_stale: true, stopped: 'a server save has begun since the chest read' };
+        }
+        const took_ids = [];
+        for (const w of wants) {
+          const i = chest.findIndex(x => x.id === w.id && (w.grade == null || (x.rarity === 0 ? 'normal' : 'other') === w.grade));
+          if (i >= 0) { const [o] = chest.splice(i, 1); pack.push(o); took_ids.push({ id: o.id, name: o.name, grade: 'normal' }); }
+        }
+        return { ok: true, took_ids, short_ids: [], refused_ids: [], returned_ids: [], stopped: null };
+      }
+      return { ok: true };
+    };
+    const log2 = console.log; const lines = []; console.log = (...x) => lines.push(x.join(' '));
+    let res;
+    try {
+      const st = await script.steps({ agents: 't10', agent: 't10', hall: 714, laps: 1, keep: '', sell_at: '', drop_unsellable: 'yes', drop_room: 0, proceeds: 'hall', max_pieces: 20, home: 0 });
+      await st[0].fn({ call, agent: 't10' });
+      res = await st[2].fn({ call, agent: 't10' });
+    } finally { console.log = log2; }
+    return { draws, pack, res, lines };
+  };
+  const INC = [{ id: 51, name: 'short sword', amount: 1, rarity: 100, rarity_name: 'unidentified' },
+               { id: 52, name: 'short sword', amount: 1, rarity: 0, rarity_name: 'normal' }];
+  let dv = await drive({ rows: INC });
+  ok(dv.draws.length === 1, 'one draw', JSON.stringify(dv.draws));
+  eq(dv.draws[0]?.wants, [{ id: 52, item: 'short sword', grade: 'normal' }], 'THE INCIDENT: only the plain short sword is asked for, by id, never by name');
+  ok(dv.draws.every(d => (d.wants ?? []).every(w => w.id != null)), 'no want by name in any draw');
+  ok(dv.draws[0]?.chest_ids_as_of?.saves_seen === 3, 'with the stamp of the reading the id came from');
+  ok(dv.pack.some(x => x.id === 52) && !dv.pack.some(x => x.id === 51), 'the unidentified one never leaves the chest');
+  ok(dv.lines.some(l => /left in the chests by grade: 1 short sword \(unidentified\)/.test(l)), 'and the lap says it left it', dv.lines.join('\n'));
+  dv = await drive({ rows: INC, staleFirst: true });
+  ok(dv.draws.length === 2 && dv.draws[1].wants?.[0]?.id === 152 && dv.draws[1].chest_ids_as_of?.saves_seen === 4,
+     'a save between read and draw: the chest is re-read and the piece re-selected by name and grade (new id, new stamp)', JSON.stringify(dv.draws));
+  ok(!dv.draws.some(d => (d.wants ?? []).some(w => w.id === 51 || w.id === 151)), 'and the unidentified one is still never asked for');
+  dv = await drive({ rows: INC.map(({ rarity, rarity_name, ...r }) => r) });
+  ok(dv.draws.length === 0 && dv.res?.ok === false && /no grades/.test(dv.res.why), 'a fresh reading with no grades is refused: nothing drawn by name', JSON.stringify(dv.res));
+
   await assert.rejects(script.steps({ agents: 't10,t11', agent: 't10', hall: 714 }), /ONE runner/); n++;
   await assert.rejects(script.steps({ agents: 't10', agent: 't10', hall: 715 }), /no known nearest buyer/); n++;
 } finally { delete process.env.M59_STORAGE_DIR; rmSync(dir, { recursive: true, force: true }); }

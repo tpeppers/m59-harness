@@ -181,7 +181,7 @@ import { guardToolCall, hostNameIndex, withoutHosts, alliedCharacters,
          isMenagerieCaller } from './m59-menagerie-guard.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
 import { loadoutFor, protectedNames, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
-import { resolveItemNames, resolveItemName, weighItem, rarityName, isUnidentified, isCursed } from './m59-items.mjs';
+import { resolveItemNames, resolveItemName, weighItem, rarityName, isUnidentified, isCursed, gradedRow } from './m59-items.mjs';
 import { normalizeOverfarm } from './m59-overfarm.mjs';
 import { hometownFrom } from './m59-describe.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
@@ -16489,11 +16489,24 @@ const TOOLS = [
       'stack is fine, e.g. 1,000 shillings out of 75,000 — through the counted container get, ' +
       'splitting across stacks and chests if one is short. What arrived ' +
       'is read off the pack, never assumed from the get. Last, every chest in the hall is read back and recorded, ' +
-      'so `wants: []` with no stash or deposit is a pure read-and-record of every chest in the hall. Returns {took, short, recorded}.',
+      'so `wants: []` with no stash or deposit is a pure read-and-record of every chest in the hall. Returns {took, short, recorded, ' +
+      'contents, chest_ids_as_of}: `contents` is that reading, per chest, each object with its id and its GRADE (rarity, rarity_name). ' +
+      'GRADES: a by-name want of a weapon or a wearable takes only its class\'s plain grade (normal; rare for the nine ' +
+      'class-graded items such as a nerudite bow) and never an unidentified or cursed one, unless the want says `magic: true` ' +
+      'or `grades: [...]` (a courier fetching a known magic item). BY ID: a want {id, item?, grade?} takes exactly that object, ' +
+      'and needs `chest_ids_as_of` from the reply whose `contents` it was chosen from: a server save since then renumbers every ' +
+      'id, so the draw is refused (`chest_ids_stale`) and the caller re-reads and re-selects by name and grade. The piece that ' +
+      'arrives is checked by id, name and grade in the pack; anything else is put back and the draw stops (`stopped`). ' +
+      'Returns took_ids / short_ids / refused_ids / returned_ids for id wants.',
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
       wants: { type: 'array', items: { type: 'object', properties: {
-        item: { type: 'string' }, amount: { type: 'number' } }, required: ['item', 'amount'] } },
+        item: { type: 'string' }, amount: { type: 'number' },
+        id: { type: 'number', description: 'one object, by its id in this visit\'s `contents` (needs chest_ids_as_of)' },
+        grade: { type: 'string', description: 'with id: the grade it must have (normal, uncommon, rare, legendary, unidentified)' },
+        grades: { type: 'array', items: { type: 'string' }, description: 'by name: the grades that may be taken ("any" = all but cursed)' },
+        magic: { type: 'boolean', description: 'by name: a known magic item is wanted; any grade but cursed' } } } },
+      chest_ids_as_of: { type: 'object', description: 'the `chest_ids_as_of` of the hall_withdraw reply the id wants were chosen from' },
       stash: { type: 'array', items: { type: 'string' },
         description: 'KEEP list (substrings). Before taking anything, put every pack item that matches none of these and is not worn or wielded into a chest, to make room.' },
       deposit: { type: 'array', items: { type: 'string' },
@@ -16502,7 +16515,8 @@ const TOOLS = [
     run: async (a) => {
       const s = session(a.agent);
       if (!(s instanceof KeeperProxy)) return { ok: false, why: 'hall_withdraw needs a keeper-backed character' };
-      return keeperAction(s.name, s._index, 'hall_withdraw', { wants: a.wants ?? [], stash: a.stash ?? null, deposit: a.deposit ?? null }, { timeoutMs: 600_000 });
+      return keeperAction(s.name, s._index, 'hall_withdraw', { wants: a.wants ?? [], stash: a.stash ?? null, deposit: a.deposit ?? null,
+        chest_ids_as_of: a.chest_ids_as_of ?? null }, { timeoutMs: 600_000 });
     },
   },
   {
@@ -17733,8 +17747,12 @@ const TOOLS = [
       if (!box) return { ok: false, target,
         said: reply.events?.filter(e => e.text).map(e => String(e.text)).slice(0, 4),
         reason: 'no contents came back — a container answers this, and anything else says why out loud' };
-      const items = (box.items || []).map(o => ({ id: o.id, name: o.name,
-        amount: o.amount || 1 }));
+      // WITH EACH OBJECT'S GRADE, as the pack's rows have it (rarity, rarity_name, icon_rsc, flags,
+      // identified_as): the chest says which short sword is the unidentified one, and a reader that
+      // keeps only the name draws it (hall 714, 2026-11-19; gradedRow in m59-items.mjs). A keeper too
+      // old to send the grade gives rows with `rarity: null`, which every planner reads as unknown.
+      const items = (box.items || []).map(o => gradedRow({ ...o,
+        identified_as: identifiedAs({ name: o.name, icon_rsc: o.icon_rsc ?? null }) ?? undefined }));
       const out = { ok: true, target, items, count: items.length };
       if (a.record) {
         // THE NAME COMES OFF THE OBJECT WE JUST LOOKED INSIDE. A chest is GETTABLE_NO and

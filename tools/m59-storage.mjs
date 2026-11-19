@@ -27,7 +27,7 @@
 // the server, so the only record of them is what was seen the last time somebody looked.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { weighPack } from './m59-items.mjs';
+import { weighPack, rarityName } from './m59-items.mjs';
 import { chestDiff } from './m59-chest-eviction.mjs';
 import { VAULTS } from './m59-vaults.mjs';
 
@@ -296,6 +296,21 @@ export function parseChestKey(key) {
 // tell at a glance which hall a key belongs to.
 export const BOOKMAKERS_CHEST_SQUARES = Object.freeze(['r18c2', 'r18c6', 'r20c4']);
 
+/**
+ * One cached chest row: `name` and `amount` exactly as every reader has always had them, and the
+ * object's grade when the reading carried one (`rarity` a number, `rarity_name`, `icon_rsc`). A grade
+ * that did not come back is LEFT OUT rather than written as 0 -- absent reads as unknown.
+ */
+export function chestCacheRow(i = {}) {
+  const row = { name: String(i.name ?? ''), amount: Number(i.amount) || 1 };
+  const r = i.rarity === null || i.rarity === undefined || i.rarity === '' ? NaN : Number(i.rarity);
+  const rn = rarityName(Number.isFinite(r) ? r : null) ?? (typeof i.rarity_name === 'string' ? i.rarity_name : null);
+  if (Number.isFinite(r)) row.rarity = r;
+  if (rn) row.rarity_name = rn;
+  if (i.icon_rsc != null) row.icon_rsc = i.icon_rsc;
+  return row;
+}
+
 export class StorageCache {
   constructor({ dir = STORAGE_DIR, now = () => Date.now() } = {}) {
     this.dir = resolve(dir);
@@ -366,6 +381,14 @@ export class StorageCache {
   // than one guild in the roster a square names a chest in each hall, and a reading with no hall is
   // a reading that will be filed under the wrong one. The old fallback to the room's object id (2569
   // for 714 on prod) is refused rather than guessed at.
+  // ONE ROW PER OBJECT, WITH ITS GRADE. The reading is the container's own list, one row per object
+  // (a stack of reagents is one object; eight long swords are eight), and nothing here aggregates it,
+  // so a plain long sword and an unidentified one beside it stay two rows. Each row keeps `name` and
+  // `amount` exactly as before, plus `rarity` / `rarity_name` / `icon_rsc` when the reading carried
+  // them (chestCacheRow). A row WITHOUT a grade -- every reading taken before 2026-11-19 -- is grade
+  // UNKNOWN to every planner (gradeOf in m59-items.mjs), never normal. Object ids are NOT stored per
+  // row: they are handles renumbered by every save, and a cached id is a reference to nothing; the
+  // chest's own `object_id` is kept only as "the id it had at observed_at".
   writeChest(where, { object_id = null, room = null, items = [], by = null, at = null } = {}) {
     const key = typeof where === 'string' ? where : chestKey(where);
     const at2 = parseChestKey(key);
@@ -378,7 +401,7 @@ export class StorageCache {
     const prev = readJson(this.chestPath(key, room));
     const next = writeJson(this.chestPath(key, room), { slot: key, row: at2.row, col: at2.col,
       object_id, room,
-      items: items.map(i => ({ name: String(i.name ?? ''), amount: Number(i.amount) || 1 })),
+      items: items.map(chestCacheRow),
       opened_by: by ?? null, observed_at: Number(at) || this.now() });
     // THE READING OVERWRITES, SO THE DIFFERENCE IS RECORDED HERE OR NOWHERE. What left the chest
     // between two readings is the only history a chest can have (see m59-chest-eviction.mjs), and

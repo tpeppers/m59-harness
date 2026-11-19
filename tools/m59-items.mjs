@@ -836,6 +836,90 @@ export const isUnidentified = (o) => Number(o?.rarity) === ITEM_RARITY.UNIDENTIF
 // right direction for both. `rarityName` is the one that had to be fixed.
 export const isCursed = (o) => Number(o?.rarity) === ITEM_RARITY.CURSED;
 
+// ---------------------------------------------------------------- a chest row carries its grade
+//
+// A CONTAINER'S CONTENTS CARRY THE GRADE TOO, AND READING ONLY THE NAME IS HOW A CURSED WEAPON GETS
+// DRAWN. BP_OBJECT_CONTENTS sends every object through the same ExtractObject as the pack does
+// (m59-parse.mjs extractObject: icon, name, flags, rarity), and the client, the broker's `container`
+// tool, the keeper's `contents` op and the chest cache all kept {id, name, amount} and threw the rest
+// away. 2026-11-19 05:34Z, hall 714: hall-sell-mundane asked for "short sword" by name, the chest
+// handed over an UNIDENTIFIED one (grade 100), it wielded itself in place of Animal's hammer
+// (item.kod:508-514 posts TryUseItem for any cursed item entering a user's pack) and would not come
+// off. Twelve of the other fourteen pieces drawn were graded unidentified or uncommon: the chest had
+// said so on the wire, and nothing listened.
+//
+// `gradedRow` is the ONE shape every reader of a container gets: the old three fields exactly as
+// before (amount defaults to 1, which is what every caller already did), plus the grade. A grade that
+// did not come back is `null`, never 0: NULL IS NOT ZERO (rarityName above), and a row with no grade
+// is a row nobody can call mundane.
+export function gradedRow(o = {}) {
+  const r = o.rarity === undefined || o.rarity === null || o.rarity === '' ? null : Number(o.rarity);
+  const rarity = Number.isFinite(r) ? r : null;
+  return {
+    id: o.id, name: o.name, amount: Number(o.amount) || 1,
+    ...(o.tag != null ? { tag: o.tag } : {}),
+    rarity, rarity_name: rarityName(rarity),
+    icon_rsc: o.icon_rsc ?? o.iconRsc ?? null,
+    flags: o.flags ?? null,
+    ...(o.identified_as ? { identified_as: o.identified_as } : {}),
+    ...(rarity === ITEM_RARITY.UNIDENTIFIED ? { unidentified: true } : {}),
+    ...(rarity === ITEM_RARITY.CURSED ? { cursed: true } : {}),
+  };
+}
+
+/** A row's grade NAME, from `rarity` or `rarity_name`; 'unknown' when neither was recorded (an old cache row). */
+export function gradeOf(row) {
+  const byNum = rarityName(row?.rarity);
+  if (byNum) return byNum;
+  const byName = String(row?.rarity_name ?? '').toLowerCase().trim();
+  return ['normal', 'uncommon', 'rare', 'legendary', 'unidentified', 'cursed'].includes(byName) ? byName : 'unknown';
+}
+
+// THE CLASSES WHOSE PLAIN GRADE IS NOT NORMAL. GetRarity (item.kod:738-756) adds the class's own
+// viRarity to the attribute count, and nine classes declare ITEM_RARITY_GRADE_RARE themselves, so a
+// plain one with no attribute at all grades `rare`: goldswrd.kod:54, magicbow.kod:32, nerubow.kod:53,
+// helmet/helm.kod:52 ("magic spirit helmet") and the five school charms (necklace/*charm.kod). A
+// by-name draw of "nerudite bow" is asking for a rare-graded object, not a magic one. (The grade cannot
+// tell a plain one from one with a single attribute -- count 2 and 3 are both rare -- so for these
+// nine a by-name draw takes what the class's own grade allows and nothing above it.)
+export const CLASS_GRADE = Object.freeze({
+  'gold sword': 'rare', 'magic bow': 'rare', 'nerudite bow': 'rare', 'magic spirit helmet': 'rare',
+  'brass medallion': 'rare', 'steel torc': 'rare', 'monocle': 'rare', 'feathered choker': 'rare',
+  'diamond pendant': 'rare',
+});
+const lcName = s => String(s ?? '').toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim();
+export const plainGradeOf = (name) => CLASS_GRADE[lcName(name)] ?? 'normal';
+
+/**
+ * MAY A BY-NAME DRAW TAKE THIS OBJECT? `row` is a container row (gradedRow), `want` the draw's want
+ * ({item, magic?, grades?}), `gear` whether the item is a weapon or a wearable (a ring included) --
+ * the caller's answer, from m59-buyers categoriesOf. Returns { ok, why }.
+ *
+ *   cursed (200)       never, whatever the want says: it wields itself in the pack and cannot be put down.
+ *   want.grades        an explicit list of grade names ('any' = everything but cursed): exactly those.
+ *   want.magic: true   a caller fetching a known magic item: any grade but cursed.
+ *   gear (default)     only the class's own plain grade (normal; rare for the nine CLASS_GRADE names).
+ *                      Unidentified (100) is refused first: an unread attribute may be the curse.
+ *                      A row with NO grade is refused too -- an unread item is not a mundane item.
+ *   anything else      as before (a reagent, a shilling, a wand by name): taken.
+ */
+export function drawGradeAllows(row, want = {}, { gear = false } = {}) {
+  const g = gradeOf(row);
+  if (g === 'cursed') return { ok: false, why: 'graded cursed: it would wield itself and never come off' };
+  const list = want?.grades == null ? null
+    : (Array.isArray(want.grades) ? want.grades : String(want.grades).split(',')).map(x => lcName(x)).filter(Boolean);
+  if (list?.length) {
+    if (list.includes('any') || list.includes(g)) return { ok: true, why: `graded ${g}, asked for ${list.join('/')}` };
+    return { ok: false, why: `graded ${g}; the draw asked for ${list.join('/')} only` };
+  }
+  if (want?.magic === true) return { ok: true, why: `graded ${g}; the draw asked for a magic item` };
+  if (!gear) return { ok: true, why: `graded ${g}; not a weapon or wearable` };
+  if (g === 'unknown') return { ok: false, why: 'no grade came back for it: an unread item is not a mundane item' };
+  const plain = plainGradeOf(row?.name ?? want?.item);
+  if (g === plain) return { ok: true, why: `graded ${g}, the class's plain grade` };
+  return { ok: false, why: `graded ${g}: left in the chest (a by-name draw of gear takes ${plain} only; pass magic: true for a magic item)` };
+}
+
 // FOOD ABOVE A RESERVE, which is the only part of a larder that may be dropped.
 //
 // Pure, and separated from the keeper's `makeRoom` for the usual reason: the decision is
