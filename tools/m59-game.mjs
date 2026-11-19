@@ -5514,7 +5514,9 @@ class Session {
     const shedSkipped = [];
     // THE WEAPON RESERVE, ASKED ONCE PER SWEEP (m59-weapon-reserve.mjs; the keeper's answer, Autopilot.weaponReserveNow).
     // Never for an explicit id request: a caller naming the object it wants is choosing to take it.
-    const weaponReserve = (!ids?.length || !explicitIdsOverride) ? this.weaponReserveState() : null;
+    // (Read off the field, not through a method: this function is also called on bare session-shaped objects.)
+    let weaponReserve = null;
+    if (!ids?.length || !explicitIdsOverride) { try { weaponReserve = this._weaponReserve?.() ?? null; } catch { weaponReserve = null; } }
     const unwieldableSkipped = [];
     const replacementIds = new Set();   // the wieldable weapon an empty hand takes past the spare cap
     if (!ids?.length || !explicitIdsOverride) {

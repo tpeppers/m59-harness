@@ -539,7 +539,7 @@ console.log('\nTHE POLICY KEY, PLUMBED LIKE ITS NEIGHBOURS');
   ok('autopilot status publishes weapon_reserve', /weapon_reserve: \(\(\) => \{ try \{ return this\.weaponReserveStatus/.test(st));
   const game = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   ok('the reserve is asked inside lootFloor, the one place a floor drop becomes a carried item, and never for an explicit id',
-     /const weaponReserve = \(!ids\?\.length \|\| !explicitIdsOverride\) \? this\.weaponReserveState\(\) : null;/.test(game));
+     game.includes('if (!ids?.length || !explicitIdsOverride) { try { weaponReserve = this._weaponReserve?.() ?? null; }'));
 }
 
 rmSync(scratch, { recursive: true, force: true });
