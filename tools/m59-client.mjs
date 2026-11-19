@@ -2339,9 +2339,16 @@ export class M59Client {
         // read `o.name` as undefined while `o.amount || 1` quietly produced a 1. A reading
         // of two items with no names is indistinguishable from a container holding two
         // things nobody can identify, which is how the guild chests mapped as empty.
+        // AND EACH OBJECT'S GRADE. The server sends it for every object in the box exactly as it does
+        // for the pack (extractObject: rarity, icon, flags), and dropping it here is how hall-sell
+        // drew an unidentified short sword by name and it wielded itself (2026-11-19, hall 714; see
+        // gradedRow in m59-items.mjs). `amount` stays undefined for an ordinary object: the draw's
+        // dropSpec reads "has an amount" as "is a NumberItem".
         this.emit('container', { id: res.containerId,
           items: res.objects.map(o => ({ id: o.id, name: this.rsc.get(o.nameRsc),
-                                         amount: o.amount || undefined })),
+                                         amount: o.amount || undefined, tag: o.tag ?? null,
+                                         rarity: o.rarity ?? null, icon_rsc: o.iconRsc ?? null,
+                                         flags: o.flags ?? null })),
           described: res.objects.map(o => describeObject(o, this.lookup)) });
         break;
       }

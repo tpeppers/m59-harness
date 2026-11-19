@@ -8,9 +8,9 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 11 methods: hallPostTo, reachHallChests, recordHallRun, sayHallPassword, refreshChestCache,
+// 12 methods: hallPostTo, reachHallChests, recordHallRun, sayHallPassword, refreshChestCache,
 //   refreshVaultCache, vaultRunIfPassing, withdrawFromStockpile, takeFromChest, hallWithdraw,
-//   hallMove
+//   hallDrawIds, hallMove
 import { isVaultmanName, vaultsSaid } from '../m59-vaults.mjs';
 import { guildPassage, hallPost, SURVEYED_HALLS, chestSectionOf } from '../m59-guild-passage.mjs';
 import { SAID_NOTE, hallPassword, inFoyer, foyerFor } from '../m59-hallsecret.mjs';
@@ -20,6 +20,8 @@ import { usesOceanCourier } from '../m59-farm-town.mjs';
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { affordances, dropSpec as dropSpecFor } from '../m59-parse.mjs';
+import { gradedRow, gradeOf, drawGradeAllows } from '../m59-items.mjs';
+import { categoriesOf } from '../m59-buyers.mjs';
 import * as skills from '../m59-skills.mjs';
 import { StockpileBook, canEnterHall, savingsOf, sourcePlan } from '../m59-stockpile.mjs';
 import { BOOKMAKERS_HALL_ROOM, STOCKPILE_GET_REACH, STOCKPILE_WALK_WITHIN, StorageCache, chestKey,
@@ -27,6 +29,24 @@ import { BOOKMAKERS_HALL_ROOM, STOCKPILE_GET_REACH, STOCKPILE_WALK_WITHIN, Stora
 import { detailSettings, saveVaultSnapshot } from '../m59-strategy-stats.mjs';
 import { BARLOQUE_VAULT, GUILD_CHEST_SECTION, TITHE_FLEET } from '../m59-autopilot.mjs';
 import { dispositionBlock, dispositionNames, inspectDispositionQuality } from '../m59-loot-policy-runtime.mjs';
+
+// IS THIS NAME A WEAPON OR SOMETHING WORN? The by-name draw's grade rule (drawGradeAllows) applies to
+// these: the kod buying categories (m59-buyers categoriesOf: Weapon; Armor, Helmet, Gauntlet, Necklace,
+// Shield, Pants), and a ring, which IsObjectWearable leaves to IsObjectGem but which is worn, graded and
+// cursed like any armour.
+export const isGearName = (name) => {
+  const { categories } = categoriesOf(name);
+  return categories.has('weapon') || categories.has('wearable') || /\bring\b/i.test(String(name ?? ''));
+};
+
+// AN ID FROM A CHEST READ IS GOOD UNTIL THE NEXT SERVER SAVE AND NOT A MOMENT LONGER. Every save
+// renumbers every object (CLAUDE.md "AN OBJECT ID IS A TEMPORARY HANDLE"); the client counts saves
+// (`saveCount`, ended ones) and knows when one is running (`savePausedAt`). This is the stamp a read
+// carries and the test an id draw makes against it.
+export const idsStamp = (c, at = Date.now()) => ({ read_at: at, saves_seen: Number(c?.saveCount ?? 0) || 0,
+                                                   saving: c?.savePausedAt != null });
+export const idsStillCurrent = (c, stamp) => !!stamp && !(c?.savePausedAt != null) && !stamp.saving
+  && Number(c?.saveCount ?? 0) === Number(stamp.saves_seen);
 
 export class HallPart {
   // @part 1
@@ -256,7 +276,9 @@ export class HallPart {
                'recording an empty one, because "it would not say" is not "it is empty"' });
         return null;
       }
-      const items = (box.items ?? []).map(o => ({ id: o.id, name: o.name, amount: o.amount || 1 }));
+      // WITH EACH OBJECT'S GRADE (gradedRow, m59-items.mjs): the cache keeps it per row, so a
+      // planner can tell the plain short sword from the unidentified one beside it.
+      const items = (box.items ?? []).map(gradedRow);
       // FILED UNDER THE SQUARE WE JUST READ IT AT, never under a number decided elsewhere.
       // AND UNDER THE HALL WE ARE STANDING IN -- an ally's, possibly -- by its room NUMBER. The
       // `?? c.room?.id` that stood here filed readings under an object handle (2569), which names
@@ -498,7 +520,10 @@ export class HallPart {
       const reply = await c.waitFor({ since: before0, kinds: ['container', 'message'],
                                       timeoutMs: 5000 }).catch(() => null);
       const box = (reply?.events ?? []).find(e => e.kind === 'container');
-      const inside = (box?.items ?? []).filter(o => norm(o.name) === norm(want.item));
+      // The stockpile is reagents, but a want is a name: the same grade rule as any by-name draw.
+      const gearWant = isGearName(want.item);
+      const inside = (box?.items ?? []).filter(o => norm(o.name) === norm(want.item)
+        && drawGradeAllows(gradedRow(o), want, { gear: gearWant }).ok);
       if (!box) { misses.push(`${want.slot} did not answer a contents request`); continue; }
       if (!inside.length) { misses.push(`${want.slot} holds no ${want.item} (the cache said it did)`); continue; }
       const tookBefore = took.length;
@@ -607,7 +632,7 @@ export class HallPart {
    *
    *   wants: [{ item, amount }]  ->  { ok, took: {item: n}, short: {item: n}, steps }
    */
-  async hallWithdraw(wants = [], { stash = null, deposit = null } = {}) {
+  async hallWithdraw(wants = [], { stash = null, deposit = null, chestIdsAsOf = null } = {}) {
     const s = this.s, c = s.need();
     const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase().trim();
     const same = (a, b) => norm(a) === norm(b) || String(a).toLowerCase() === String(b).toLowerCase();
@@ -688,8 +713,11 @@ export class HallPart {
     // TWO PASSES. Rehearsal 25's runner came back with 0 of elderberry, orc teeth, emeralds and purple
     // mushrooms while the chests held hundreds of each and its pack had room; the first pass's reads
     // and takes are now recorded per item (`diag`) and anything still short is asked for once more.
+    // A want naming an OBJECT ({id} or "id:N") is drawn below by hallDrawIds, never by its name here.
+    const byId = w => (w && typeof w === 'object' && w.id != null) || /^id:\d+$/i.test(String(w ?? ''));
+    const nameWants = (wants ?? []).filter(w => !byId(w));
     for (let pass = 0; pass < 2; pass++)
-    for (const w of wants) {
+    for (const w of nameWants) {
       if (pass === 1 && !(short[String(w.item ?? '')] > 0)) continue;
       const item = String(w.item ?? ''), want = Math.max(0, Number(w.amount) || 0);
       if (!item || !want) continue;
@@ -708,8 +736,17 @@ export class HallPart {
         const reply = await c.waitFor({ since, kinds: ['container', 'message'], timeoutMs: 5000 }).catch(() => null);
         const box = (reply?.events ?? []).find(e => e.kind === 'container');
         if (box) d.chests_read++; else d.chests_unread++;
-        const stacks = (box?.items ?? []).filter(o => same(o.name ?? nameOf(o), item))
-          .sort((a, b) => (Number(b.amount) || 1) - (Number(a.amount) || 1));
+        // BY NAME, BUT NOT BLIND TO THE GRADE. A by-name draw of a weapon or a wearable takes only
+        // its class's plain grade unless the want asks for magic (`magic: true` / `grades`): the chest
+        // says which short sword is the unidentified one, and that is the one that wields itself
+        // (hall 714, 2026-11-19). Cursed is never taken. drawGradeAllows, m59-items.mjs.
+        const gear = isGearName(item);
+        const named = (box?.items ?? []).filter(o => same(o.name ?? nameOf(o), item));
+        const stacks = named.filter(o => {
+          const v = drawGradeAllows(gradedRow(o), w, { gear });
+          if (!v.ok) { (d.left_by_grade ??= {})[gradeOf(o)] = (d.left_by_grade[gradeOf(o)] ?? 0) + 1; }
+          return v.ok;
+        }).sort((a, b) => (Number(b.amount) || 1) - (Number(a.amount) || 1));
         for (const st of stacks) {
           if (have - start >= want) break;
           // TAKE WHAT IS WANTED, NOT THE WHOLE STACK. REQ_GET_FROM_CONTAINER carries an amount
@@ -735,6 +772,13 @@ export class HallPart {
       const still = want - (pass === 1 ? took[item] : have - start);
       if (still > 0) short[item] = still; else delete short[item];
     }
+    // THE OBJECTS ASKED FOR BY ID: read fresh in this call, checked against the save clock, and the
+    // piece that arrives judged by name and grade. `chest_ids_as_of` is the stamp of the read the
+    // caller chose the ids from (this call's own `contents` reply).
+    const idWants = (wants ?? []).filter(byId).map(w => (typeof w === 'object' ? w : { id: Number(/^id:(\d+)$/i.exec(String(w))[1]) }));
+    const ids = idWants.length
+      ? await this.hallDrawIds(idWants, chests, { asOf: chestIdsAsOf, nearChest, nameOf, same })
+      : null;
     // AND WRITE EVERY CHEST DOWN, ONCE, AFTER EVERYTHING ELSE HAS MOVED. The draws above read the
     // chests they took from and kept nothing; a hall visit is the only moment a chest can be read at
     // all (nothing is pushed), so every chest visible here is read back and filed under THIS hall's
@@ -742,6 +786,12 @@ export class HallPart {
     // with `wants: []` and no stash or deposit is a pure "read and record this hall's chests" errand.
     // Never allowed to fail the run: refreshChestCache notes and returns null on any refusal.
     const recorded = [];
+    // THE READING ITSELF, WITH ITS IDS, GOES BACK TO THE CALLER -- stamped. The cache keeps names and
+    // grades and no object ids (they are handles, renumbered by every save); this reply is the one place
+    // a caller can pick an id from, and `chest_ids_as_of` (taken BEFORE the first read) is what a later
+    // id draw is checked against: any save that begins after it voids every id in `contents`.
+    const contents = [];
+    const chestIdsAsOfOut = idsStamp(c);
     if (chests.length) {
       const store = new StorageCache();
       for (const chest of chests) {
@@ -749,14 +799,129 @@ export class HallPart {
         if (!slot) continue;
         await nearChest(chest);
         const items = await this.refreshChestCache(chest, slot, { store, why: 'hall run' });
-        if (items) recorded.push(slot);
+        if (items) { recorded.push(slot); contents.push({ slot, chest_id: chest.id, items }); }
       }
     }
-    this.note('hall withdrawal for an errand', { took, short, stashed, diag, recorded });
+    this.note('hall withdrawal for an errand', { took, short, stashed, diag, recorded, ...(ids ? { ids: { took: ids.took_ids.length, short: ids.short_ids.length, refused: ids.refused_ids.length, returned: ids.returned_ids.length, stopped: ids.stopped } } : {}) });
     // WHAT CAME OUT OF THE CHESTS, into an open town trip's book like any other trade.
     const drawn = Object.entries(took).filter(([, n]) => n > 0).map(([name, amount]) => ({ name, amount }));
+    for (const t of ids?.took_ids ?? []) drawn.push({ name: t.name, amount: t.amount ?? 1 });
     if (drawn.length) this.tradeFact({ withdrawn: drawn });
-    return { ok: true, took, short, stashed, chests: chests.length, recorded, diag };
+    return { ok: true, took, short, stashed, chests: chests.length, recorded, diag,
+             ...(ids ?? {}), contents,
+             chest_ids_as_of: idsStillCurrent(c, chestIdsAsOfOut) ? chestIdsAsOfOut : { ...chestIdsAsOfOut, saving: true, void: 'a save began during the read' } };
+  }
+
+  /**
+   * TAKE EXACTLY THESE OBJECTS, BY ID, OUT OF WHICHEVER CHEST HOLDS THEM. `idWants`:
+   * [{id, item?, grade?, grades?, magic?, amount?}]. A by-name draw of "short sword" takes whichever
+   * short sword the chest lists first, and on 2026-11-19 that was the unidentified, cursed one. An id
+   * names one object -- until the next server save renumbers everything (CLAUDE.md "AN OBJECT ID IS A
+   * TEMPORARY HANDLE"), and within hours a recycled id can name something else entirely. So three rules,
+   * each a refusal rather than a guess:
+   *
+   *   1. THE CALLER'S READ MUST STILL BE CURRENT. `asOf` is the `chest_ids_as_of` stamp of the reply the
+   *      ids came from; if a save has begun since (or was running then), nothing is drawn and the reply
+   *      says `chest_ids_stale: true` -- re-read the chests and re-select by name and grade. Each chest is
+   *      read again here too, and a save between that read and the get stops the draw.
+   *   2. THE OBJECT IN THE CHEST MUST BE WHAT WAS ASKED FOR: its name (when `item` is given) and its grade
+   *      (`grade`, exactly; otherwise drawGradeAllows' by-name rule, so gear defaults to its plain grade).
+   *   3. THE PIECE THAT ARRIVES IS JUDGED, by id, NAME and GRADE in the pack. Anything else that arrived
+   *      -- a different object, a different grade -- is put straight back into the same chest and the
+   *      draw STOPS (`stopped` says why): a lap that drew the wrong thing once does not draw again.
+   *
+   * Returns { took_ids: [{id, name, grade, slot}], short_ids: [{id, why}], refused_ids: [{id, why}],
+   *           returned_ids: [{id, name, grade, why}], stopped: null | why, chest_ids_stale }.
+   */
+  async hallDrawIds(idWants, chests, { asOf = null, nearChest = async () => {}, nameOf, same } = {}) {
+    const s = this.s, c = s.need();
+    const out = { took_ids: [], short_ids: [], refused_ids: [], returned_ids: [], stopped: null, chest_ids_stale: false };
+    const pending = new Map(idWants.filter(w => Number(w.id) > 0).map(w => [Number(w.id), w]));
+    for (const w of idWants) if (!(Number(w.id) > 0)) out.refused_ids.push({ id: w.id ?? null, why: 'not an object id' });
+    if (!pending.size) return out;
+    if (!idsStillCurrent(c, asOf)) {
+      out.chest_ids_stale = true;
+      out.stopped = asOf ? 'a server save has begun since the chest read these ids came from (every save renumbers ' +
+                           'every object): re-read the chests and re-select by name and grade'
+                         : 'no chest_ids_as_of stamp: an id draw needs the stamp of the chest read the ids came from';
+      for (const id of pending.keys()) out.short_ids.push({ id, why: out.stopped });
+      return out;
+    }
+    const readPack = async () => {
+      await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+      return (c.inventory ?? []).map(x => gradedRow({ id: x.id, name: nameOf(x), amount: x.amount, rarity: x.rarity, iconRsc: x.iconRsc, flags: x.flags }));
+    };
+    const putBack = async (row, chest, why) => {
+      const raw = (c.inventory ?? []).find(x => Number(x.id) === Number(row.id));
+      if (raw) {
+        await s.pacer.submit('trade', () => c.put(dropSpecFor(raw), chest.id)).catch(() => {});
+        await new Promise(r => setTimeout(r, 300));
+      }
+      const still = (await readPack()).some(x => Number(x.id) === Number(row.id));
+      out.returned_ids.push({ id: row.id, name: row.name, grade: gradeOf(row), why, put_back: !still });
+    };
+    for (const chest of chests) {
+      if (!pending.size || out.stopped) break;
+      await nearChest(chest);
+      const since = c.evSeq;
+      await s.pacer.submit('read', () => c.contents(chest.id)).catch(() => {});
+      const reply = await c.waitFor({ since, kinds: ['container', 'message'], timeoutMs: 5000 }).catch(() => null);
+      const box = (reply?.events ?? []).find(e => e.kind === 'container' && e.id === chest.id)
+               ?? (reply?.events ?? []).find(e => e.kind === 'container');
+      if (!box) continue;
+      const stamp = idsStamp(c);
+      for (const o of box.items ?? []) {
+        if (out.stopped) break;
+        const w = pending.get(Number(o.id));
+        if (!w) continue;
+        pending.delete(Number(o.id));
+        const row = gradedRow(o);
+        const wantName = w.item ?? w.name ?? null;
+        if (wantName && !same(row.name, wantName)) {
+          out.refused_ids.push({ id: row.id, why: `id ${row.id} names "${row.name}" in the chest now, not "${wantName}" (a renumbered or recycled handle)` });
+          continue;
+        }
+        const g = gradeOf(row);
+        const allow = w.grade != null
+          ? (g === String(w.grade).toLowerCase() && g !== 'cursed'
+             ? { ok: true } : { ok: false, why: `graded ${g} in the chest, asked for ${w.grade}` })
+          : drawGradeAllows(row, w, { gear: isGearName(row.name) });
+        if (!allow.ok) { out.refused_ids.push({ id: row.id, name: row.name, grade: g, why: allow.why }); continue; }
+        if (!idsStillCurrent(c, stamp)) {
+          out.chest_ids_stale = true;
+          out.stopped = 'a server save began between the chest read and the get: nothing more is drawn by id this visit';
+          out.short_ids.push({ id: row.id, why: out.stopped });
+          break;
+        }
+        const before = await readPack();
+        const had = new Set(before.map(x => Number(x.id)));
+        const n = Number(o.amount) >= 1 ? Math.min(Number(o.amount), Number(w.amount) > 0 ? Number(w.amount) : Number(o.amount)) : null;
+        await s.pacer.submit('trade', () => (typeof c.getFromContainer === 'function'
+          ? c.getFromContainer(dropSpecFor(o, n)) : c.get(o.id))).catch(() => {});
+        await new Promise(r => setTimeout(r, 400));
+        const after = await readPack();
+        const fresh = after.filter(x => !had.has(Number(x.id)));
+        const current = idsStillCurrent(c, stamp);
+        const mine = current ? fresh.filter(x => Number(x.id) === Number(row.id)) : [];
+        const stray = current ? fresh.filter(x => Number(x.id) !== Number(row.id)) : fresh;
+        // WHAT ARRIVED, judged by NAME and GRADE as well as id: a recycled id can name a different object.
+        const good = mine.find(x => same(x.name, row.name) && gradeOf(x) === g) ?? null;
+        const wrong = [...mine.filter(x => x !== good), ...stray];
+        if (!current) out.chest_ids_stale = true;
+        if (wrong.length || (!good && !current && fresh.length)) {
+          for (const x of wrong) await putBack(x, chest, `arrived as "${x.name}" graded ${gradeOf(x)} for a draw of #${row.id} "${row.name}" graded ${g}`);
+          out.stopped = `the draw of #${row.id} ${row.name} (${g}) brought back ${wrong.map(x => `#${x.id} ${x.name} (${gradeOf(x)})`).join(', ')}: put back, and the draw stops`;
+          if (!good) out.short_ids.push({ id: row.id, why: out.stopped });
+        }
+        if (good) out.took_ids.push({ id: row.id, name: good.name, grade: gradeOf(good), slot: chestKey(chest), amount: Number(good.amount) || 1 });
+        else if (!out.stopped) out.short_ids.push({ id: row.id, why: 'the get moved nothing into the pack (too heavy, too far, or refused)' });
+        if (!current && !out.stopped) out.stopped = 'a server save began during the get: nothing more is drawn by id this visit';
+      }
+    }
+    for (const id of pending.keys())
+      out.short_ids.push({ id, why: out.stopped ?? 'not in any chest read in this visit (taken already, or an id from before a save)' });
+    return out;
   }
 
   /**
