@@ -20,6 +20,7 @@ import { usesOceanCourier } from '../m59-farm-town.mjs';
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { affordances, dropSpec as dropSpecFor } from '../m59-parse.mjs';
+import { parseDeposit, depositEntryFor, depositPut, depositShort } from '../m59-hall-deposit.mjs';
 import { gradedRow, gradeOf, drawGradeAllows } from '../m59-items.mjs';
 import { categoriesOf } from '../m59-buyers.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -670,10 +671,16 @@ export class HallPart {
     // `id:<n>` entries name ONE object by id; the rest are name substrings. By id because a revealed
     // permanent attribute often does not rename the item (magicsort's table: seven of twelve), so
     // depositing "long sword" by name would take the rider's ordinary long swords with it.
-    const depList = Array.isArray(deposit) && deposit.length ? deposit.map(d => String(d).toLowerCase()) : null;
-    const depIds = new Set((depList ?? []).map(d => /^id:(\d+)$/.exec(d)?.[1]).filter(Boolean).map(Number));
-    const depNames = (depList ?? []).filter(d => !/^id:\d+$/.test(d));
-    const dep = depList ? { has: o => depIds.has(o.id) || depNames.some(d => nameOf(o).includes(d)) } : null;
+    // PART OF A STACK: "elderberry:150", "id:<n>:150" or {item|id, amount} put in only that many, as
+    // one number-tagged BP_REQ_PUT that UserPut Splits (user.kod:3882) -- what the client's Put dialog
+    // sends with a typed amount. Parsing and sizing are pure, in m59-hall-deposit.mjs.
+    const depParsed = Array.isArray(deposit) && deposit.length ? parseDeposit(deposit) : null;
+    const depEntries = depParsed?.entries ?? [];
+    if (depParsed?.refused?.length) this.note('deposit entries refused', { refused: depParsed.refused });
+    const dep = depParsed ? { has: o => !!depositEntryFor(depEntries, o, nameOf) } : null;
+    const deposited = [];
+    const unitsOf = (name) => (c.inventory ?? []).filter(x => nameOf(x) === name)
+      .reduce((n, x) => n + (Number(x.amount) || 1), 0);
     if ((Array.isArray(stash) || dep) && chests.length) {
       await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
       await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
@@ -693,7 +700,32 @@ export class HallPart {
       for (const chest of chests) {
         if (!spare.length) break;
         await nearChest(chest);
-        for (const o of [...spare]) {
+        for (const o0 of [...spare]) {
+          const entry = dep ? depositEntryFor(depEntries, o0, nameOf) : null;
+          if (dep && !entry) { spare.splice(spare.indexOf(o0), 1); continue; }   // its budget is spent
+          if (entry && entry.remaining != null) {
+            // A COUNTED PUT IS MEASURED IN UNITS, NOT BY THE ROW VANISHING: the stack stays in the
+            // pack under the same id with fewer in it. Size it off the FRESH row, not the one read
+            // before the previous put.
+            const o = (c.inventory ?? []).find(x => x.id === o0.id) ?? o0;
+            const put = depositPut(o, entry);
+            if (!put) { spare.splice(spare.indexOf(o0), 1); continue; }
+            const name = nameOf(o), had = unitsOf(name);
+            await s.pacer.submit('trade', () => c.put(put.spec, chest.id)).catch(() => {});
+            await new Promise(r => setTimeout(r, 300));
+            await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+            await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+            const moved = Math.max(0, Math.min(put.asked, had - unitsOf(name)));
+            if (!moved) break;                     // this chest is full or refusing; try the next
+            entry.remaining -= moved;
+            stashed++;
+            deposited.push({ name, amount: moved, ...(moved < put.asked ? { asked: put.asked } : {}) });
+            this.tradeFact({ guild_deposited: [{ name, amount: moved }] });
+            if (moved < put.asked) break;          // only part went in: this chest is filling, try the next
+            spare.splice(spare.indexOf(o0), 1);
+            continue;
+          }
+          const o = o0;
           const before = (c.inventory ?? []).length;
           // A STACK NEEDS A SPEC — a bare id on a stack completes the handshake and moves
           // nothing (see the coop deposit below). The first stash went out with bare ids and
@@ -704,6 +736,7 @@ export class HallPart {
           await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
           if (!(c.inventory ?? []).some(x => x.id === o.id) || (c.inventory ?? []).length < before) {
             stashed++; spare.splice(spare.indexOf(o), 1);
+            if (dep) deposited.push({ name: nameOf(o), amount: Number(o.amount) || 1 });
             this.tradeFact({ guild_deposited: [{ name: nameOf(o), amount: Number(o.amount) || 1 }] });
           } else break;                          // this chest is full or refusing; try the next
         }
@@ -807,7 +840,11 @@ export class HallPart {
     const drawn = Object.entries(took).filter(([, n]) => n > 0).map(([name, amount]) => ({ name, amount }));
     for (const t of ids?.took_ids ?? []) drawn.push({ name: t.name, amount: t.amount ?? 1 });
     if (drawn.length) this.tradeFact({ withdrawn: drawn });
-    return { ok: true, took, short, stashed, chests: chests.length, recorded, diag,
+    const depShort = depositShort(depEntries);
+    const depositReply = depParsed ? { deposited,
+      ...(Object.keys(depShort).length ? { deposit_short: depShort } : {}),
+      ...(depParsed.refused.length ? { deposit_refused: depParsed.refused } : {}) } : {};
+    return { ok: true, took, short, stashed, chests: chests.length, recorded, diag, ...depositReply,
              ...(ids ?? {}), contents,
              chest_ids_as_of: idsStillCurrent(c, chestIdsAsOfOut) ? chestIdsAsOfOut : { ...chestIdsAsOfOut, saving: true, void: 'a save began during the read' } };
   }

@@ -22,6 +22,7 @@
 //                                             doors), the walk in as the fallback, then the recovering
 //                                             draw. Compose your own walk home after it.
 import { walk, verify, rideChalice } from './m59-fleetscript.mjs';
+import { countDepositMatches } from './m59-hall-deposit.mjs';
 
 export const HALL = 714;
 // A refusal of the PASSAGE, not of the chests: worth one more try from wherever the body now stands.
@@ -136,13 +137,9 @@ export async function withdrawWithRecovery(call, agent, wants, { retries = 1, pa
 
 // What a deposit list names in a pack: case-insensitive substrings, as the keeper matches them
 // (`id:<n>` entries name one object). Worn items are counted too; they never leave, so a fall is still
-// the evidence and a pack holding only worn matches reads as "nothing to put in".
-const countMatching = (inv, deposit) => {
-  const names = deposit.map(d => String(d).toLowerCase()).filter(d => !/^id:\d+$/.test(d));
-  const ids = new Set(deposit.map(d => /^id:(\d+)$/i.exec(String(d))?.[1]).filter(Boolean).map(Number));
-  return (inv?.items ?? []).filter(i => ids.has(Number(i.id)) || names.some(d => String(i.name ?? '').toLowerCase().includes(d)))
-    .reduce((n, i) => n + (Number(i.amount) || 1), 0);
-};
+// the evidence and a pack holding only worn matches reads as "nothing to put in". A counted entry
+// ("elderberry:150", {item, amount}) counts its whole matching stock; the fall is what went in.
+const countMatching = (inv, deposit) => countDepositMatches(inv?.items, deposit);
 
 /**
  * One deposit into the hall chests, retried once on a passage refusal. Never throws.

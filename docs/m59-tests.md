@@ -2083,6 +2083,13 @@ the records it describes.
   left, by id exactly that object is taken, and the three handle rules -- a save since the read (or during this call's read
   or get) voids the ids, an id naming another object now is refused, and a wrong-graded or stray arrival is put straight
   back and stops the draw -- plus the source shape of the broker `container` tool and the keeper `contents` op. Offline) and
+  `node tools/m59-hall-deposit-test.mjs` (37 — **part of a stack into a guild chest**: the `deposit` entry forms
+  (`"elderberry:150"`, `"id:<n>:150"`, `{item|id, amount}`; every old form unchanged; a zero, a fraction or a bare `id:` is
+  REFUSED and matches nothing), the sizing off the remaining budget, the exact BP_REQ_PUT bytes through the client's own
+  `put` (number-tagged id, 4-byte count, chest -- and the old whole-stack put carrying the full count), and the REAL
+  `hallWithdraw` against a fake server that decodes those bytes as parsecli.c and UserPut do: 150 of 432 goes in and the
+  stack keeps its id, 150 across two stacks, a chest refusing the split part passes it to the next chest, more than is
+  carried reports `deposit_short`, the stash keep list and the worn item untouched. Offline) and
   `node tools/m59-buyers-test.mjs` (38 — **what a merchant will actually buy**: that a gem
   is also a reagent and the apothecaries' exclusion turns on it, that Marion's smith takes
   no body armour, that an exclusive rule excludes a sibling of the same family, and above
