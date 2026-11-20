@@ -2570,6 +2570,18 @@ then the rest); that the shield read refuses another object's description and ne
 negative id; and that a maxed shield walks nowhere and farms nothing. The farm itself is
 `harvest` with its `until` predicate, which the fleetscript suite covers.
 
+**`m59-shadow-rift-test.mjs` (26 groups) — the spell-power model, the forecast and the touch.**
+`tools/fleetscripts/shadow-rift.mjs` ([`docs/m59-shadow-rift.md`](m59-shadow-rift.md)) has one
+maximised primary chant a prism while the rest refill it with mystic touch. It pins the Qor item
+modifiers (mace +5, scimitar -20, a Qor disciple robe +16 at level 4, a Duke shield 15 x rank / 10);
+that `bestSet` pools the group's gear, locks a cursed or unidentified worn weapon, keeps a Duke
+shield its owner's, and never plans an orc shield unless `orcShield` is on, the primary is a known
+non-soldier, and its karma is -50 or lower; the rift rate `bound((sp+1)/25,1,4)`; the -40 karma
+gate (-39 refused) and the seat check's vigor and mana budget for failed rolls; the touch size and
+the no-waste rule (never past `min(1.5 x max, 75)`, never below the donor's floor, only when ripe
+unless in danger); the forecast's pool, drain, supply and margin; that the cluster ring never lands
+on the prism square; and that the script's params carry no fleet's orders.
+
 **`m59-choose-hometown-test.mjs` (9 groups) — the five sentences, the verdicts, and a permanent
 choice that has to be asked for.** `tools/fleetscripts/choose-hometown.mjs` says a town's sentence in
 the Hall of Genealogy (Cor Noth, 156), which sets the home room LOCKED (Coruniv.kod `SetHomeRoom
