@@ -120,7 +120,9 @@ function fakeKeeper({ pack, chests }) {
       const isNumber = Number(o.amount) >= 1;
       if (isNumber) {
         if (number == null || number < 1 || number > o.amount) return;     // Split refuses: nothing moves
-        if (ch.cap != null && number > ch.cap) return;                        // ReqNewHold refuses: it rejoins
+        // ReqNewHold refuses: the split part REJOINS THE PACK UNDER A NEW ID (seen live in 713, 2026-11-20: #20480 -> #21036)
+        // (a NEW row object, as the real client's inventory is rebuilt from the server's list)
+        if (ch.cap != null && number > ch.cap) { c.inventory[i] = { ...o, id: 30000 + sent.length }; return; }
         o.amount -= number;
         if (o.amount === 0) c.inventory.splice(i, 1);
         const there = ch.items.find(x => x.name === o.name);

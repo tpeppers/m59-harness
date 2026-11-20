@@ -712,7 +712,11 @@ export class HallPart {
             // straight in. Halve and retry (down to 1) before calling this chest full and trying the next.
             let cap = Infinity, halvings = 0, chestFull = false, entryDone = false;
             for (;;) {
-              const o = (c.inventory ?? []).find(x => x.id === o0.id) ?? o0;
+              // A REFUSED SPLIT REJOINS THE PACK UNDER A NEW ID (713, 2026-11-20: sapphire #20480 -> #21036 after one
+              // refused put), so the stack is found again by NAME; a retry by the old id addressed nothing and moved nothing.
+              const o = (c.inventory ?? []).find(x => x.id === o0.id)
+                ?? (c.inventory ?? []).find(x => nameOf(x) === nameOf(o0) && depositEntryFor(depEntries, x, nameOf) === entry);
+              if (!o) { entryDone = true; break; }
               const put = depositPut(o, entry, cap);
               if (!put) { entryDone = true; break; }
               const name = nameOf(o), had = unitsOf(name);
@@ -726,7 +730,7 @@ export class HallPart {
                 stashed++;
                 deposited.push({ name, amount: moved, ...(moved < put.asked ? { asked: put.asked } : {}) });
                 this.tradeFact({ guild_deposited: [{ name, amount: moved }] });
-                if (entry.remaining <= 0 || !(c.inventory ?? []).some(x => x.id === o0.id)) { entryDone = true; break; }
+                if (entry.remaining <= 0 || unitsOf(name) <= 0) { entryDone = true; break; }
                 if (moved < put.asked) cap = Math.max(1, Math.floor(put.asked / 2));
                 continue;
               }
