@@ -99,13 +99,13 @@ export function depositEntryFor(entries, o, nameOf) {
  * (exactly the old dropSpec(o)), otherwise min(remaining, stack) number-tagged. A non-stack object is
  * one unit and goes as its bare id. Returns { spec, asked } or null when nothing should go.
  */
-export function depositPut(o, entry) {
+export function depositPut(o, entry, cap = Infinity) {
   if (!o) return null;
   if (!entry || entry.remaining == null) return { spec: dropSpec(o), asked: Number(o.amount) >= 1 ? Number(o.amount) : 1 };
   if (entry.remaining <= 0) return null;
   const stack = Number(o.amount) >= 1;
   if (!stack) return { spec: dropSpec(o), asked: 1 };
-  const n = Math.min(entry.remaining, Number(o.amount));
+  const n = Math.max(1, Math.min(entry.remaining, Number(o.amount), Number(cap) || Infinity));
   return { spec: dropSpec(o, n), asked: n };
 }
 

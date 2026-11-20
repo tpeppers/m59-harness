@@ -49,6 +49,9 @@ section('which entry governs a pack row, and how big its put is');
   ok(p.asked === 150 && p.spec.id === 9 && p.spec.amount === 150, '150 of 432: a counted spec', JSON.stringify(p));
   e.remaining = 40;
   ok(depositPut(stack, e).spec.amount === 40, 'what is left of the budget, not the amount asked for at first');
+  // 2026-11-20, 713: a chest refuses a put that does not fit whole; the retry halves the put in the same chest.
+  ok(depositPut(stack, e, 20).spec.amount === 20, 'a cap halves the put (a refused 40 is retried as 20)');
+  ok(depositPut(stack, e, 0.4).spec.amount === 1, 'the cap never goes below one unit');
   e.remaining = 0;
   ok(depositEntryFor(entries, stack, nameOf) === null && depositPut(stack, e) === null, 'a spent budget matches nothing more');
   const idE = depositEntryFor(entries, { id: 5, name: 'herbs', amount: 2, tag: 1 }, nameOf);
@@ -182,8 +185,11 @@ section('across stacks, across chests, by id, as objects');
   ok(r2.deposited.reduce((n, d) => n + d.amount, 0) === 150, 'the reply adds to 150', JSON.stringify(r2.deposited));
   const full = fakeKeeper({ pack: PACK(), chests: [{ id: 2578, items: [], cap: 100 }, { id: 2579, items: [] }] });
   const rf = await full.k.hallWithdraw([], { deposit: ['elderberry:150'] });
-  ok(units(full.chests[0].items, 'elderberry') === 0 && units(full.chests[1].items, 'elderberry') === 150 && units(full.c.inventory, 'elderberry') === 282,
-     'a chest that refuses the split part: it rejoins the pack and the next chest takes 150', JSON.stringify(full.chests));
+  // 2026-11-20, 713: a refused put is retried SMALLER in the same chest before the next chest is tried, so a chest
+  // with room for 100 takes 100 of the 150 (75 + 25 after halving) and the next chest takes the other 50.
+  ok(units(full.chests[0].items, 'elderberry') === 100 && units(full.chests[1].items, 'elderberry') === 50 && units(full.c.inventory, 'elderberry') === 282,
+     'a chest that refuses the whole put is filled by smaller puts, and the next chest takes the rest', JSON.stringify(full.chests));
+  ok(rf.deposited.reduce((n, d) => n + d.amount, 0) === 150, 'the reply still adds to 150', JSON.stringify(rf.deposited));
   const byId = fakeKeeper({ pack: PACK(), chests: [{ id: 2578, items: [] }] });
   await byId.k.hallWithdraw([], { deposit: [{ id: 8124, amount: 25 }, { item: 'elderberry', amount: 32 }] });
   ok(units(byId.c.inventory, 'herbs') === 35 && units(byId.c.inventory, 'elderberry') === 400, '{id, amount} and {item, amount}',

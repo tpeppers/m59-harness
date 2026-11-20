@@ -707,21 +707,33 @@ export class HallPart {
             // A COUNTED PUT IS MEASURED IN UNITS, NOT BY THE ROW VANISHING: the stack stays in the
             // pack under the same id with fewer in it. Size it off the FRESH row, not the one read
             // before the previous put.
-            const o = (c.inventory ?? []).find(x => x.id === o0.id) ?? o0;
-            const put = depositPut(o, entry);
-            if (!put) { spare.splice(spare.indexOf(o0), 1); continue; }
-            const name = nameOf(o), had = unitsOf(name);
-            await s.pacer.submit('trade', () => c.put(put.spec, chest.id)).catch(() => {});
-            await new Promise(r => setTimeout(r, 300));
-            await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
-            await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
-            const moved = Math.max(0, Math.min(put.asked, had - unitsOf(name)));
-            if (!moved) break;                     // this chest is full or refusing; try the next
-            entry.remaining -= moved;
-            stashed++;
-            deposited.push({ name, amount: moved, ...(moved < put.asked ? { asked: put.asked } : {}) });
-            this.tradeFact({ guild_deposited: [{ name, amount: moved }] });
-            if (moved < put.asked) break;          // only part went in: this chest is filling, try the next
+            // A REFUSED PUT IS RETRIED SMALLER IN THE SAME CHEST (2026-11-20, 713): a chest refuses a put
+            // that does not fit WHOLE, so 206 sapphires were refused by all four chests while 20 went
+            // straight in. Halve and retry (down to 1) before calling this chest full and trying the next.
+            let cap = Infinity, halvings = 0, chestFull = false, entryDone = false;
+            for (;;) {
+              const o = (c.inventory ?? []).find(x => x.id === o0.id) ?? o0;
+              const put = depositPut(o, entry, cap);
+              if (!put) { entryDone = true; break; }
+              const name = nameOf(o), had = unitsOf(name);
+              await s.pacer.submit('trade', () => c.put(put.spec, chest.id)).catch(() => {});
+              await new Promise(r => setTimeout(r, 300));
+              await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+              await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+              const moved = Math.max(0, Math.min(put.asked, had - unitsOf(name)));
+              if (moved) {
+                entry.remaining -= moved;
+                stashed++;
+                deposited.push({ name, amount: moved, ...(moved < put.asked ? { asked: put.asked } : {}) });
+                this.tradeFact({ guild_deposited: [{ name, amount: moved }] });
+                if (entry.remaining <= 0 || !(c.inventory ?? []).some(x => x.id === o0.id)) { entryDone = true; break; }
+                if (moved < put.asked) cap = Math.max(1, Math.floor(put.asked / 2));
+                continue;
+              }
+              if (put.asked <= 1 || ++halvings > 10) { chestFull = true; break; }   // even one will not go in
+              cap = Math.max(1, Math.floor(put.asked / 2));
+            }
+            if (chestFull) break;                  // this chest is full or refusing; try the next
             spare.splice(spare.indexOf(o0), 1);
             continue;
           }
