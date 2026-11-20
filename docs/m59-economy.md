@@ -739,6 +739,34 @@ which is how hall-sell drew a cursed short sword by name (above). Now:
 
 `node tools/m59-chest-grade-test.mjs` is the guard.
 
+### Part of a stack into a chest (`hall_withdraw` `deposit: ["elderberry:150"]`)
+
+A `deposit` entry used to mean WHOLE stacks: `"elderberry"` put all 432 in. The game has always taken part of one, and
+it is not a split in the pack first -- it is one put carrying a count, the same number-tagged wire form a partial drop
+uses. The client's Put dialog asks for amounts (`clientd3d/gameuser.c:339`, `LD_AMOUNTS`) and sends one
+`RequestPut(obj, container)` per object (`:366`); `PARAM_OBJECT` writes the id and, for a number-tagged id, the
+`temp_amount` after it (`clientd3d/protocol.c:216`). The server reads that count into `number_stuff`
+(`blakserv/parsecli.c:378`), `BP_REQ_PUT` passes it to `UserPut` as `#number` (`user.kod:1002`), and `UserPut`
+(`user.kod:3882`) Splits the NumberItem by it (`numbitem.kod:253`) and offers only the split-off part to the chest; a
+refused part rejoins the pack. A guild chest is a plain `Chest`/StorageBox (`guildh1.kod:189`), whose `ReqNewHold`
+(`storebox.kod:153`) checks only the room and `CanBeStoredInVault`.
+
+| entry | means |
+|---|---|
+| `"elderberry"`, `{item: "elderberry"}` | every matching stack, whole (a substring of the name), as before |
+| `"id:8123"`, `{id: 8123}` | that one object, whole, as before |
+| `"elderberry:150"`, `{item: "elderberry", amount: 150}` | 150 in total across the matching stacks |
+| `"id:8123:150"`, `{id: 8123, amount: 150}` | 150 out of that one stack |
+
+A counted put is verified in UNITS, by re-reading the pack (the stack keeps its id with fewer in it, so "the row
+vanished" cannot be the test), from the fresh row each time. A chest that takes only part of it, or none, moves the
+remainder on to the next chest. The reply adds `deposited` (what went in, by name and amount), `deposit_short` (what a
+counted entry could not place) and `deposit_refused` (malformed entries: a zero, a fraction, `id:` with no number --
+refused and matching nothing, never read as "the whole stack"). A name containing `:` followed by digits would read as a
+count; no item in this world is named that way. The pure half is `tools/m59-hall-deposit.mjs`;
+`node tools/m59-hall-deposit-test.mjs` pins the parse, the sizing and the bytes on the wire. Coins are the open
+question: a whole-purse `deposit: ['shilling']` was measured moving none (above), and a counted one has not been tried live.
+
 ## Per-creature loot: `loot_only`
 
 `loot_only: {"spider": ["purple mushroom"]}` — after killing a listed creature the keeper takes

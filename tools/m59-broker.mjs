@@ -16509,8 +16509,12 @@ const TOOLS = [
       chest_ids_as_of: { type: 'object', description: 'the `chest_ids_as_of` of the hall_withdraw reply the id wants were chosen from' },
       stash: { type: 'array', items: { type: 'string' },
         description: 'KEEP list (substrings). Before taking anything, put every pack item that matches none of these and is not worn or wielded into a chest, to make room.' },
-      deposit: { type: 'array', items: { type: 'string' },
-        description: 'names (substrings) to PUT into the chests — every matching pack item not worn or wielded. The other direction of stash, for bringing farmed gear home. An entry "id:<object id>" names exactly one item (a revealed magic weapon often keeps its plain name). wants may be empty.' },
+      deposit: { type: 'array', items: { anyOf: [
+          { type: 'string' },
+          { type: 'object', properties: { item: { type: 'string' }, id: { type: 'number' }, amount: { type: 'number' } } } ] },
+        description: 'names (substrings) to PUT into the chests — every matching pack item not worn or wielded. The other direction of stash, for bringing farmed gear home. An entry "id:<object id>" names exactly one item (a revealed magic weapon often keeps its plain name). ' +
+          'PART OF A STACK: "elderberry:150" (or {item: "elderberry", amount: 150}) puts in 150 in total, split off the matching stacks as the client\'s Put dialog does (one number-tagged put; the rest stays in the pack); "id:<n>:150" (or {id, amount}) takes 150 out of that one stack. ' +
+          'Without an amount an entry is the whole stack, as before. Measured by the pack: the reply\'s `deposited` lists what went in, `deposit_short` what a counted entry could not place, `deposit_refused` malformed entries (they match nothing). wants may be empty.' },
     }, required: ['agent', 'wants'] },
     run: async (a) => {
       const s = session(a.agent);
